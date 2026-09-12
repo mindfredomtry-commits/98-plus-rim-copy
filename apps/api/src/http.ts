@@ -41,8 +41,10 @@ import { testUiHtmlSource, testUiModuleSource } from "./test-ui-assets.ts";
 import { buildTelegramShareInvocation, shouldOpenTelegramShare } from "./template-share.ts";
 import {
   applyPendingExternalEntryExpiry,
+  buildStartParamIntakeProbe,
   resolvePendingExternalEntryIfOnline,
   resolveTelegramShareExternalEntry,
+  type ExternalEntryExecution,
   type ExternalEntryOrchestration,
 } from "./external-entry.ts";
 
@@ -191,9 +193,20 @@ export async function handleCreateBanContactRequest(
       const body = await readJson(req);
       const openIfNeeded = body.openIfNeeded !== false;
       const startParam = typeof body.startParam === "string" ? body.startParam : null;
+      const clientLaunch =
+        body.launchProbe && typeof body.launchProbe === "object"
+          ? (body.launchProbe as {
+              unsafeStartParamPresent?: boolean;
+              initDataStartParamPresent?: boolean;
+              tgWebAppStartParamPresent?: boolean;
+              queryStartParamPresent?: boolean;
+              sentStartParamToSession?: boolean;
+            })
+          : null;
       const claimedUserId = claimed ?? undefined;
       await applyElapsedDomainTimers(runtime, context);
       let externalEntry: ExternalEntryOrchestration | null = null;
+      let entryExecution: ExternalEntryExecution | null = null;
       let lastExecution = null as Awaited<
         ReturnType<typeof resolveTelegramShareExternalEntry>
       >["last"];
@@ -214,6 +227,7 @@ export async function handleCreateBanContactRequest(
           startParam,
           claimedUserId,
         );
+        entryExecution = resolved;
         externalEntry = resolved.orchestration;
         if (resolved.last) {
           lastExecution = resolved.last;
@@ -222,6 +236,7 @@ export async function handleCreateBanContactRequest(
       } else {
         const pending = await resolvePendingExternalEntryIfOnline(runtime, context, claimedUserId);
         if (pending) {
+          entryExecution = pending;
           externalEntry = pending.orchestration;
           if (pending.last) {
             lastExecution = pending.last;
@@ -234,6 +249,20 @@ export async function handleCreateBanContactRequest(
         await openLobbyIfNeeded(runtime, context);
       }
       await applyElapsedDomainTimers(runtime, context);
+      const startParamIntake = {
+        ...buildStartParamIntakeProbe(startParam, entryExecution),
+        ...(clientLaunch
+          ? {
+              client: {
+                unsafeStartParamPresent: clientLaunch.unsafeStartParamPresent === true,
+                initDataStartParamPresent: clientLaunch.initDataStartParamPresent === true,
+                tgWebAppStartParamPresent: clientLaunch.tgWebAppStartParamPresent === true,
+                queryStartParamPresent: clientLaunch.queryStartParamPresent === true,
+                sentStartParamToSession: clientLaunch.sentStartParamToSession === true,
+              },
+            }
+          : {}),
+      };
       const { diagnostics } = await loadDiagnostics(
         runtime,
         context,
@@ -241,6 +270,7 @@ export async function handleCreateBanContactRequest(
         firstExecution && firstExecution !== lastExecution ? firstExecution : null,
         undefined,
         externalEntry,
+        startParamIntake,
       );
       json(res, 200, {
         diagnostics,
@@ -269,6 +299,7 @@ export async function handleCreateBanContactRequest(
       ) {
         await openLobbyIfNeeded(runtime, context);
       }
+      const startParamIntake = buildStartParamIntakeProbe(startParam, resolved);
       const { diagnostics } = await loadDiagnostics(
         runtime,
         context,
@@ -276,6 +307,7 @@ export async function handleCreateBanContactRequest(
         resolved.first && resolved.first !== resolved.last ? resolved.first : null,
         undefined,
         resolved.orchestration,
+        startParamIntake,
       );
       json(res, 200, {
         diagnostics,

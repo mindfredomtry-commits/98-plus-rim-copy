@@ -352,12 +352,52 @@
         return fromQuery && fromQuery.length > 0 ? fromQuery : null;
       }
 
+      /** Safe live-diagnosis probe — presence only; never logs initData / auth hash / full token. */
+      function buildLaunchProbe(startParam) {
+        let unsafePresent = false;
+        let initDataPresent = false;
+        try {
+          const unsafe = window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe;
+          unsafePresent = !!(
+            unsafe &&
+            typeof unsafe.start_param === "string" &&
+            unsafe.start_param.length > 0
+          );
+        } catch (_error) {
+          unsafePresent = false;
+        }
+        try {
+          const initData = telegramInitData();
+          if (initData) {
+            initDataPresent = new URLSearchParams(initData).get("start_param") !== null;
+          }
+        } catch (_error) {
+          initDataPresent = false;
+        }
+        const search = new URLSearchParams(window.location.search);
+        const tgWebAppPresent = !!(
+          search.get("tgWebAppStartParam") && search.get("tgWebAppStartParam").length > 0
+        );
+        const queryStartParamPresent = !!(
+          search.get("startParam") && search.get("startParam").length > 0
+        );
+        return {
+          unsafeStartParamPresent: unsafePresent,
+          initDataStartParamPresent: initDataPresent,
+          tgWebAppStartParamPresent: tgWebAppPresent,
+          queryStartParamPresent,
+          sentStartParamToSession: typeof startParam === "string" && startParam.length > 0,
+        };
+      }
+
       async function openSession(openIfNeeded = true) {
         const startParam = telegramStartParam();
+        const launchProbe = buildLaunchProbe(startParam);
         return call("/api/session", {
           method: "POST",
           body: JSON.stringify({
             openIfNeeded,
+            launchProbe,
             ...(startParam ? { startParam } : {}),
           }),
         });

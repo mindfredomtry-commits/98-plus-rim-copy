@@ -58,6 +58,62 @@ export function parseShareStartParam(raw: string | null | undefined): ParsedShar
   return { kind: "share", token: value.slice("share_".length) };
 }
 
+/** Safe Stage 12 live-diagnosis summary — never includes full token or secrets. */
+export type StartParamIntakeProbe = Readonly<{
+  receivedStartParam: boolean;
+  sanitizedPrefix: "share_" | "other" | "absent";
+  tokenLength: number | null;
+  orchestratorInvoked: boolean;
+  e44Dispatched: boolean;
+  tokenLookup: "SKIPPED" | "FOUND_CONFIRMED" | "FOUND_NOT_CONFIRMED" | "MISSING" | "INVALID_PARAM";
+  outcome: ExternalEntryOrchestration["outcome"] | "NOT_INVOKED";
+}>;
+
+export function buildStartParamIntakeProbe(
+  startParam: string | null | undefined,
+  execution: ExternalEntryExecution | null,
+): StartParamIntakeProbe {
+  const parsed = parseShareStartParam(startParam);
+  const received = typeof startParam === "string" && startParam.trim().length > 0;
+  if (!received || !execution || parsed.kind === "absent") {
+    return {
+      receivedStartParam: false,
+      sanitizedPrefix: "absent",
+      tokenLength: null,
+      orchestratorInvoked: false,
+      e44Dispatched: false,
+      tokenLookup: "SKIPPED",
+      outcome: "NOT_INVOKED",
+    };
+  }
+  const steps = execution.orchestration.steps;
+  const e44Dispatched = steps.some((step) => step.eventName === "TELEGRAM_SHARE_LINK.OPENED");
+  let tokenLookup: StartParamIntakeProbe["tokenLookup"] = "INVALID_PARAM";
+  if (parsed.kind === "share") {
+    if (execution.orchestration.shareAttemptId) {
+      tokenLookup =
+        execution.orchestration.outcome === "REJECTED" && !execution.orchestration.shareTargetBanId
+          ? "FOUND_NOT_CONFIRMED"
+          : execution.orchestration.shareTargetBanId
+            ? "FOUND_CONFIRMED"
+            : "FOUND_NOT_CONFIRMED";
+    } else if (execution.orchestration.outcome === "REJECTED") {
+      tokenLookup = "MISSING";
+    } else {
+      tokenLookup = "MISSING";
+    }
+  }
+  return {
+    receivedStartParam: true,
+    sanitizedPrefix: parsed.kind === "share" ? "share_" : "other",
+    tokenLength: parsed.kind === "share" ? parsed.token.length : null,
+    orchestratorInvoked: true,
+    e44Dispatched,
+    tokenLookup,
+    outcome: execution.orchestration.outcome,
+  };
+}
+
 function instantMs(value: unknown): number {
   return Number(value);
 }

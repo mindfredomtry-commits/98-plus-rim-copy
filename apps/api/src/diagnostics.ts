@@ -48,6 +48,23 @@ export type TestUiDiagnostics = Readonly<{
     outcome: string;
     steps: readonly unknown[];
   }> | null;
+  /** Temporary Stage 12 live-diagnosis probe (no secrets / full tokens). */
+  startParamIntake: Readonly<{
+    receivedStartParam: boolean;
+    sanitizedPrefix: "share_" | "other" | "absent";
+    tokenLength: number | null;
+    orchestratorInvoked: boolean;
+    e44Dispatched: boolean;
+    tokenLookup: string;
+    outcome: string;
+    client?: Readonly<{
+      unsafeStartParamPresent: boolean;
+      initDataStartParamPresent: boolean;
+      tgWebAppStartParamPresent: boolean;
+      queryStartParamPresent: boolean;
+      sentStartParamToSession: boolean;
+    }>;
+  }> | null;
   telegramShare: Readonly<{
     attemptId: string;
     token: string;
@@ -74,6 +91,7 @@ export function toTestUiDiagnostics(input: {
   previousExecution?: ApplicationExecutionResult | null;
   telegramShare?: TestUiDiagnostics["telegramShare"];
   externalEntry?: TestUiDiagnostics["externalEntry"];
+  startParamIntake?: TestUiDiagnostics["startParamIntake"];
 }): TestUiDiagnostics {
   const snapshot = input.execution?.snapshot ?? input.snapshot;
   const draft = snapshot.extended.createBanDraft;
@@ -120,6 +138,7 @@ export function toTestUiDiagnostics(input: {
     pendingExternalEntry: snapshot.extended.pendingExternalEntry,
     bootstrapStatus: snapshot.runtime.bootstrap.status,
     externalEntry: input.externalEntry ?? null,
+    startParamIntake: input.startParamIntake ?? null,
     telegramShare: input.telegramShare ?? null,
     savedFrozenRimChatPresent: snapshot.extended.savedFrozenRimChat !== null,
     error: input.execution?.error

@@ -158,6 +158,7 @@ export async function loadDiagnostics(
   previousExecution?: Awaited<ReturnType<typeof executeAuthenticatedEvent>> | null,
   telegramShare?: TestUiDiagnostics["telegramShare"],
   externalEntry?: TestUiDiagnostics["externalEntry"],
+  startParamIntake?: TestUiDiagnostics["startParamIntake"],
 ): Promise<{ loaded: LoadedSnapshot; diagnostics: TestUiDiagnostics }> {
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
   const contacts = await runtime.directory.listSelectableContacts(context.currentUserId);
@@ -174,6 +175,7 @@ export async function loadDiagnostics(
         : { previousExecution }),
       ...(telegramShare === undefined ? {} : { telegramShare }),
       ...(externalEntry === undefined ? {} : { externalEntry }),
+      ...(startParamIntake === undefined ? {} : { startParamIntake }),
     }),
   };
 }

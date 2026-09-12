@@ -44,6 +44,22 @@ export type MachineDiagnosticsInput = Readonly<{
   pendingExternalEntry?: unknown;
   bootstrapStatus?: string;
   externalEntry?: unknown;
+  startParamIntake?: Readonly<{
+    receivedStartParam?: boolean;
+    sanitizedPrefix?: string;
+    tokenLength?: number | null;
+    orchestratorInvoked?: boolean;
+    e44Dispatched?: boolean;
+    tokenLookup?: string;
+    outcome?: string;
+    client?: Readonly<{
+      unsafeStartParamPresent?: boolean;
+      initDataStartParamPresent?: boolean;
+      tgWebAppStartParamPresent?: boolean;
+      queryStartParamPresent?: boolean;
+      sentStartParamToSession?: boolean;
+    }>;
+  }> | null;
   savedFrozenRimChatPresent?: boolean;
   error?: Readonly<{ code?: string; message?: string }> | null;
 }>;
@@ -140,6 +156,7 @@ export function formatMachineDiagnostics(diagnostics: MachineDiagnosticsInput | 
     `PENDING EXTERNAL ENTRY: ${JSON.stringify(diagnostics.pendingExternalEntry ?? null)}`,
     `BOOTSTRAP: ${diagnostics.bootstrapStatus ?? "(none)"}`,
     `EXTERNAL ENTRY: ${JSON.stringify(diagnostics.externalEntry ?? null)}`,
+    `START PARAM INTAKE: ${JSON.stringify(diagnostics.startParamIntake ?? null)}`,
     `FROZEN RIM CHAT: ${String(diagnostics.savedFrozenRimChatPresent ?? false)}`,
     error ? `ERROR: ${error.code ?? ""} ${error.message ?? ""}`.trim() : "ERROR: (none)",
   ].join("\n");
