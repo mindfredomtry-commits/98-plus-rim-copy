@@ -1,0 +1,13 @@
+{
+  "name": "@98plus/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@98plus/api": "0.1.0",
+    "@98plus/product-model": "0.1.0"
+  }
+}

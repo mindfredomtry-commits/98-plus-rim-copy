@@ -1,0 +1,36 @@
+{
+  "name": "98plus-mvp1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
+    "start": "tsx apps/api/src/main.ts",
+    "start:test-ui": "tsx apps/api/src/main.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@types/node": "^24.3.1",
+    "eslint": "^9.35.0",
+    "prettier": "^3.6.2",
+    "typescript-eslint": "^8.42.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

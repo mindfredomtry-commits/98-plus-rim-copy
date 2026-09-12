@@ -1,0 +1,8 @@
+export const DURABLE_COLLECTION_SYNC = {
+  pendingOperations: "DELETE_OWNER_ABSENT",
+  notificationItems: "UPSERT_RESULT_AND_DELETE_OWNER_ABSENT",
+  shareOperations: "UPSERT_RESULT_AND_DELETE_OWNER_ABSENT",
+  bans: "UPSERT_RETAIN_HISTORICAL",
+  domainTimers: "UPSERT_RETAIN_HISTORICAL",
+  checkPairs: "UPSERT_RETAIN_HISTORICAL",
+} as const;

@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>98+ TEST UI — implemented through Stage 11</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+      body {
+        margin: 12px;
+        max-width: 960px;
+      }
+      h1,
+      h2,
+      h3 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      section {
+        border: 1px solid #333;
+        padding: 8px;
+        margin: 0 0 8px;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+        margin: 2px 4px 2px 0;
+      }
+      pre {
+        white-space: pre-wrap;
+        margin: 0;
+      }
+      .row {
+        margin: 4px 0;
+      }
+      .warn,
+      .dev-label {
+        color: #7a0000;
+      }
+      .receiver-choice {
+        border: 1px dashed #666;
+        padding: 6px;
+        margin: 6px 0;
+      }
+      #product-screen {
+        min-height: 8em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>98+ TEST UI — implemented through Stage 11</h1>
+    <p>
+      Distinct Product Screens follow backend controlState. Not production / beautiful UI. Temporary
+      Stage 11 Telegram Share verification host only.
+    </p>
+    <p id="runtime-auth-mode" class="dev-label"></p>
+
+    <section id="dev-auth">
+      <h2>DEV / AUTH CONTROLS</h2>
+      <p class="dev-label">
+        Used only outside Telegram WebView. Inside Telegram, auth uses Telegram.WebApp.initData.
+      </p>
+      <div class="row">
+        telegramUserId
+        <input id="telegramUserId" value="1001" />
+        secret
+        <input id="secret" value="test-secret" />
+        <button id="connect" type="button">Connect / open lobby</button>
+        <button id="reload" type="button">Reload snapshot</button>
+      </div>
+      <div class="row">
+        Switch user
+        <select id="switchUser">
+          <option value="1001">1001</option>
+          <option value="1002">1002</option>
+        </select>
+      </div>
+    </section>
+
+    <section id="product-screen-section">
+      <h2>PRODUCT SCREEN</h2>
+      <div id="product-screen" data-screen="DisconnectedTestScreen" data-nav="controlState"></div>
+    </section>
+
+    <section id="machine-diagnostics">
+      <h2>MACHINE DIAGNOSTICS</h2>
+      <pre id="machine"></pre>
+    </section>
+
+    <section id="raw-diagnostics">
+      <h2>RAW DIAGNOSTICS</h2>
+      <details>
+        <summary>Raw JSON (not required to operate the flow)</summary>
+        <pre id="raw">{}</pre>
+      </details>
+    </section>
+
+    <script type="module">
+      import { renderProductScreen } from "/test-ui/product-screens.js";
+      import { formatMachineDiagnostics } from "/test-ui/machine-diagnostics.js";
+
+      const productEl = document.getElementById("product-screen");
+      const machineEl = document.getElementById("machine");
+      const rawEl = document.getElementById("raw");
+      const telegramEl = document.getElementById("telegramUserId");
+      const secretEl = document.getElementById("secret");
+      const switchEl = document.getElementById("switchUser");
+      const authModeEl = document.getElementById("runtime-auth-mode");
+      const devAuthEl = document.getElementById("dev-auth");
+      let diagnostics = null;
+      let sending = false;
+
+      function telegramWebApp() {
+        return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+      }
+
+      function telegramInitData() {
+        const webApp = telegramWebApp();
+        const initData =
+          webApp && typeof webApp.initData === "string" ? webApp.initData.trim() : "";
+        return initData.length > 0 ? initData : null;
+      }
+
+      function inTelegramRuntime() {
+        return telegramInitData() !== null;
+      }
+
+      function headers() {
+        const initData = telegramInitData();
+        if (initData) {
+          return {
+            "content-type": "application/json",
+            "x-98-auth-method": "telegram",
+            "x-98-init-data": initData,
+          };
+        }
+        return {
+          "content-type": "application/json",
+          "x-98-auth-method": "development",
+          "x-98-dev-secret": secretEl.value,
+          "x-98-dev-telegram-user-id": telegramEl.value,
+        };
+      }
+
+      function syncAuthChrome() {
+        if (inTelegramRuntime()) {
+          authModeEl.textContent =
+            "Auth: Telegram.WebApp.initData (real Telegram verification). Dev auth headers disabled.";
+          if (devAuthEl) devAuthEl.hidden = true;
+          const webApp = telegramWebApp();
+          if (webApp && typeof webApp.ready === "function") webApp.ready();
+          if (webApp && typeof webApp.expand === "function") webApp.expand();
+        } else {
+          authModeEl.textContent =
+            "Auth: development (local/engineering). Open this host inside Telegram for initData auth.";
+          if (devAuthEl) devAuthEl.hidden = false;
+        }
+      }
+
+      async function call(path, options) {
+        const response = await fetch(path, {
+          ...options,
+          headers: { ...headers(), ...(options && options.headers) },
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          if (diagnostics) {
+            diagnostics = { ...diagnostics, error: body.error || { message: response.statusText } };
+          }
+          render();
+          throw new Error((body.error && body.error.message) || response.statusText);
+        }
+        diagnostics = body.diagnostics;
+        render();
+        return body;
+      }
+
+      async function sendEvent(name, payload) {
+        return call("/api/events", {
+          method: "POST",
+          body: JSON.stringify({ name, payload: payload || {} }),
+        });
+      }
+
+      function render() {
+        const screen = renderProductScreen(diagnostics, { sending });
+        productEl.dataset.screen = screen.screenId;
+        productEl.dataset.controlState =
+          diagnostics && diagnostics.controlState ? diagnostics.controlState : "";
+        productEl.innerHTML = screen.html;
+        machineEl.textContent = formatMachineDiagnostics(diagnostics);
+        rawEl.textContent = diagnostics ? JSON.stringify(diagnostics, null, 2) : "{}";
+        bindProductScreen(productEl);
+      }
+
+      function bindProductScreen(root) {
+        for (const button of root.querySelectorAll("[data-event]")) {
+          button.addEventListener("click", () => {
+            const name = button.getAttribute("data-event");
+            const payload = {};
+            const contactId = button.getAttribute("data-contact-id");
+            if (contactId) payload.contactId = contactId;
+            const shareAttemptId = button.getAttribute("data-share-attempt-id");
+            if (shareAttemptId) payload.shareAttemptId = shareAttemptId;
+            if (name === "CREATE_BAN.PRESS_FORBID") {
+              void sendForbid();
+              return;
+            }
+            if (name === "CREATE_BAN.SHARE_CONFIRMED" || name === "CREATE_BAN.SHARE_CANCELLED") {
+              if (name === "CREATE_BAN.SHARE_CONFIRMED") {
+                payload.result = {};
+              }
+              void sendEvent(name, payload);
+              return;
+            }
+            if (name === "NOTIFICATIONS.PRESS_OVERBOARD") {
+              void sendOverboard();
+              return;
+            }
+            if (name === "REPLY_BAN.PRESS_FORBID") {
+              void sendReplyBanForbid();
+              return;
+            }
+            if (
+              name === "NOTIFICATIONS.CHECK_ANSWER.FULFILLED" ||
+              name === "NOTIFICATIONS.CHECK_ANSWER.NOT_FULFILLED"
+            ) {
+              void sendCheckAnswer(name);
+              return;
+            }
+            void sendEvent(name, payload);
+          });
+        }
+        for (const input of root.querySelectorAll("[data-change-event]")) {
+          input.addEventListener("change", () => {
+            const name = input.getAttribute("data-change-event");
+            const field = input.getAttribute("data-change-field");
+            const payload = {};
+            payload[field] =
+              input.getAttribute("data-change-type") === "number"
+                ? Number(input.value)
+                : input.value;
+            void sendEvent(name, payload);
+          });
+        }
+      }
+
+      async function sendForbid() {
+        sending = true;
+        render();
+        try {
+          const body = await sendEvent("CREATE_BAN.PRESS_FORBID");
+          await maybeInvokeTelegramShare(body && body.diagnostics);
+        } finally {
+          sending = false;
+          render();
+        }
+      }
+
+      async function maybeInvokeTelegramShare(diag) {
+        const share = diag && diag.telegramShare;
+        if (!share) {
+          return;
+        }
+        if (!share.preparedMessageId) {
+          diagnostics = {
+            ...(diag || diagnostics || {}),
+            error: {
+              code: "TELEGRAM_SHARE_PREPARE_MISSING",
+              message:
+                "preparedMessageId missing — savePreparedInlineMessage did not succeed; SHARE_CONFIRMED was not fabricated.",
+            },
+          };
+          render();
+          return;
+        }
+        const webApp = telegramWebApp();
+        if (!webApp || typeof webApp.shareMessage !== "function") {
+          diagnostics = {
+            ...(diag || diagnostics || {}),
+            error: {
+              code: "TELEGRAM_SHARE_UNAVAILABLE",
+              message:
+                "Telegram.WebApp.shareMessage is unavailable in this runtime; SHARE_CONFIRMED was not fabricated. Stay on SHARE_PENDING.",
+            },
+          };
+          render();
+          return;
+        }
+        await new Promise((resolve) => {
+          webApp.shareMessage(share.preparedMessageId, (success) => {
+            void sendEvent(
+              success ? "CREATE_BAN.SHARE_CONFIRMED" : "CREATE_BAN.SHARE_CANCELLED",
+              success
+                ? { shareAttemptId: share.attemptId, result: {} }
+                : { shareAttemptId: share.attemptId },
+            ).finally(resolve);
+          });
+        });
+      }
+
+      async function sendOverboard() {
+        sending = true;
+        render();
+        try {
+          await sendEvent("NOTIFICATIONS.PRESS_OVERBOARD");
+        } finally {
+          sending = false;
+          render();
+        }
+      }
+
+      async function sendReplyBanForbid() {
+        sending = true;
+        render();
+        try {
+          await sendEvent("REPLY_BAN.PRESS_FORBID");
+        } finally {
+          sending = false;
+          render();
+        }
+      }
+
+      async function sendCheckAnswer(name) {
+        sending = true;
+        render();
+        try {
+          await sendEvent(name);
+        } finally {
+          sending = false;
+          render();
+        }
+      }
+
+      document
+        .getElementById("connect")
+        .addEventListener("click", () =>
+          call("/api/session", { method: "POST", body: JSON.stringify({ openIfNeeded: true }) }),
+        );
+      document.getElementById("reload").addEventListener("click", () => call("/api/snapshot"));
+      switchEl.addEventListener("change", () => {
+        telegramEl.value = switchEl.value;
+      });
+      syncAuthChrome();
+      render();
+      if (inTelegramRuntime()) {
+        void call("/api/session", {
+          method: "POST",
+          body: JSON.stringify({ openIfNeeded: true }),
+        }).catch((error) => {
+          diagnostics = {
+            controlState: null,
+            currentUserId: "",
+            selectedContactId: null,
+            createBanDraft: null,
+            contacts: [],
+            error: {
+              code: "TELEGRAM_SESSION_FAILED",
+              message: String((error && error.message) || error),
+            },
+          };
+          render();
+        });
+      }
+    </script>
+  </body>
+</html>

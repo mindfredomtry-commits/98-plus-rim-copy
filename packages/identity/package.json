@@ -1,0 +1,12 @@
+{
+  "name": "@98plus/identity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@98plus/product-model": "0.1.0"
+  }
+}
