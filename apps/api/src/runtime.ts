@@ -157,6 +157,7 @@ export async function loadDiagnostics(
   execution?: Awaited<ReturnType<typeof executeAuthenticatedEvent>> | null,
   previousExecution?: Awaited<ReturnType<typeof executeAuthenticatedEvent>> | null,
   telegramShare?: TestUiDiagnostics["telegramShare"],
+  externalEntry?: TestUiDiagnostics["externalEntry"],
 ): Promise<{ loaded: LoadedSnapshot; diagnostics: TestUiDiagnostics }> {
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
   const contacts = await runtime.directory.listSelectableContacts(context.currentUserId);
@@ -172,6 +173,7 @@ export async function loadDiagnostics(
         ? {}
         : { previousExecution }),
       ...(telegramShare === undefined ? {} : { telegramShare }),
+      ...(externalEntry === undefined ? {} : { externalEntry }),
     }),
   };
 }
@@ -182,6 +184,9 @@ export async function openLobbyIfNeeded(
 ) {
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
   if (loaded.snapshot.controlState !== null) {
+    return loadDiagnostics(runtime, context);
+  }
+  if (loaded.snapshot.runtime.bootstrap.status === "FIRST_LAUNCH_EXTERNAL_ENTRY") {
     return loadDiagnostics(runtime, context);
   }
   const execution = await executeAuthenticatedEvent(runtime, context, {

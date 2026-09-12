@@ -41,6 +41,17 @@ export type RelationshipBanRecord = Readonly<{
   relationshipBan: RelationshipBan;
 }>;
 
+export type BanReceiverBindResult =
+  | { status: "BOUND"; ban: Ban }
+  | { status: "ALREADY_BOUND"; ban: Ban }
+  | { status: "CONFLICT"; ban: Ban }
+  | { status: "MISSING" };
+
+export type StoredShareLookup = Readonly<{
+  share: ShareOperation;
+  ownerId: UserId;
+}>;
+
 export type ProductStore = {
   loadProductSnapshot(currentUserId: UserId): Promise<LoadedSnapshot>;
   persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot>;
@@ -52,6 +63,9 @@ export type ProductStore = {
     leftUserId: UserId,
     rightUserId: UserId,
   ): Promise<readonly RelationshipBanRecord[]>;
+  findShareByToken(token: string): Promise<StoredShareLookup | null>;
+  getBanById(banId: BanId): Promise<Ban | null>;
+  bindBanReceiver(banId: BanId, receiverId: UserId): Promise<BanReceiverBindResult>;
 };
 
 export type BanRow = Ban & Readonly<{ createdSeq: number }>;

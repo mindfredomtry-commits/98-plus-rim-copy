@@ -919,6 +919,11 @@ function prepareBranchSnapshot(
       break;
     case "E-45:guard-b":
       putItem(incomingItem({ lifecycle: { status: "PROCESSED" } }));
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({ senderId: OTHER_USER, receiverId: USER_ID }),
+        },
+      });
       break;
     case "E-41:established-state":
       next = {

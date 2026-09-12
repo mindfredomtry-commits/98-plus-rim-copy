@@ -27,6 +27,7 @@ export const API_STAGE_5_EXCLUDES = STAGE_5_EXCLUDES;
 
 export {
   CREATE_BAN_CONTACT_STAGE,
+  EXTERNAL_ENTRY_STAGE,
   INCOMING_OVERBOARD_STAGE,
   REPLY_BAN_FROM_INCOMING_STAGE,
   REPLY_BAN_FROM_STATUS_STAGE,
@@ -37,6 +38,7 @@ export {
   STAGE_9_EXCLUDES,
   STAGE_10_EXCLUDES,
   STAGE_11_EXCLUDES,
+  STAGE_12_EXCLUDES,
   TIMER_CHECK_STATUS_STAGE,
 } from "./stage.ts";
 export {
@@ -48,6 +50,12 @@ export {
 export { listenCreateBanContactServer, createCreateBanContactHttp } from "./http.ts";
 export { MemorySqlRegisteredUserDirectory, listSelectableRegisteredUsers } from "./directory.ts";
 export { executeIncomingOverboardVertical, pendingOverboard } from "./overboard.ts";
+export {
+  parseShareStartParam,
+  resolveTelegramShareExternalEntry,
+  resolvePendingExternalEntryIfOnline,
+  applyPendingExternalEntryExpiry,
+} from "./external-entry.ts";
 export { executeCreateBanContactVertical, pendingCreateBanSend } from "./contact-send.ts";
 export { pendingReplyBanSend, shouldCompleteReplyBanSend } from "./reply-ban.ts";
 export {

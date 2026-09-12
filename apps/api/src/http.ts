@@ -18,6 +18,7 @@ import {
 } from "./runtime.ts";
 import {
   CREATE_BAN_CONTACT_STAGE,
+  EXTERNAL_ENTRY_STAGE,
   INCOMING_OVERBOARD_STAGE,
   REPLY_BAN_FROM_INCOMING_STAGE,
   REPLY_BAN_FROM_STATUS_STAGE,
@@ -27,6 +28,7 @@ import {
   STAGE_9_EXCLUDES,
   STAGE_10_EXCLUDES,
   STAGE_11_EXCLUDES,
+  STAGE_12_EXCLUDES,
   TIMER_CHECK_STATUS_STAGE,
   TEMPLATE_CREATE_BAN_STAGE,
 } from "./stage.ts";
@@ -37,6 +39,12 @@ import { assertSelectableContactId } from "./select-contact.ts";
 import { CreateBanContactTransportError } from "./transport-error.ts";
 import { testUiHtmlSource, testUiModuleSource } from "./test-ui-assets.ts";
 import { buildTelegramShareInvocation, shouldOpenTelegramShare } from "./template-share.ts";
+import {
+  applyPendingExternalEntryExpiry,
+  resolvePendingExternalEntryIfOnline,
+  resolveTelegramShareExternalEntry,
+  type ExternalEntryOrchestration,
+} from "./external-entry.ts";
 
 const TEST_UI_HTML = testUiHtmlSource();
 
@@ -141,11 +149,13 @@ export async function handleCreateBanContactRequest(
         TIMER_CHECK_STATUS_STAGE,
         REPLY_BAN_FROM_STATUS_STAGE,
         TEMPLATE_CREATE_BAN_STAGE,
+        EXTERNAL_ENTRY_STAGE,
         STAGE_7_EXCLUDES,
         STAGE_8_EXCLUDES,
         STAGE_9_EXCLUDES,
         STAGE_10_EXCLUDES,
         STAGE_11_EXCLUDES,
+        STAGE_12_EXCLUDES,
         IMPLEMENTATION_STAGE,
         IDENTITY_STAGE,
         PERSISTENCE_STAGE,
@@ -167,6 +177,7 @@ export async function handleCreateBanContactRequest(
     const claimed = headerValue(req, "x-98-claimed-user-id");
     if (req.method === "GET" && url.pathname === "/api/snapshot") {
       await applyElapsedDomainTimers(runtime, context);
+      await applyPendingExternalEntryExpiry(runtime, context, claimed ?? undefined);
       const { diagnostics } = await loadDiagnostics(runtime, context);
       json(res, 200, { diagnostics });
       return;
@@ -179,12 +190,98 @@ export async function handleCreateBanContactRequest(
     if (req.method === "POST" && url.pathname === "/api/session") {
       const body = await readJson(req);
       const openIfNeeded = body.openIfNeeded !== false;
+      const startParam = typeof body.startParam === "string" ? body.startParam : null;
+      const claimedUserId = claimed ?? undefined;
+      await applyElapsedDomainTimers(runtime, context);
+      let externalEntry: ExternalEntryOrchestration | null = null;
+      let lastExecution = null as Awaited<
+        ReturnType<typeof resolveTelegramShareExternalEntry>
+      >["last"];
+      let firstExecution = null as Awaited<
+        ReturnType<typeof resolveTelegramShareExternalEntry>
+      >["first"];
+
+      const expired = await applyPendingExternalEntryExpiry(runtime, context, claimedUserId);
+      if (expired) {
+        lastExecution = expired;
+        firstExecution = expired;
+      }
+
+      if (startParam) {
+        const resolved = await resolveTelegramShareExternalEntry(
+          runtime,
+          context,
+          startParam,
+          claimedUserId,
+        );
+        externalEntry = resolved.orchestration;
+        if (resolved.last) {
+          lastExecution = resolved.last;
+          firstExecution = resolved.first ?? resolved.last;
+        }
+      } else {
+        const pending = await resolvePendingExternalEntryIfOnline(runtime, context, claimedUserId);
+        if (pending) {
+          externalEntry = pending.orchestration;
+          if (pending.last) {
+            lastExecution = pending.last;
+            firstExecution = pending.first ?? pending.last;
+          }
+        }
+      }
+
       if (openIfNeeded) {
         await openLobbyIfNeeded(runtime, context);
       }
       await applyElapsedDomainTimers(runtime, context);
-      const { diagnostics } = await loadDiagnostics(runtime, context);
-      json(res, 200, { diagnostics });
+      const { diagnostics } = await loadDiagnostics(
+        runtime,
+        context,
+        lastExecution,
+        firstExecution && firstExecution !== lastExecution ? firstExecution : null,
+        undefined,
+        externalEntry,
+      );
+      json(res, 200, {
+        diagnostics,
+        ...(externalEntry === null ? {} : { externalEntry }),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/external-entry") {
+      const body = await readJson(req);
+      const startParam = typeof body.startParam === "string" ? body.startParam : null;
+      const claimedUserId =
+        typeof body.clientClaimedUserId === "string"
+          ? body.clientClaimedUserId
+          : (claimed ?? undefined);
+      await applyElapsedDomainTimers(runtime, context);
+      await applyPendingExternalEntryExpiry(runtime, context, claimedUserId);
+      const resolved = await resolveTelegramShareExternalEntry(
+        runtime,
+        context,
+        startParam,
+        claimedUserId,
+      );
+      if (
+        resolved.orchestration.outcome === "NOOP" ||
+        resolved.orchestration.outcome === "PENDING"
+      ) {
+        await openLobbyIfNeeded(runtime, context);
+      }
+      const { diagnostics } = await loadDiagnostics(
+        runtime,
+        context,
+        resolved.last,
+        resolved.first && resolved.first !== resolved.last ? resolved.first : null,
+        undefined,
+        resolved.orchestration,
+      );
+      json(res, 200, {
+        diagnostics,
+        externalEntry: resolved.orchestration,
+        executionStatus: resolved.last?.status ?? "LOADED",
+      });
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/events") {
@@ -212,24 +309,41 @@ export async function handleCreateBanContactRequest(
         event,
         claimedUserId ?? undefined,
       );
-      const telegramShare = shouldOpenTelegramShare(executed.last)
+      let externalEntry = null as ExternalEntryOrchestration | null;
+      let last = executed.last;
+      let first = executed.orchestration ? executed.first : null;
+      if (event.name === "CONNECTION.RESTORED" && last.status === "APPLIED") {
+        const pending = await resolvePendingExternalEntryIfOnline(
+          runtime,
+          context,
+          claimedUserId ?? undefined,
+        );
+        if (pending?.last) {
+          externalEntry = pending.orchestration;
+          first = last;
+          last = pending.last;
+        }
+      }
+      const telegramShare = shouldOpenTelegramShare(last)
         ? await buildTelegramShareInvocation(
             runtime,
-            executed.last.snapshot,
+            last.snapshot,
             String(context.currentTelegramUser.telegramUserId),
           )
         : null;
       const { diagnostics } = await loadDiagnostics(
         runtime,
         context,
-        executed.last,
-        executed.orchestration ? executed.first : null,
+        last,
+        first,
         telegramShare,
+        externalEntry,
       );
       json(res, 200, {
         diagnostics,
-        executionStatus: executed.last.status,
+        executionStatus: last.status,
         ...(executed.orchestration === null ? {} : { orchestration: executed.orchestration }),
+        ...(externalEntry === null ? {} : { externalEntry }),
       });
       return;
     }

@@ -149,6 +149,25 @@ SELECT attempt_id, owner_id, draft, token, status, created_ban_id
 FROM share_operations
 WHERE owner_id = $1
 `.trim(),
+  selectShareByToken: `
+SELECT attempt_id, owner_id, draft, token, status, created_ban_id
+FROM share_operations
+WHERE token = $1
+ORDER BY attempt_id
+LIMIT 1
+`.trim(),
+  selectBanById: `
+SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status, created_seq
+FROM bans
+WHERE ban_id = $1
+`.trim(),
+  bindBanReceiverIfUnbound: `
+UPDATE bans
+SET receiver_id = $2
+WHERE ban_id = $1
+  AND receiver_id IS NULL
+RETURNING ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status, created_seq
+`.trim(),
   upsertShare: `
 INSERT INTO share_operations (
   attempt_id, owner_id, draft, token, status, created_ban_id

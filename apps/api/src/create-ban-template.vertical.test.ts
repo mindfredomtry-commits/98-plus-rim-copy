@@ -630,7 +630,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
   it("TEST UI chrome reports Stage 11 and Template screens", async () => {
     const app = await start();
     const html = await (await fetch(app.url)).text();
-    expect(html).toContain("98+ TEST UI — implemented through Stage 11");
+    expect(html).toContain("98+ TEST UI — implemented through Stage 12");
     expect(html).toContain("webApp.shareMessage");
     expect(html).toContain("CREATE_BAN.SHARE_CONFIRMED");
     expect(html).toContain("CREATE_BAN.SHARE_CANCELLED");

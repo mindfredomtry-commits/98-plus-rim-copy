@@ -195,6 +195,22 @@ function incomingTargetProcessed(input: ResolveInput): boolean {
   return !!item && item.lifecycle.status === "PROCESSED";
 }
 
+/** MVP7 Guard B: Ban receiver bound to current user AND linked Incoming processed. */
+function externalEntryGuardB(input: ResolveInput): boolean {
+  if (!incomingTargetProcessed(input)) {
+    return false;
+  }
+  const banId = (input.event.payload as { targetBanId?: string }).targetBanId;
+  if (!banId) {
+    return false;
+  }
+  const ban = input.snapshot.extended.entities.bans[banId];
+  if (!ban || ban.receiverId === null) {
+    return false;
+  }
+  return ban.receiverId === input.context.currentUserId;
+}
+
 function currentContextRequest(input: ResolveInput): boolean {
   const chat = input.snapshot.extended.rimChat;
   const selectedContactId = (input.event.payload as { selectedContactId?: string })
@@ -264,7 +280,7 @@ function evaluateStructured(guard: Guard, input: ResolveInput): boolean {
     case "EXTERNAL_ENTRY_GUARD_A":
       return incomingTargetUnprocessed(input);
     case "EXTERNAL_ENTRY_GUARD_B":
-      return incomingTargetProcessed(input);
+      return externalEntryGuardB(input);
     case "CURRENT_RIM_REQUEST":
       return guard.request === "CONTEXT" ? currentContextRequest(input) : currentAiRequest(input);
     case "SELECTED_CONTACT_ABSENT":
@@ -525,7 +541,7 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
     case "E-45:guard-a-dispatch":
       return incomingTargetUnprocessed(input);
     case "E-45:guard-b":
-      return incomingTargetProcessed(input);
+      return externalEntryGuardB(input);
     case "E-46:matching-resolution":
     case "E-46:all-states":
       return true;
@@ -598,7 +614,7 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
         return incomingTargetUnprocessed(input);
       }
       if (branch === "guard-b") {
-        return incomingTargetProcessed(input);
+        return externalEntryGuardB(input);
       }
       return evaluateSourceText(row.guardsText, input);
   }

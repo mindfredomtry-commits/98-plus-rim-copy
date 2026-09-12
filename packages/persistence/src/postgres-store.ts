@@ -1,6 +1,7 @@
 import type {
   Ban,
   BanAcceptance,
+  BanId,
   BanStatus,
   BootstrapState,
   CheckAnswer,
@@ -27,12 +28,14 @@ import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { PersistenceError } from "./errors.ts";
 import { SQL } from "./sql.ts";
 import type {
+  BanReceiverBindResult,
   CheckPairLockContext,
   LoadedSnapshot,
   PersistTransitionInput,
   PersistenceSqlClient,
   ProductStore,
   RelationshipBanRecord,
+  StoredShareLookup,
 } from "./types.ts";
 
 type SessionRow = {
@@ -231,6 +234,81 @@ export class PostgresProductStore implements ProductStore {
         status: row.status,
       },
     }));
+  }
+
+  async findShareByToken(token: string): Promise<StoredShareLookup | null> {
+    const result = await this.client.query<ShareSqlRow>(SQL.selectShareByToken, [token]);
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      ownerId: row.owner_id as UserId,
+      share: {
+        attemptId: row.attempt_id as ShareOperation["attemptId"],
+        draft: requireRecord(row.draft, "share_operations.draft"),
+        token: row.token,
+        status: row.status,
+        createdBanId: row.created_ban_id as ShareOperation["createdBanId"],
+      },
+    };
+  }
+
+  async getBanById(banId: BanId): Promise<Ban | null> {
+    const result = await this.client.query<BanSqlRow>(SQL.selectBanById, [banId]);
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.ban_id as Ban["id"],
+      senderId: row.sender_id as UserId,
+      receiverId: row.receiver_id as UserId | null,
+      banText: row.ban_text,
+      durationMinutes: row.duration_minutes as DurationMinutes,
+      acceptance: row.acceptance,
+      status: row.status,
+    };
+  }
+
+  async bindBanReceiver(banId: BanId, receiverId: UserId): Promise<BanReceiverBindResult> {
+    const existing = await this.getBanById(banId);
+    if (!existing) {
+      return { status: "MISSING" };
+    }
+    if (existing.receiverId === receiverId) {
+      return { status: "ALREADY_BOUND", ban: existing };
+    }
+    if (existing.receiverId !== null) {
+      return { status: "CONFLICT", ban: existing };
+    }
+    const result = await this.client.query<BanSqlRow>(SQL.bindBanReceiverIfUnbound, [
+      banId,
+      receiverId,
+    ]);
+    const row = result.rows[0];
+    if (row) {
+      return {
+        status: "BOUND",
+        ban: {
+          id: row.ban_id as Ban["id"],
+          senderId: row.sender_id as UserId,
+          receiverId: row.receiver_id as UserId | null,
+          banText: row.ban_text,
+          durationMinutes: row.duration_minutes as DurationMinutes,
+          acceptance: row.acceptance,
+          status: row.status,
+        },
+      };
+    }
+    const raced = await this.getBanById(banId);
+    if (!raced) {
+      return { status: "MISSING" };
+    }
+    if (raced.receiverId === receiverId) {
+      return { status: "ALREADY_BOUND", ban: raced };
+    }
+    return { status: "CONFLICT", ban: raced };
   }
 
   protected async write(

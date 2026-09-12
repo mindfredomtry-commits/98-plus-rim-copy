@@ -327,6 +327,62 @@ export class MemorySqlClient implements PersistenceSqlClient {
           })),
         );
       }
+      case SQL.selectShareByToken: {
+        const share = this.tables.findShareByToken(String(params[0]));
+        if (!share) {
+          return rows([]);
+        }
+        return rows([
+          {
+            attempt_id: share.attemptId,
+            owner_id: share.ownerId,
+            draft: share.draft,
+            token: share.token,
+            status: share.status,
+            created_ban_id: share.createdBanId,
+          },
+        ]);
+      }
+      case SQL.selectBanById: {
+        const ban = this.tables.getBan(String(params[0]));
+        if (!ban) {
+          return rows([]);
+        }
+        return rows([
+          {
+            ban_id: ban.id,
+            sender_id: ban.senderId,
+            receiver_id: ban.receiverId,
+            ban_text: ban.banText,
+            duration_minutes: ban.durationMinutes,
+            acceptance: ban.acceptance,
+            status: ban.status,
+            created_seq: ban.createdSeq,
+          },
+        ]);
+      }
+      case SQL.bindBanReceiverIfUnbound: {
+        const result = this.tables.bindBanReceiver(String(params[0]), params[1] as UserId);
+        if (result.status !== "BOUND") {
+          return rows([]);
+        }
+        const ban = this.tables.getBan(String(params[0]));
+        if (!ban) {
+          return rows([]);
+        }
+        return rows([
+          {
+            ban_id: ban.id,
+            sender_id: ban.senderId,
+            receiver_id: ban.receiverId,
+            ban_text: ban.banText,
+            duration_minutes: ban.durationMinutes,
+            acceptance: ban.acceptance,
+            status: ban.status,
+            created_seq: ban.createdSeq,
+          },
+        ]);
+      }
       case SQL.upsertShare: {
         this.tables.upsertShare(params[1] as UserId, {
           attemptId: params[0] as ShareOperation["attemptId"],

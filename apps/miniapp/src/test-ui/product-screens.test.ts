@@ -822,9 +822,9 @@ describe("Stage 7 TEST UI Incoming / OVERBOARD screens", () => {
 });
 
 describe("Stage 8 TEST UI Reply Ban FROM_INCOMING screens", () => {
-  it("TEST UI header reports implementation through Stage 11", () => {
-    expect(htmlSource).toContain("<title>98+ TEST UI — implemented through Stage 11</title>");
-    expect(htmlSource).toContain("<h1>98+ TEST UI — implemented through Stage 11</h1>");
+  it("TEST UI header reports implementation through Stage 12", () => {
+    expect(htmlSource).toContain("<title>98+ TEST UI — implemented through Stage 12</title>");
+    expect(htmlSource).toContain("<h1>98+ TEST UI — implemented through Stage 12</h1>");
     expect(htmlSource).not.toContain("Incoming OVERBOARD (Stage 7)");
     expect(htmlSource).not.toContain("Create Ban CONTACT (Stage 6)");
   });

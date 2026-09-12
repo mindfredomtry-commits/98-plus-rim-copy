@@ -10,6 +10,8 @@ export const REPLY_BAN_FROM_STATUS_STAGE = 10;
 
 export const TEMPLATE_CREATE_BAN_STAGE = 11;
 
+export const EXTERNAL_ENTRY_STAGE = 12;
+
 export const STAGE_6_EXCLUDES = [
   "incoming-ban-processing-ui",
   "overboard-action",
@@ -117,6 +119,21 @@ export const STAGE_10_EXCLUDES = [
 
 export const STAGE_11_EXCLUDES = [
   "external-entry",
+  "rim-ai",
+  "relationship-context-execution",
+  "openai",
+  "full-notifications-ui",
+  "select-contact-telegram-sync",
+  "premium",
+  "payments",
+  "analytics",
+  "deployment",
+  "production-ui",
+  "beautiful-ui",
+  "ui-mode-toggle",
+] as const;
+
+export const STAGE_12_EXCLUDES = [
   "rim-ai",
   "relationship-context-execution",
   "openai",

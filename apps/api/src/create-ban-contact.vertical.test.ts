@@ -511,6 +511,9 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
       loadProductSnapshot: (userId) => inner.loadProductSnapshot(userId),
       listRelationshipBans: (left, right) => inner.listRelationshipBans(left, right),
       withCheckPairLock: (pairId, run) => inner.withCheckPairLock(pairId, run),
+      findShareByToken: (token) => inner.findShareByToken(token),
+      getBanById: (banId) => inner.getBanById(banId),
+      bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
       persistTransition: async (input) => {
         if (input.result.snapshot.controlState === "CREATE_BAN.WHO") {
           throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");
@@ -639,7 +642,7 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
     const html = await fetch(app.url);
     expect(html.status).toBe(200);
     const page = await html.text();
-    expect(page).toContain("98+ TEST UI — implemented through Stage 11");
+    expect(page).toContain("98+ TEST UI — implemented through Stage 12");
     expect(page).toContain("PRODUCT SCREEN");
     expect(page).toContain("MACHINE DIAGNOSTICS");
     expect(page).toContain("DEV / AUTH CONTROLS");

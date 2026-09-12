@@ -36,6 +36,18 @@ export type TestUiDiagnostics = Readonly<{
   checkPairs: readonly unknown[];
   shareOperations: readonly unknown[];
   activeShareAttemptId: string | null;
+  pendingExternalEntry: ProductSnapshot["extended"]["pendingExternalEntry"];
+  bootstrapStatus: ProductSnapshot["runtime"]["bootstrap"]["status"];
+  externalEntry: Readonly<{
+    startParam: string | null;
+    token: string | null;
+    shareAttemptId: string | null;
+    shareTargetBanId: string | null;
+    incomingBanItemId: string | null;
+    bindStatus: string | null;
+    outcome: string;
+    steps: readonly unknown[];
+  }> | null;
   telegramShare: Readonly<{
     attemptId: string;
     token: string;
@@ -61,6 +73,7 @@ export function toTestUiDiagnostics(input: {
   execution?: ApplicationExecutionResult | null;
   previousExecution?: ApplicationExecutionResult | null;
   telegramShare?: TestUiDiagnostics["telegramShare"];
+  externalEntry?: TestUiDiagnostics["externalEntry"];
 }): TestUiDiagnostics {
   const snapshot = input.execution?.snapshot ?? input.snapshot;
   const draft = snapshot.extended.createBanDraft;
@@ -104,6 +117,9 @@ export function toTestUiDiagnostics(input: {
     checkPairs: Object.values(snapshot.extended.entities.checkPairs),
     shareOperations,
     activeShareAttemptId: activeShare ? String(activeShare.attemptId) : null,
+    pendingExternalEntry: snapshot.extended.pendingExternalEntry,
+    bootstrapStatus: snapshot.runtime.bootstrap.status,
+    externalEntry: input.externalEntry ?? null,
     telegramShare: input.telegramShare ?? null,
     savedFrozenRimChatPresent: snapshot.extended.savedFrozenRimChat !== null,
     error: input.execution?.error

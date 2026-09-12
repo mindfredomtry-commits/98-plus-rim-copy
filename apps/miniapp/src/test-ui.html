@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>98+ TEST UI — implemented through Stage 11</title>
+    <title>98+ TEST UI — implemented through Stage 12</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
       :root {
@@ -55,10 +55,10 @@
     </style>
   </head>
   <body>
-    <h1>98+ TEST UI — implemented through Stage 11</h1>
+    <h1>98+ TEST UI — implemented through Stage 12</h1>
     <p>
       Distinct Product Screens follow backend controlState. Not production / beautiful UI. Temporary
-      Stage 11 Telegram Share verification host only.
+      Stage 12 Telegram Share Link External Entry verification host.
     </p>
     <p id="runtime-auth-mode" class="dev-label"></p>
 
@@ -339,11 +339,31 @@
         }
       }
 
-      document
-        .getElementById("connect")
-        .addEventListener("click", () =>
-          call("/api/session", { method: "POST", body: JSON.stringify({ openIfNeeded: true }) }),
-        );
+      function telegramStartParam() {
+        try {
+          const unsafe = window.Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe;
+          if (unsafe && typeof unsafe.start_param === "string" && unsafe.start_param.length > 0) {
+            return unsafe.start_param;
+          }
+        } catch (_error) {
+          /* ignore */
+        }
+        const fromQuery = new URLSearchParams(window.location.search).get("startParam");
+        return fromQuery && fromQuery.length > 0 ? fromQuery : null;
+      }
+
+      async function openSession(openIfNeeded = true) {
+        const startParam = telegramStartParam();
+        return call("/api/session", {
+          method: "POST",
+          body: JSON.stringify({
+            openIfNeeded,
+            ...(startParam ? { startParam } : {}),
+          }),
+        });
+      }
+
+      document.getElementById("connect").addEventListener("click", () => void openSession(true));
       document.getElementById("reload").addEventListener("click", () => call("/api/snapshot"));
       switchEl.addEventListener("change", () => {
         telegramEl.value = switchEl.value;
@@ -351,10 +371,7 @@
       syncAuthChrome();
       render();
       if (inTelegramRuntime()) {
-        void call("/api/session", {
-          method: "POST",
-          body: JSON.stringify({ openIfNeeded: true }),
-        }).catch((error) => {
+        void openSession(true).catch((error) => {
           diagnostics = {
             controlState: null,
             currentUserId: "",

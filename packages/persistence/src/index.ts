@@ -16,10 +16,12 @@ export { SQL } from "./sql.ts";
 export { PERSISTENCE_STAGE, STAGE_4_EXCLUDES } from "./stage.ts";
 export { DURABLE_COLLECTION_SYNC } from "./sync-policy.ts";
 export type {
+  BanReceiverBindResult,
   CheckPairLockContext,
   LoadedSnapshot,
   PersistTransitionInput,
   PersistenceSqlClient,
   ProductStore,
   RelationshipBanRecord,
+  StoredShareLookup,
 } from "./types.ts";

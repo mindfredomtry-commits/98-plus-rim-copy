@@ -57,6 +57,7 @@ export type Effect =
   | { type: "START_OPERATION"; operation: PendingOperation }
   | { type: "CLEAR_OPERATION"; operationId: OperationId }
   | { type: "MARK_OPERATION_RESULT_APPLIED"; operationId: OperationId }
+  | { type: "MARK_OPERATION_SUPERSEDED_BY_EXTERNAL_ENTRY"; operationId: OperationId }
   | { type: "OPEN_TELEGRAM_SHARE"; attemptId: ShareAttemptId }
   | { type: "UPSERT_SHARE_OPERATION"; operation: ShareOperation }
   | {

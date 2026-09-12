@@ -381,6 +381,15 @@ export function applyEffects(
         break;
       case "SET_PENDING_EXTERNAL_ENTRY":
         next = { ...next, extended: { ...next.extended, pendingExternalEntry: effect.entry } };
+        if (effect.entry?.firstLaunch) {
+          next = {
+            ...next,
+            runtime: {
+              ...next.runtime,
+              bootstrap: { status: "FIRST_LAUNCH_EXTERNAL_ENTRY" },
+            },
+          };
+        }
         break;
       case "SET_TIMER_PRIORITY":
         next = {
@@ -446,6 +455,22 @@ export function applyEffects(
               pendingOperations: {
                 ...next.runtime.pendingOperations,
                 [effect.operationId]: { ...operation, resultApplied: true },
+              },
+            },
+          };
+        }
+        break;
+      }
+      case "MARK_OPERATION_SUPERSEDED_BY_EXTERNAL_ENTRY": {
+        const operation = next.runtime.pendingOperations[effect.operationId];
+        if (operation && !operation.resultApplied) {
+          next = {
+            ...next,
+            runtime: {
+              ...next.runtime,
+              pendingOperations: {
+                ...next.runtime.pendingOperations,
+                [effect.operationId]: { ...operation, supersededByExternalEntry: true },
               },
             },
           };

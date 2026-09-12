@@ -1,4 +1,5 @@
-import type { ProductSnapshot, TransitionResult, UserId } from "@98plus/product-model";
+import type { Ban, ProductSnapshot, TransitionResult, UserId } from "@98plus/product-model";
+import type { BanId } from "@98plus/product-model";
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
@@ -61,6 +62,28 @@ export class InMemoryProductStore implements ProductStore {
 
   async listRelationshipBans(leftUserId: UserId, rightUserId: UserId) {
     return this.tables.listRelationshipBans(leftUserId, rightUserId);
+  }
+
+  async findShareByToken(token: string) {
+    const share = this.tables.findShareByToken(token);
+    if (!share) {
+      return null;
+    }
+    const { ownerId, ...operation } = share;
+    return { share: operation, ownerId };
+  }
+
+  async getBanById(banId: BanId): Promise<Ban | null> {
+    const ban = this.tables.getBan(banId);
+    if (!ban) {
+      return null;
+    }
+    const { createdSeq: _createdSeq, ...rest } = ban;
+    return rest;
+  }
+
+  async bindBanReceiver(banId: BanId, receiverId: UserId) {
+    return this.tables.bindBanReceiver(banId, receiverId);
   }
 
   private async withUserLock<T>(userId: UserId, fn: () => T): Promise<T> {

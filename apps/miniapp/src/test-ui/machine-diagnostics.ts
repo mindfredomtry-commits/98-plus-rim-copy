@@ -41,6 +41,9 @@ export type MachineDiagnosticsInput = Readonly<{
   hasUnprocessedNotifications?: boolean;
   domainTimers?: readonly unknown[];
   checkPairs?: readonly unknown[];
+  pendingExternalEntry?: unknown;
+  bootstrapStatus?: string;
+  externalEntry?: unknown;
   savedFrozenRimChatPresent?: boolean;
   error?: Readonly<{ code?: string; message?: string }> | null;
 }>;
@@ -134,6 +137,9 @@ export function formatMachineDiagnostics(diagnostics: MachineDiagnosticsInput | 
     `PRIORITIES: ${JSON.stringify(diagnostics.priorities ?? {})}`,
     `DOMAIN TIMERS: ${diagnostics.domainTimers?.length ?? 0}`,
     `CHECK PAIRS: ${diagnostics.checkPairs?.length ?? 0}`,
+    `PENDING EXTERNAL ENTRY: ${JSON.stringify(diagnostics.pendingExternalEntry ?? null)}`,
+    `BOOTSTRAP: ${diagnostics.bootstrapStatus ?? "(none)"}`,
+    `EXTERNAL ENTRY: ${JSON.stringify(diagnostics.externalEntry ?? null)}`,
     `FROZEN RIM CHAT: ${String(diagnostics.savedFrozenRimChatPresent ?? false)}`,
     error ? `ERROR: ${error.code ?? ""} ${error.message ?? ""}`.trim() : "ERROR: (none)",
   ].join("\n");

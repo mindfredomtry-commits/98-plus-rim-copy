@@ -1060,7 +1060,7 @@ export function instantiateEffects(
           }
         } else if (row.eventId === "E-10") {
           const banId = eventField<BanId>(event, "createdBanId");
-          const draft = snapshot.extended.createBanDraft;
+          const draft = createBanSendFacts(input);
           const receiverId = draft?.selectedContactId ?? null;
           if (!banId || !receiverId) {
             return missing(
@@ -1211,6 +1211,80 @@ export function instantiateEffects(
     }
   }
 
+  if (
+    row.eventId === "E-45" &&
+    (row.branch === "guard-a" ||
+      row.branch === "guard-a-dispatch" ||
+      row.branch === "first-launch-resolved")
+  ) {
+    const banId = eventField<BanId>(event, "targetBanId");
+    const receiverId = eventField<UserId>(event, "receiverId");
+    const itemId = eventField<NotificationItemId>(event, "incomingBanItemId");
+    const ban = banId ? snapshot.extended.entities.bans[banId] : undefined;
+    if (
+      ban &&
+      receiverId &&
+      receiverId === context.currentUserId &&
+      (ban.receiverId === null || ban.receiverId === receiverId)
+    ) {
+      effects.push({
+        type: "UPSERT_BAN",
+        ban: { ...ban, receiverId },
+      });
+    }
+    // Bootstrap first-launch Matrix omits UPSERT_NOTIFICATION_ITEM; Guard A still requires
+    // exactly one linked Incoming Ban Item for the target Ban.
+    if (itemId && banId && receiverId === context.currentUserId) {
+      const already = effects.some(
+        (effect) =>
+          effect.type === "UPSERT_NOTIFICATION_ITEM" &&
+          effect.item.id === itemId &&
+          effect.item.kind === "INCOMING_BAN",
+      );
+      if (!already) {
+        const existing = snapshot.extended.entities.notificationItems[itemId];
+        if (existing) {
+          effects.push({
+            type: "UPSERT_NOTIFICATION_ITEM",
+            item: {
+              ...existing,
+              lifecycle:
+                existing.lifecycle.status === "PROCESSED"
+                  ? existing.lifecycle
+                  : { status: "UNPROCESSED", display: "ACTIVE" },
+            },
+          });
+        } else {
+          effects.push({
+            type: "UPSERT_NOTIFICATION_ITEM",
+            item: {
+              id: itemId,
+              ownerId: context.currentUserId,
+              banId,
+              fifoSequence: nextFifoSequence(snapshot),
+              lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+              kind: "INCOMING_BAN",
+            },
+          });
+        }
+      }
+    }
+    for (const operation of Object.values(snapshot.runtime.pendingOperations)) {
+      if (
+        (operation.kind === "CREATE_BAN_SEND" ||
+          operation.kind === "OVERBOARD" ||
+          operation.kind === "CHECK_ANSWER" ||
+          operation.kind === "REPLY_BAN_SEND") &&
+        !operation.resultApplied &&
+        !operation.supersededByExternalEntry
+      ) {
+        effects.push({
+          type: "MARK_OPERATION_SUPERSEDED_BY_EXTERNAL_ENTRY",
+          operationId: operation.operationId,
+        });
+      }
+    }
+  }
   if (row.eventId === "E-13") {
     const share = matchingShare(input);
     if (share) {

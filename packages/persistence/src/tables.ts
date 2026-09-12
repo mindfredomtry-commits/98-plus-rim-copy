@@ -18,7 +18,7 @@ import {
   notificationItemToRecord,
 } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
-import type { RelationshipBanRecord } from "./types.ts";
+import type { BanReceiverBindResult, RelationshipBanRecord } from "./types.ts";
 
 type IdentityRow = { userId: UserId; telegramUserId: string };
 type BanRecord = Ban & { createdSeq: number };
@@ -336,6 +336,28 @@ export class ProductTables {
   getShare(attemptId: string): ShareRecord | undefined {
     const share = this.data.shares.get(attemptId);
     return share ? cloneJson(share) : undefined;
+  }
+
+  findShareByToken(token: string): ShareRecord | undefined {
+    const share = [...this.data.shares.values()].find((item) => String(item.token) === token);
+    return share ? cloneJson(share) : undefined;
+  }
+
+  bindBanReceiver(banId: string, receiverId: UserId): BanReceiverBindResult {
+    const ban = this.data.bans.get(banId);
+    if (!ban) {
+      return { status: "MISSING" };
+    }
+    if (ban.receiverId === null) {
+      this.requireUser(receiverId, "bans.receiver_id");
+      const next = { ...ban, receiverId };
+      this.data.bans.set(banId, next);
+      return { status: "BOUND", ban: asBan(cloneJson(next)) };
+    }
+    if (ban.receiverId === receiverId) {
+      return { status: "ALREADY_BOUND", ban: asBan(cloneJson(ban)) };
+    }
+    return { status: "CONFLICT", ban: asBan(cloneJson(ban)) };
   }
 
   listRelationshipBans(leftUserId: UserId, rightUserId: UserId): RelationshipBanRecord[] {
