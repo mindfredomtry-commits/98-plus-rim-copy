@@ -6,11 +6,13 @@ export { ApplicationError } from "./errors.ts";
 export type { ApplicationErrorCode } from "./errors.ts";
 export { toCanonicalEvent } from "./event.ts";
 export type { ProductEventInput } from "./event.ts";
-export { executeProductEvent } from "./execute.ts";
+export { executeProductEvent, executeShareLinkResolved } from "./execute.ts";
 export type {
   ApplicationExecutionResult,
   ApplicationExecutionStatus,
   ExecuteProductEventInput,
+  ExecuteShareLinkResolvedInput,
   ProductExecutorDependencies,
+  ShareLinkResolvedExecution,
 } from "./execute.ts";
 export { APPLICATION_STAGE, STAGE_5_EXCLUDES } from "./stage.ts";

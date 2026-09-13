@@ -4,6 +4,8 @@ import {
   asInstant,
   reduce,
   type AppliedRuleTrace,
+  type Ban,
+  type BanId,
   type CanonicalEvent,
   type CompositionOrder,
   type Effect,
@@ -169,6 +171,150 @@ export async function executeProductEvent(
           persisted: false,
           error: applicationError,
         });
+      }
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof ApplicationError) {
+      throw error;
+    }
+    if (error instanceof PersistenceError) {
+      throw persistenceApplicationError(error);
+    }
+    throw new ApplicationError(
+      "INFRASTRUCTURE_FAILURE",
+      error instanceof Error ? error.message : "application infrastructure failure",
+      error,
+    );
+  }
+}
+
+export type ExecuteShareLinkResolvedInput = ExecuteProductEventInput &
+  Readonly<{
+    targetBanId: BanId;
+    receiverId: UserId;
+  }>;
+
+export type ShareLinkResolvedExecution = ApplicationExecutionResult &
+  Readonly<{
+    bindStatus: "BOUND" | "ALREADY_BOUND" | "CONFLICT" | "MISSING" | null;
+  }>;
+
+function withHydratedBan(snapshot: ProductSnapshot, ban: Ban | null): ProductSnapshot {
+  if (!ban) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    extended: {
+      ...snapshot.extended,
+      entities: {
+        ...snapshot.extended.entities,
+        bans: {
+          ...snapshot.extended.entities.bans,
+          [ban.id]: ban,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * E-45 path: hydrate target Ban into the in-memory snapshot (so unbound Template Bans
+ * are visible to Kernel), then CAS-bind receiverId + persist the APPLIED transition
+ * in one ProductStore transaction. No durable receiverId before successful commit.
+ */
+export async function executeShareLinkResolved(
+  input: ExecuteShareLinkResolvedInput,
+  deps: ProductExecutorDependencies,
+): Promise<ShareLinkResolvedExecution> {
+  const event = toCanonicalEvent(input.event);
+  const currentUserId = callerUserId(input.context, input.clientClaimedUserId);
+  try {
+    const loaded = await deps.store.loadProductSnapshot(currentUserId);
+    const ban = await deps.store.getBanById(input.targetBanId);
+    const hydrated = withHydratedBan(loaded.snapshot, ban);
+    const transition = reduce(hydrated, event, {
+      now: asInstant(deps.clock.nowMs()),
+      currentUserId,
+      allocateId: deps.allocateId,
+    });
+    if (transition.outcome !== "APPLIED") {
+      return {
+        ...executionResult({
+          status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+          currentUserId,
+          event,
+          transition,
+          snapshot: loaded.snapshot,
+          revision: loaded.revision,
+          persisted: false,
+          error:
+            transition.outcome === "KERNEL_INVARIANT"
+              ? new ApplicationError(
+                  "KERNEL_INVARIANT",
+                  transition.error?.message ?? "Product Kernel invariant failed",
+                  transition.error,
+                )
+              : null,
+        }),
+        bindStatus: null,
+      };
+    }
+    try {
+      const persisted = await deps.store.persistShareLinkResolved({
+        currentUserId,
+        expectedRevision: loaded.revision,
+        result: transition,
+        banId: input.targetBanId,
+        receiverId: input.receiverId,
+      });
+      if (persisted.status === "BIND_REJECTED") {
+        const durable = await deps.store.loadProductSnapshot(currentUserId);
+        return {
+          ...executionResult({
+            status: "NOT_APPLIED",
+            currentUserId,
+            event,
+            transition,
+            snapshot: durable.snapshot,
+            revision: durable.revision,
+            persisted: false,
+            error: null,
+          }),
+          bindStatus: persisted.bindStatus,
+        };
+      }
+      return {
+        ...executionResult({
+          status: "APPLIED",
+          currentUserId,
+          event,
+          transition,
+          snapshot: persisted.loaded.snapshot,
+          revision: persisted.loaded.revision,
+          persisted: true,
+          error: null,
+        }),
+        bindStatus: persisted.bindStatus,
+      };
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        const durable = await deps.store.loadProductSnapshot(currentUserId);
+        const applicationError = persistenceApplicationError(error);
+        return {
+          ...executionResult({
+            status: error.code === "REVISION_CONFLICT" ? "REVISION_CONFLICT" : "PERSISTENCE_ERROR",
+            currentUserId,
+            event,
+            transition,
+            snapshot: durable.snapshot,
+            revision: durable.revision,
+            persisted: false,
+            error: applicationError,
+          }),
+          bindStatus: null,
+        };
       }
       throw error;
     }

@@ -36,6 +36,7 @@ import {
 } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import { listSelectableRegisteredUsers } from "./directory.ts";
+import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 import type { ContactSendOrchestration } from "./contact-send.ts";
 
 const USER_A_TG = "1001";
@@ -174,11 +175,15 @@ async function reachWhatContact(
   url: string,
   app: Started,
 ): Promise<{ a: TestUiDiagnostics; bId: string }> {
+  await session(url, USER_A_TG);
+  await session(url, USER_B_TG);
+  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const opened = await session(url, USER_A_TG);
   expect(opened.controlState).toBe("RIM.LOBBY");
   const who = requireDiagnostics(await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   expect(who.controlState).toBe("CREATE_BAN.WHO");
   const bId = await userBId(app, who);
+  expect(who.contacts.some((contact) => contact.userId === bId)).toBe(true);
   const what = requireDiagnostics(
     await dispatch(url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),
   );
@@ -514,6 +519,7 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
+      persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
       persistTransition: async (input) => {
         if (input.result.snapshot.controlState === "CREATE_BAN.WHO") {
           throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");

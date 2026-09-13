@@ -30,6 +30,7 @@ import {
 } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import type { ContactSendOrchestration } from "./contact-send.ts";
+import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 
 const USER_A_TG = "1001";
 const USER_B_TG = "1002";
@@ -201,6 +202,8 @@ function pairsOf(diagnostics: TestUiDiagnostics): PairJson[] {
 
 async function createRealIncomingFromA(app: Started): Promise<{ ban: BanJson }> {
   await session(app.url, USER_A_TG);
+  await session(app.url, USER_B_TG);
+  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   const listed = who.contacts.find((contact) => contact.telegramUserId === USER_B_TG);
   const bId = listed?.userId ?? userIdOf(app.runtime, USER_B_TG);

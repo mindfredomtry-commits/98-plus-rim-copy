@@ -25,7 +25,7 @@ describe("Matrix contract fixtures", () => {
       );
       expect(local, `missing local E-32 for ${state}`).toBeDefined();
       expect(local?.result).toBe("SESSION_END");
-      expect(local?.source.document).toBe("MVP7_STATE_EVENT_MATRIX");
+      expect(local?.source.document).toBe("MVP8_STATE_EVENT_MATRIX");
     }
   });
 

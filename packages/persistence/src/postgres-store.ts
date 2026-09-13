@@ -31,6 +31,8 @@ import type {
   BanReceiverBindResult,
   CheckPairLockContext,
   LoadedSnapshot,
+  PersistShareLinkResolvedInput,
+  PersistShareLinkResolvedResult,
   PersistTransitionInput,
   PersistenceSqlClient,
   ProductStore,
@@ -171,7 +173,14 @@ function itemParams(item: NotificationItem): unknown[] {
 }
 
 export class PostgresProductStore implements ProductStore {
+  private failAfterBans = false;
+
   constructor(private readonly client: PersistenceSqlClient) {}
+
+  /** Test-only: fail inside the write transaction after Ban upserts (rolls back bind+write). */
+  failNextWriteAfterBans(): void {
+    this.failAfterBans = true;
+  }
 
   async loadProductSnapshot(currentUserId: UserId): Promise<LoadedSnapshot> {
     return this.read(this.client, currentUserId);
@@ -272,20 +281,76 @@ export class PostgresProductStore implements ProductStore {
   }
 
   async bindBanReceiver(banId: BanId, receiverId: UserId): Promise<BanReceiverBindResult> {
-    const existing = await this.getBanById(banId);
-    if (!existing) {
+    return this.bindBanReceiverOn(this.client, banId, receiverId);
+  }
+
+  async persistShareLinkResolved(
+    input: PersistShareLinkResolvedInput,
+  ): Promise<PersistShareLinkResolvedResult> {
+    if (input.result.outcome !== "APPLIED") {
+      throw new PersistenceError(
+        "APPLIED_TRANSITION_REQUIRED",
+        "Only an APPLIED Product Kernel TransitionResult may be persisted",
+      );
+    }
+    try {
+      return await this.client.transaction(async (tx) => {
+        const bind = await this.bindBanReceiverOn(tx, input.banId, input.receiverId);
+        if (bind.status === "MISSING" || bind.status === "CONFLICT") {
+          return { status: "BIND_REJECTED" as const, bindStatus: bind.status };
+        }
+        const loaded = await this.writeOn(
+          tx,
+          input.currentUserId,
+          input.expectedRevision,
+          input.result.snapshot,
+          false,
+        );
+        return {
+          status: "PERSISTED" as const,
+          loaded,
+          bindStatus: bind.status,
+        };
+      });
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error
+          ? error.message
+          : "share-link resolved persistence transaction failed",
+      );
+    }
+  }
+
+  private async bindBanReceiverOn(
+    client: PersistenceSqlClient,
+    banId: BanId,
+    receiverId: UserId,
+  ): Promise<BanReceiverBindResult> {
+    const existingResult = await client.query<BanSqlRow>(SQL.selectBanById, [banId]);
+    const existingRow = existingResult.rows[0];
+    if (!existingRow) {
       return { status: "MISSING" };
     }
+    const existing = {
+      id: existingRow.ban_id as Ban["id"],
+      senderId: existingRow.sender_id as UserId,
+      receiverId: existingRow.receiver_id as UserId | null,
+      banText: existingRow.ban_text,
+      durationMinutes: existingRow.duration_minutes as DurationMinutes,
+      acceptance: existingRow.acceptance,
+      status: existingRow.status,
+    };
     if (existing.receiverId === receiverId) {
       return { status: "ALREADY_BOUND", ban: existing };
     }
     if (existing.receiverId !== null) {
       return { status: "CONFLICT", ban: existing };
     }
-    const result = await this.client.query<BanSqlRow>(SQL.bindBanReceiverIfUnbound, [
-      banId,
-      receiverId,
-    ]);
+    const result = await client.query<BanSqlRow>(SQL.bindBanReceiverIfUnbound, [banId, receiverId]);
     const row = result.rows[0];
     if (row) {
       return {
@@ -301,10 +366,20 @@ export class PostgresProductStore implements ProductStore {
         },
       };
     }
-    const raced = await this.getBanById(banId);
-    if (!raced) {
+    const racedResult = await client.query<BanSqlRow>(SQL.selectBanById, [banId]);
+    const racedRow = racedResult.rows[0];
+    if (!racedRow) {
       return { status: "MISSING" };
     }
+    const raced = {
+      id: racedRow.ban_id as Ban["id"],
+      senderId: racedRow.sender_id as UserId,
+      receiverId: racedRow.receiver_id as UserId | null,
+      banText: racedRow.ban_text,
+      durationMinutes: racedRow.duration_minutes as DurationMinutes,
+      acceptance: racedRow.acceptance,
+      status: racedRow.status,
+    };
     if (raced.receiverId === receiverId) {
       return { status: "ALREADY_BOUND", ban: raced };
     }
@@ -366,6 +441,10 @@ export class PostgresProductStore implements ProductStore {
         ban.acceptance,
         ban.status,
       ]);
+    }
+    if (this.failAfterBans) {
+      this.failAfterBans = false;
+      throw new PersistenceError("TRANSACTION_FAILED", "injected failure after Ban write");
     }
     for (const timer of Object.values(entities.domainTimers)) {
       await tx.query(SQL.upsertTimer, [

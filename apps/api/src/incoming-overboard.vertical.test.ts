@@ -29,6 +29,7 @@ import {
 } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import type { ContactSendOrchestration } from "./contact-send.ts";
+import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 
 const USER_A_TG = "1001";
 const USER_B_TG = "1002";
@@ -175,6 +176,9 @@ function overboardOperationsOf(diagnostics: TestUiDiagnostics) {
 }
 
 async function reachConfirm(url: string, app: Started): Promise<{ bId: string }> {
+  await session(url, USER_A_TG);
+  await session(url, USER_B_TG);
+  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const opened = await session(url, USER_A_TG);
   expect(opened.controlState).toBe("RIM.LOBBY");
   const who = requireDiagnostics(await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_START"));

@@ -1,4 +1,5 @@
 import type { UserId } from "@98plus/product-model";
+import { contactPartnerIdsFromBans } from "@98plus/product-model";
 import { MemorySqlClient } from "@98plus/persistence";
 
 export type SelectableRegisteredUser = Readonly<{
@@ -8,9 +9,8 @@ export type SelectableRegisteredUser = Readonly<{
 }>;
 
 /**
- * MVP5 does not define a Select Contact discovery/ranking algorithm.
- * Stage 6 implementation choice: return every other already-registered 98+ user,
- * sorted by internal UserId, excluding the authenticated caller.
+ * Sort registered identities for stable TEST UI / WHO / RIM presentation.
+ * Stage 13B: callers must already restrict the input to the MVP8 Contact set.
  */
 export function listSelectableRegisteredUsers(
   identities: readonly SelectableRegisteredUser[],
@@ -30,20 +30,28 @@ export type RegisteredUserDirectory = {
   isRegisteredUserId(userId: string): boolean;
 };
 
+/**
+ * Production MVP8 Contact set: derived exclusively from authoritative Ban facts
+ * (senderId + receiverId). No test-grant fallback path exists on this class.
+ */
 export class MemorySqlRegisteredUserDirectory implements RegisteredUserDirectory {
-  constructor(private readonly sql: MemorySqlClient) {}
+  constructor(protected readonly sql: MemorySqlClient) {}
 
   async listSelectableContacts(
     currentUserId: UserId,
   ): Promise<readonly SelectableRegisteredUser[]> {
-    return listSelectableRegisteredUsers(this.allIdentities(), currentUserId);
+    const partnerIds = new Set<string>(
+      contactPartnerIdsFromBans(this.sql.tables.listBansForUser(currentUserId), currentUserId),
+    );
+    const contacts = this.allIdentities().filter((user) => partnerIds.has(user.userId));
+    return listSelectableRegisteredUsers(contacts, currentUserId);
   }
 
   isRegisteredUserId(userId: string): boolean {
     return this.sql.tables.hasUser(userId);
   }
 
-  private allIdentities(): readonly SelectableRegisteredUser[] {
+  protected allIdentities(): readonly SelectableRegisteredUser[] {
     return [...this.sql.tables.snapshot().identities.values()].map((row) => ({
       userId: row.userId,
       telegramUserId: row.telegramUserId,

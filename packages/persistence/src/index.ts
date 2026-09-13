@@ -19,6 +19,8 @@ export type {
   BanReceiverBindResult,
   CheckPairLockContext,
   LoadedSnapshot,
+  PersistShareLinkResolvedInput,
+  PersistShareLinkResolvedResult,
   PersistTransitionInput,
   PersistenceSqlClient,
   ProductStore,

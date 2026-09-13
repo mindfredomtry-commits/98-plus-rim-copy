@@ -33,6 +33,7 @@ import {
   type CreateBanContactRuntime,
 } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
+import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 import {
   BAN_ID,
   INCOMING_ITEM_ID,
@@ -530,6 +531,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     await session(app.url, USER_A_TG);
     const aId = userIdOf(app.runtime, USER_A_TG)!;
     await session(app.url, USER_B_TG);
+    grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
     requireDiagnostics(await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_START"));
     requireDiagnostics(
       await dispatch(app.url, USER_B_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: aId }),
@@ -575,8 +577,12 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
   it("31. CONTACT Create Ban still creates Ban with real receiver", async () => {
     const app = await start();
     await session(app.url, USER_A_TG);
+    await session(app.url, USER_B_TG);
+    grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
     const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
-    const bId = who.contacts.find((c) => c.telegramUserId === USER_B_TG)?.userId;
+    const bId =
+      who.contacts.find((c) => c.telegramUserId === USER_B_TG)?.userId ??
+      userIdOf(app.runtime, USER_B_TG);
     expect(bId).toBeTruthy();
     requireDiagnostics(
       await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),

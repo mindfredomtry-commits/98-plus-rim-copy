@@ -17,6 +17,7 @@ import {
   type CreateBanContactRuntime,
 } from "./runtime.ts";
 import {
+  CONTACT_RELATIONSHIP_STAGE,
   CREATE_BAN_CONTACT_STAGE,
   EXTERNAL_ENTRY_STAGE,
   INCOMING_OVERBOARD_STAGE,
@@ -29,6 +30,7 @@ import {
   STAGE_10_EXCLUDES,
   STAGE_11_EXCLUDES,
   STAGE_12_EXCLUDES,
+  STAGE_13B_EXCLUDES,
   TIMER_CHECK_STATUS_STAGE,
   TEMPLATE_CREATE_BAN_STAGE,
 } from "./stage.ts";
@@ -152,12 +154,14 @@ export async function handleCreateBanContactRequest(
         REPLY_BAN_FROM_STATUS_STAGE,
         TEMPLATE_CREATE_BAN_STAGE,
         EXTERNAL_ENTRY_STAGE,
+        CONTACT_RELATIONSHIP_STAGE,
         STAGE_7_EXCLUDES,
         STAGE_8_EXCLUDES,
         STAGE_9_EXCLUDES,
         STAGE_10_EXCLUDES,
         STAGE_11_EXCLUDES,
         STAGE_12_EXCLUDES,
+        STAGE_13B_EXCLUDES,
         IMPLEMENTATION_STAGE,
         IDENTITY_STAGE,
         PERSISTENCE_STAGE,
@@ -326,8 +330,13 @@ export async function handleCreateBanContactRequest(
       }
       assertUiTransportEvent(body.name);
       const payload = body.payload && typeof body.payload === "object" ? body.payload : {};
-      if (body.name === "CREATE_BAN.SELECT_CONTACT") {
-        await assertSelectableContactId(runtime.directory, context.currentUserId, payload);
+      if (body.name === "CREATE_BAN.SELECT_CONTACT" || body.name === "RIM.SELECT_CONTACT") {
+        await assertSelectableContactId(
+          runtime.directory,
+          context.currentUserId,
+          payload,
+          body.name,
+        );
       }
       const event: ProductEventInput = {
         name: body.name,

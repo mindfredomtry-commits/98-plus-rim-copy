@@ -1,4 +1,5 @@
 import type { ApplicationExecutionResult, ProductEventInput } from "@98plus/application";
+import { executeShareLinkResolved } from "@98plus/application";
 import type { AuthenticatedContext } from "@98plus/identity";
 import {
   PENDING_EXTERNAL_ENTRY_TTL_MS,
@@ -9,7 +10,11 @@ import {
   type ShareLinkId,
   type UserId,
 } from "@98plus/product-model";
-import { executeAuthenticatedEvent, type CreateBanContactRuntime } from "./runtime.ts";
+import {
+  executeAuthenticatedEvent,
+  executorDeps,
+  type CreateBanContactRuntime,
+} from "./runtime.ts";
 
 export type ParsedShareStartParam =
   { kind: "share"; token: string } | { kind: "invalid"; raw: string } | { kind: "absent" };
@@ -142,6 +147,31 @@ async function dispatch(
   return executeAuthenticatedEvent(runtime, context, event, clientClaimedUserId);
 }
 
+async function dispatchShareResolved(
+  runtime: CreateBanContactRuntime,
+  context: AuthenticatedContext,
+  payload: Readonly<{
+    targetBanId: BanId;
+    receiverId: UserId;
+    incomingBanItemId: NotificationItemId;
+  }>,
+  clientClaimedUserId?: string,
+) {
+  return executeShareLinkResolved(
+    {
+      context,
+      event: {
+        name: "TELEGRAM_SHARE_LINK.RESOLVED",
+        payload,
+      },
+      targetBanId: payload.targetBanId,
+      receiverId: payload.receiverId,
+      ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
+    },
+    executorDeps(runtime),
+  );
+}
+
 async function rejectExternalEntry(
   runtime: CreateBanContactRuntime,
   context: AuthenticatedContext,
@@ -267,14 +297,15 @@ export async function resolveTelegramShareExternalEntry(
     );
   }
 
-  const bind = await runtime.productStore.bindBanReceiver(banId, context.currentUserId);
-  if (bind.status === "MISSING" || bind.status === "CONFLICT") {
+  // Non-mutating conflict peek. Authoritative receiver binding is deferred until E-45
+  // so E-44 alone cannot establish MVP8 Contact eligibility (receiverId stays null).
+  if (ban.receiverId !== null && ban.receiverId !== context.currentUserId) {
     return rejectExternalEntry(
       runtime,
       context,
       {} as ShareLinkFailureReason,
       clientClaimedUserId,
-      { ...base, bindStatus: bind.status },
+      { ...base, bindStatus: "CONFLICT" },
       [],
     );
   }
@@ -299,18 +330,21 @@ export async function resolveTelegramShareExternalEntry(
     clientClaimedUserId,
   );
 
-  const withBind = {
+  const openedBase = {
     ...base,
     shareTargetBanId: banId,
     incomingBanItemId,
-    bindStatus: bind.status,
+    bindStatus:
+      ban.receiverId === context.currentUserId
+        ? ("ALREADY_BOUND" as const)
+        : (null as ExternalEntryOrchestration["bindStatus"]),
   };
 
   if (opened.status !== "APPLIED") {
     return {
       first: opened,
       last: opened,
-      orchestration: { ...withBind, outcome: "PENDING", steps: [stepOf(opened)] },
+      orchestration: { ...openedBase, outcome: "PENDING", steps: [stepOf(opened)] },
     };
   }
 
@@ -318,23 +352,36 @@ export async function resolveTelegramShareExternalEntry(
     return {
       first: opened,
       last: opened,
-      orchestration: { ...withBind, outcome: "PENDING", steps: [stepOf(opened)] },
+      orchestration: { ...openedBase, outcome: "PENDING", steps: [stepOf(opened)] },
     };
   }
 
-  const resolved = await dispatch(
+  const resolved = await dispatchShareResolved(
     runtime,
     context,
     {
-      name: "TELEGRAM_SHARE_LINK.RESOLVED",
-      payload: {
-        targetBanId: banId,
-        receiverId: context.currentUserId,
-        incomingBanItemId,
-      },
+      targetBanId: banId,
+      receiverId: context.currentUserId,
+      incomingBanItemId,
     },
     clientClaimedUserId,
   );
+
+  if (resolved.bindStatus === "MISSING" || resolved.bindStatus === "CONFLICT") {
+    return rejectExternalEntry(
+      runtime,
+      context,
+      {} as ShareLinkFailureReason,
+      clientClaimedUserId,
+      { ...openedBase, bindStatus: resolved.bindStatus },
+      [opened],
+    );
+  }
+
+  const withBind = {
+    ...openedBase,
+    bindStatus: resolved.bindStatus,
+  };
 
   return {
     first: opened,
@@ -402,8 +449,7 @@ export async function resolvePendingExternalEntryIfOnline(
     );
   }
 
-  const bind = await runtime.productStore.bindBanReceiver(banId, context.currentUserId);
-  if (bind.status === "MISSING" || bind.status === "CONFLICT") {
+  if (ban.receiverId !== null && ban.receiverId !== context.currentUserId) {
     return rejectExternalEntry(
       runtime,
       context,
@@ -415,31 +461,45 @@ export async function resolvePendingExternalEntryIfOnline(
         shareAttemptId: String(entry.shareLinkId),
         shareTargetBanId: banId,
         incomingBanItemId: null,
-        bindStatus: bind.status,
+        bindStatus: "CONFLICT",
       },
       [],
     );
   }
 
-  const afterBind = await runtime.productStore.loadProductSnapshot(context.currentUserId);
-  let incomingBanItemId = linkedIncomingItemId(afterBind.snapshot, banId, context.currentUserId);
+  let incomingBanItemId = linkedIncomingItemId(loaded.snapshot, banId, context.currentUserId);
   if (!incomingBanItemId) {
     incomingBanItemId = runtime.allocateId("notification") as NotificationItemId;
   }
 
-  const resolved = await dispatch(
+  const resolved = await dispatchShareResolved(
     runtime,
     context,
     {
-      name: "TELEGRAM_SHARE_LINK.RESOLVED",
-      payload: {
-        targetBanId: banId,
-        receiverId: context.currentUserId,
-        incomingBanItemId,
-      },
+      targetBanId: banId,
+      receiverId: context.currentUserId,
+      incomingBanItemId,
     },
     clientClaimedUserId,
   );
+
+  if (resolved.bindStatus === "MISSING" || resolved.bindStatus === "CONFLICT") {
+    return rejectExternalEntry(
+      runtime,
+      context,
+      {} as ShareLinkFailureReason,
+      clientClaimedUserId,
+      {
+        startParam: null,
+        token: null,
+        shareAttemptId: String(entry.shareLinkId),
+        shareTargetBanId: banId,
+        incomingBanItemId,
+        bindStatus: resolved.bindStatus,
+      },
+      [],
+    );
+  }
 
   return {
     first: resolved,
@@ -450,7 +510,7 @@ export async function resolvePendingExternalEntryIfOnline(
       shareAttemptId: String(entry.shareLinkId),
       shareTargetBanId: banId,
       incomingBanItemId,
-      bindStatus: bind.status,
+      bindStatus: resolved.bindStatus,
       outcome: resolved.status === "APPLIED" ? "RESOLVED" : "PENDING",
       steps: [stepOf(resolved)],
     },

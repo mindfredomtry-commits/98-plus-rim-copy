@@ -12,6 +12,8 @@ export const TEMPLATE_CREATE_BAN_STAGE = 11;
 
 export const EXTERNAL_ENTRY_STAGE = 12;
 
+export const CONTACT_RELATIONSHIP_STAGE = 13;
+
 export const STAGE_6_EXCLUDES = [
   "incoming-ban-processing-ui",
   "overboard-action",
@@ -134,6 +136,22 @@ export const STAGE_11_EXCLUDES = [
 ] as const;
 
 export const STAGE_12_EXCLUDES = [
+  "rim-ai",
+  "relationship-context-execution",
+  "openai",
+  "full-notifications-ui",
+  "select-contact-telegram-sync",
+  "premium",
+  "payments",
+  "analytics",
+  "deployment",
+  "production-ui",
+  "beautiful-ui",
+  "ui-mode-toggle",
+] as const;
+
+/** Stage 13B implements MVP8 Contact set; later product work remains excluded. */
+export const STAGE_13B_EXCLUDES = [
   "rim-ai",
   "relationship-context-execution",
   "openai",

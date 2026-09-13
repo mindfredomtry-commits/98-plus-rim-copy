@@ -21,8 +21,10 @@ import {
   authenticateRuntime,
   createCreateBanContactRuntime,
   executeAuthenticatedEvent,
+  userIdOf,
   type CreateBanContactRuntime,
 } from "./runtime.ts";
+import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 
 const USER_A_TG = "1001";
 const USER_B_TG = "1002";
@@ -104,6 +106,8 @@ async function reachBothChecks(now: { value: number }, sql: MemorySqlClient) {
   });
   started.push(app);
   await session(app.url, USER_A_TG);
+  await session(app.url, USER_B_TG);
+  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START");
   const contactsResponse = await fetch(`${app.url}/api/snapshot`, {
     headers: authHeaders(USER_A_TG),
@@ -111,9 +115,9 @@ async function reachBothChecks(now: { value: number }, sql: MemorySqlClient) {
   const contactsBody = (await contactsResponse.json()) as {
     diagnostics: { contacts: readonly { telegramUserId: string; userId: string }[] };
   };
-  const bId = contactsBody.diagnostics.contacts.find(
-    (contact) => contact.telegramUserId === USER_B_TG,
-  )?.userId;
+  const bId =
+    contactsBody.diagnostics.contacts.find((contact) => contact.telegramUserId === USER_B_TG)
+      ?.userId ?? userIdOf(app.runtime, USER_B_TG);
   await fetch(`${app.url}/api/events`, {
     method: "POST",
     headers: authHeaders(USER_A_TG),

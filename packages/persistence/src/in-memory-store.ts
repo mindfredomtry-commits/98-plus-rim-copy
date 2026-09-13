@@ -7,6 +7,8 @@ import { ProductTables } from "./tables.ts";
 import type {
   CheckPairLockContext,
   LoadedSnapshot,
+  PersistShareLinkResolvedInput,
+  PersistShareLinkResolvedResult,
   PersistTransitionInput,
   ProductStore,
 } from "./types.ts";
@@ -86,6 +88,31 @@ export class InMemoryProductStore implements ProductStore {
     return this.tables.bindBanReceiver(banId, receiverId);
   }
 
+  async persistShareLinkResolved(
+    input: PersistShareLinkResolvedInput,
+  ): Promise<PersistShareLinkResolvedResult> {
+    const snapshot = requireApplied(input.result);
+    return this.withUserLock(input.currentUserId, () =>
+      this.tables.transaction(() => {
+        const bind = this.tables.bindBanReceiver(input.banId, input.receiverId);
+        if (bind.status === "MISSING" || bind.status === "CONFLICT") {
+          return { status: "BIND_REJECTED" as const, bindStatus: bind.status };
+        }
+        const loaded = this.writeUnlocked(
+          input.currentUserId,
+          input.expectedRevision,
+          snapshot,
+          false,
+        );
+        return {
+          status: "PERSISTED" as const,
+          loaded,
+          bindStatus: bind.status,
+        };
+      }),
+    );
+  }
+
   private async withUserLock<T>(userId: UserId, fn: () => T): Promise<T> {
     const previous = this.userLocks.get(userId) ?? Promise.resolve();
     let release: () => void = () => undefined;
@@ -132,46 +159,52 @@ export class InMemoryProductStore implements ProductStore {
     seed: boolean,
   ): Promise<LoadedSnapshot> {
     return this.withUserLock(currentUserId, () =>
-      this.tables.transaction(() => {
-        if (!this.tables.hasUser(currentUserId)) {
-          throw new PersistenceError(
-            "IDENTITY_REQUIRED",
-            "Persistence operations require an authenticated identity_users.user_id",
-          );
-        }
-        const current = this.tables.lockSession(currentUserId);
-        const currentRevision = current?.revision ?? 0;
-        if (!seed && currentRevision !== expectedRevision) {
-          throw new PersistenceError(
-            "REVISION_CONFLICT",
-            "Conflicting writes to the same user's durable ProductSnapshot",
-          );
-        }
-        const nextRevision = currentRevision + 1;
-        const entities = snapshot.extended.entities;
-        for (const ban of Object.values(entities.bans)) {
-          this.tables.upsertBan(ban);
-        }
-        if (this.failAfterBans) {
-          this.failAfterBans = false;
-          throw new PersistenceError("TRANSACTION_FAILED", "injected failure after Ban write");
-        }
-        for (const timer of Object.values(entities.domainTimers)) {
-          this.tables.upsertTimer(timer);
-        }
-        for (const pair of Object.values(entities.checkPairs)) {
-          assertCheckPairWriteAllowed(this.tables.getPair(pair.id), pair);
-          this.tables.upsertPair(pair);
-        }
-        this.tables.replaceOwnedItems(currentUserId, Object.values(entities.notificationItems));
-        this.tables.replaceOwnedShares(currentUserId, Object.values(entities.shareOperations));
-        this.tables.replaceOperations(
-          currentUserId,
-          Object.values(snapshot.runtime.pendingOperations),
-        );
-        this.tables.writeSession(sessionFromSnapshot(currentUserId, snapshot, nextRevision));
-        return this.read(currentUserId);
-      }),
+      this.tables.transaction(() =>
+        this.writeUnlocked(currentUserId, expectedRevision, snapshot, seed),
+      ),
     );
+  }
+
+  private writeUnlocked(
+    currentUserId: UserId,
+    expectedRevision: number,
+    snapshot: ProductSnapshot,
+    seed: boolean,
+  ): LoadedSnapshot {
+    if (!this.tables.hasUser(currentUserId)) {
+      throw new PersistenceError(
+        "IDENTITY_REQUIRED",
+        "Persistence operations require an authenticated identity_users.user_id",
+      );
+    }
+    const current = this.tables.lockSession(currentUserId);
+    const currentRevision = current?.revision ?? 0;
+    if (!seed && currentRevision !== expectedRevision) {
+      throw new PersistenceError(
+        "REVISION_CONFLICT",
+        "Conflicting writes to the same user's durable ProductSnapshot",
+      );
+    }
+    const nextRevision = currentRevision + 1;
+    const entities = snapshot.extended.entities;
+    for (const ban of Object.values(entities.bans)) {
+      this.tables.upsertBan(ban);
+    }
+    if (this.failAfterBans) {
+      this.failAfterBans = false;
+      throw new PersistenceError("TRANSACTION_FAILED", "injected failure after Ban write");
+    }
+    for (const timer of Object.values(entities.domainTimers)) {
+      this.tables.upsertTimer(timer);
+    }
+    for (const pair of Object.values(entities.checkPairs)) {
+      assertCheckPairWriteAllowed(this.tables.getPair(pair.id), pair);
+      this.tables.upsertPair(pair);
+    }
+    this.tables.replaceOwnedItems(currentUserId, Object.values(entities.notificationItems));
+    this.tables.replaceOwnedShares(currentUserId, Object.values(entities.shareOperations));
+    this.tables.replaceOperations(currentUserId, Object.values(snapshot.runtime.pendingOperations));
+    this.tables.writeSession(sessionFromSnapshot(currentUserId, snapshot, nextRevision));
+    return this.read(currentUserId);
   }
 }

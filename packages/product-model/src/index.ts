@@ -1,5 +1,7 @@
 export { AUTHORITY_DOCUMENTS, PRODUCT_SPECIFICATION_SOURCE } from "./authority.ts";
 export type { AuthorityDocument, AuthorityReference, ReferencedDefinition } from "./authority.ts";
+export { contactPartnerIdsFromBans, isQualifyingAuthoritativeBan } from "./contacts.ts";
+export type { BanParticipants } from "./contacts.ts";
 export {
   APP_FULL_CLOSE_COMPOSITION,
   APP_FULL_CLOSE_FORBIDDEN_EFFECT_TYPES,

@@ -29,6 +29,24 @@ export type PersistTransitionInput = Readonly<{
   result: TransitionResult;
 }>;
 
+/** Atomic E-45 receiver bind + APPLIED transition persist (single commit boundary). */
+export type PersistShareLinkResolvedInput = PersistTransitionInput &
+  Readonly<{
+    banId: BanId;
+    receiverId: UserId;
+  }>;
+
+export type PersistShareLinkResolvedResult =
+  | {
+      status: "PERSISTED";
+      loaded: LoadedSnapshot;
+      bindStatus: "BOUND" | "ALREADY_BOUND";
+    }
+  | {
+      status: "BIND_REJECTED";
+      bindStatus: "MISSING" | "CONFLICT";
+    };
+
 export type CheckPairLockContext = Readonly<{
   pair: CheckPair | null;
   loadProductSnapshot(currentUserId: UserId): Promise<LoadedSnapshot>;
@@ -55,6 +73,13 @@ export type StoredShareLookup = Readonly<{
 export type ProductStore = {
   loadProductSnapshot(currentUserId: UserId): Promise<LoadedSnapshot>;
   persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot>;
+  /**
+   * CAS-bind Ban.receiverId and persist an APPLIED E-45 transition in one transaction.
+   * On BIND_REJECTED or any throw before commit, receiverId must remain unchanged.
+   */
+  persistShareLinkResolved(
+    input: PersistShareLinkResolvedInput,
+  ): Promise<PersistShareLinkResolvedResult>;
   withCheckPairLock<T>(
     pairId: string,
     run: (context: CheckPairLockContext) => Promise<T>,

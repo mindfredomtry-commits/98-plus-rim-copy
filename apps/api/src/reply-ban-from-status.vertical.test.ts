@@ -34,6 +34,7 @@ import {
 } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import type { ContactSendOrchestration } from "./contact-send.ts";
+import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 import {
   BAN_ID,
   OP_ID,
@@ -295,6 +296,8 @@ async function createRealIncomingFromA(
   options: { banText?: string; durationMinutes?: number } = {},
 ): Promise<{ ban: BanJson; bId: string }> {
   await ensureLobby(app, USER_A_TG);
+  await session(app.url, USER_B_TG);
+  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   const listed = who.contacts.find((contact) => contact.telegramUserId === USER_B_TG);
   const bId = listed?.userId ?? userIdOf(app.runtime, USER_B_TG);

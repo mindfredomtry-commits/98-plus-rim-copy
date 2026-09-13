@@ -26,28 +26,26 @@ export async function assertSelectableContactId(
   directory: RegisteredUserDirectory,
   currentUserId: UserId,
   payload: unknown,
+  eventLabel: string = "SELECT_CONTACT",
 ): Promise<UserId> {
   const contactId = readSelectContactId(payload);
   if (contactId === null) {
-    throw invalid(
-      "INVALID_SHAPE",
-      "CREATE_BAN.SELECT_CONTACT requires contactId as a non-empty string",
-    );
+    throw invalid("INVALID_SHAPE", `${eventLabel} requires contactId as a non-empty string`);
   }
   if (contactId === currentUserId) {
-    throw invalid("SELF", "CREATE_BAN.SELECT_CONTACT cannot select the authenticated current user");
+    throw invalid("SELF", `${eventLabel} cannot select the authenticated current user`);
   }
   if (!directory.isRegisteredUserId(contactId)) {
     throw invalid(
       "UNREGISTERED",
-      "CREATE_BAN.SELECT_CONTACT contactId must be an already-registered internal UserId",
+      `${eventLabel} contactId must be an already-registered internal UserId`,
     );
   }
   const selectable = await directory.listSelectableContacts(currentUserId);
   if (!selectable.some((user) => user.userId === contactId)) {
     throw invalid(
       "NOT_SELECTABLE",
-      "CREATE_BAN.SELECT_CONTACT contactId is not selectable under the Stage 6 directory policy",
+      `${eventLabel} contactId is not in the current user's MVP8 Contact set`,
     );
   }
   return contactId as UserId;

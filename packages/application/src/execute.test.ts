@@ -126,6 +126,7 @@ describe("Stage 5 executeProductEvent", () => {
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
+      persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
       persistTransition: async () => {
         throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");
       },
@@ -169,6 +170,7 @@ describe("Stage 5 executeProductEvent", () => {
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
+      persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
       persistTransition: async (_input: PersistTransitionInput) => {
         throw new PersistenceError("INVARIANT", "persistence refused the write");
       },
