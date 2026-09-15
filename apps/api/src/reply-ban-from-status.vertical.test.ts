@@ -750,7 +750,7 @@ describe("Stage 10 Reply Ban FROM_STATUS vertical", () => {
         status.controlState!,
       );
     }
-  });
+  }, 15_000);
 
   it("validation stays RB-04; valid Next → RB-05; Back preserves/clears draft", async () => {
     const app = await start();

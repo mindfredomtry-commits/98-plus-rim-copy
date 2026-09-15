@@ -280,31 +280,31 @@ describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
     expect(runtime.telegramPersistentReentryBootstrapIntents).toHaveLength(1);
   });
 
-  it("E-62 → eligible false; new qualifying action → eligible true again", async () => {
+  it("E-62 → eligible remains true; same surface CTA hidden; later RIM.LOBBY shows CTA", async () => {
     const runtime = createCreateBanContactRuntime({ telegramSharePrepare: "mock" });
     const app = await start(runtime);
     const first = await createShareBoundBan(app.url);
     await openShareAsReceiver(app.url, first.token);
-    await qualifyViaOverboard(app.url);
+    const qualified = await qualifyViaOverboard(app.url);
+    expect(qualified.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.RECEIVER");
+    expect(qualified.telegramPersistentReentry.showCta).toBe(true);
+
     const began = await beginReentry(app.url, USER_B_TG);
     const declined = await dispatch(app.url, USER_B_TG, "TELEGRAM_PERSISTENT_REENTRY.DECLINED", {
       requestId: began.requestId!,
     });
-    expect(declined.diagnostics?.telegramPersistentReentryEligible).toBe(false);
+    expect(declined.diagnostics?.telegramPersistentReentryEligible).toBe(true);
     expect(declined.diagnostics?.telegramPersistentReentryEstablished).toBe(false);
+    expect(declined.diagnostics?.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.RECEIVER");
     expect(declined.diagnostics?.telegramPersistentReentry.showCta).toBe(false);
     expect(runtime.telegramPersistentReentryBootstrapIntents).toHaveLength(0);
 
     await dispatch(app.url, USER_B_TG, "APP.FULL_CLOSE");
-    await session(app.url, USER_B_TG, { openIfNeeded: true });
-
-    const second = await createShareBoundBan(app.url, USER_C_TG);
-    const opened = await openShareAsReceiver(app.url, second.token);
-    expect(opened.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
-    const again = await qualifyViaOverboard(app.url);
-    expect(again.telegramPersistentReentryEligible).toBe(true);
-    expect(again.telegramPersistentReentryEstablished).toBe(false);
-    expect(again.telegramPersistentReentry.showCta).toBe(true);
+    const reopened = await session(app.url, USER_B_TG, { openIfNeeded: true });
+    expect(reopened.telegramPersistentReentryEligible).toBe(true);
+    expect(reopened.telegramPersistentReentryEstablished).toBe(false);
+    expect(reopened.controlState).toBe("RIM.LOBBY");
+    expect(reopened.telegramPersistentReentry.showCta).toBe(true);
   });
 
   it("late E-20 after newer entry sets eligible without restoring old UI", async () => {

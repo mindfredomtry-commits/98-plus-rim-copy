@@ -58,6 +58,16 @@ export type ExtendedState = Readonly<{
   telegramPersistentReentryEstablished: boolean;
   /** Integration fact: active permission request id for Guard A; null when none. */
   telegramPersistentReentryActiveRequestId: string | null;
+  /**
+   * MVP10 CTA opportunity generation — bumps on Product Control State change.
+   * Distinguishes persistent eligibility from the current CTA surface occurrence.
+   */
+  telegramPersistentReentryCtaSurfaceGeneration: number;
+  /**
+   * Surface generation consumed by an applicable E-62; null when none consumed.
+   * Suppresses CTA on the same opportunity without clearing eligibility.
+   */
+  telegramPersistentReentryCtaConsumedSurfaceGeneration: number | null;
   entities: EntityState;
 }>;
 

@@ -41,7 +41,7 @@ export function matrixRow(input: {
     effects: input.effects ?? [],
     result: input.result,
     source: {
-      document: "MVP9_STATE_EVENT_MATRIX",
+      document: "MVP10_STATE_EVENT_MATRIX",
       ...input.source,
     },
   };

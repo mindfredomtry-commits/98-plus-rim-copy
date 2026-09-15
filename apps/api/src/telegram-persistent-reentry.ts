@@ -13,7 +13,12 @@
  */
 
 import type { AuthenticatedContext } from "@98plus/identity";
-import { applyEffects, type Effect, type TransitionResult } from "@98plus/product-model";
+import {
+  applyEffects,
+  shouldShowTelegramPersistentReentryCta,
+  type Effect,
+  type TransitionResult,
+} from "@98plus/product-model";
 import { loadDiagnostics, type CreateBanContactRuntime } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 
@@ -83,12 +88,12 @@ export async function beginTelegramPersistentReentryRequest(
   context: AuthenticatedContext,
 ): Promise<BeginTelegramPersistentReentryResult> {
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
-  const eligible = loaded.snapshot.extended.telegramPersistentReentryEligible;
-  const established = loaded.snapshot.extended.telegramPersistentReentryEstablished;
-  if (!eligible || established) {
+  // Same authoritative MVP10 CTA opportunity predicate as CTA visibility —
+  // eligible, !established, whitelist surface, and unconsumed opportunity.
+  if (!shouldShowTelegramPersistentReentryCta(loaded.snapshot)) {
     throw new TelegramPersistentReentryError(
       "REENTRY_NOT_ELIGIBLE",
-      "Telegram Persistent Re-entry begin requires eligible===true and established===false",
+      "Telegram Persistent Re-entry begin requires a valid MVP10 CTA opportunity",
     );
   }
   const requestId = runtime.allocateId("telegram-persistent-reentry");

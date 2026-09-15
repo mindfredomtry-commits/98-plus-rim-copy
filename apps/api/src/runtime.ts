@@ -210,19 +210,23 @@ export async function loadDiagnostics(
 export async function openLobbyIfNeeded(
   runtime: CreateBanContactRuntime,
   context: AuthenticatedContext,
-) {
+): Promise<{
+  loaded: LoadedSnapshot;
+  diagnostics: TestUiDiagnostics;
+  execution: Awaited<ReturnType<typeof executeAuthenticatedEvent>> | null;
+}> {
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
   if (loaded.snapshot.controlState !== null) {
-    return loadDiagnostics(runtime, context);
+    return { ...(await loadDiagnostics(runtime, context)), execution: null };
   }
   if (loaded.snapshot.runtime.bootstrap.status === "FIRST_LAUNCH_EXTERNAL_ENTRY") {
-    return loadDiagnostics(runtime, context);
+    return { ...(await loadDiagnostics(runtime, context)), execution: null };
   }
   const execution = await executeAuthenticatedEvent(runtime, context, {
     name: "APP.NORMAL_OPEN",
     payload: { serverState: {} },
   });
-  return loadDiagnostics(runtime, context, execution);
+  return { ...(await loadDiagnostics(runtime, context, execution)), execution };
 }
 
 export function userIdOf(runtime: CreateBanContactRuntime, telegramUserId: string): UserId | null {

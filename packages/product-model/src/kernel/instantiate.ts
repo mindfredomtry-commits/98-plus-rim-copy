@@ -843,10 +843,6 @@ export function instantiateEffects(
           effects.push({ type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE", eligible: false });
           break;
         }
-        if (row.eventId === "E-62") {
-          effects.push({ type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE", eligible: false });
-          break;
-        }
         if (row.eventId === "E-20") {
           const sourceBanId = eventField<BanId>(event, "banId");
           const ban = sourceBanId ? snapshot.extended.entities.bans[sourceBanId] : undefined;
@@ -886,6 +882,12 @@ export function instantiateEffects(
             type: "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST",
             requestId: null,
           });
+        }
+        break;
+      }
+      case "CONSUME_TELEGRAM_PERSISTENT_REENTRY_CTA_OPPORTUNITY": {
+        if (row.eventId === "E-62" && row.branch === "guard-a") {
+          effects.push({ type: "CONSUME_TELEGRAM_PERSISTENT_REENTRY_CTA_OPPORTUNITY" });
         }
         break;
       }

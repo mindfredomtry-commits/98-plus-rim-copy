@@ -36,6 +36,11 @@ export const MIGRATION_CHAIN = [
     file: "packages/persistence/schema/005_telegram_persistent_reentry_bootstrap_claim_token.sql",
     path: join(PERSISTENCE_SCHEMA_DIR, "005_telegram_persistent_reentry_bootstrap_claim_token.sql"),
   },
+  {
+    authority: "persistence",
+    file: "packages/persistence/schema/006_telegram_persistent_reentry_cta_opportunity.sql",
+    path: join(PERSISTENCE_SCHEMA_DIR, "006_telegram_persistent_reentry_cta_opportunity.sql"),
+  },
 ] as const;
 
 export function identitySchemaSql(): string {
@@ -64,6 +69,13 @@ export function telegramPersistentReentryBootstrapClaimTokenSql(): string {
   );
 }
 
+export function telegramPersistentReentryCtaOpportunitySql(): string {
+  return readFileSync(
+    join(PERSISTENCE_SCHEMA_DIR, "006_telegram_persistent_reentry_cta_opportunity.sql"),
+    "utf8",
+  );
+}
+
 export function allMigrationSql(): readonly string[] {
   return [
     identitySchemaSql(),
@@ -71,5 +83,6 @@ export function allMigrationSql(): readonly string[] {
     telegramPersistentReentrySql(),
     telegramPersistentReentryBootstrapClaimSql(),
     telegramPersistentReentryBootstrapClaimTokenSql(),
+    telegramPersistentReentryCtaOpportunitySql(),
   ];
 }

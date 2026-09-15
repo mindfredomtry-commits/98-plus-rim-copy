@@ -346,12 +346,31 @@ export function applyEffects(
   for (const effect of effects) {
     switch (effect.type) {
       case "SET_CONTROL_STATE":
-        next = { ...next, controlState: effect.state };
+        if (effect.state !== next.controlState) {
+          next = {
+            ...next,
+            controlState: effect.state,
+            extended: {
+              ...next.extended,
+              telegramPersistentReentryCtaSurfaceGeneration:
+                next.extended.telegramPersistentReentryCtaSurfaceGeneration + 1,
+            },
+          };
+        } else {
+          next = { ...next, controlState: effect.state };
+        }
         break;
       case "END_SESSION":
         next = {
           ...next,
           controlState: null,
+          extended: {
+            ...next.extended,
+            telegramPersistentReentryCtaSurfaceGeneration:
+              next.controlState === null
+                ? next.extended.telegramPersistentReentryCtaSurfaceGeneration
+                : next.extended.telegramPersistentReentryCtaSurfaceGeneration + 1,
+          },
           runtime: { ...next.runtime, session: "CLOSED" },
         };
         break;
@@ -415,6 +434,16 @@ export function applyEffects(
           extended: {
             ...next.extended,
             telegramPersistentReentryActiveRequestId: effect.requestId,
+          },
+        };
+        break;
+      case "CONSUME_TELEGRAM_PERSISTENT_REENTRY_CTA_OPPORTUNITY":
+        next = {
+          ...next,
+          extended: {
+            ...next.extended,
+            telegramPersistentReentryCtaConsumedSurfaceGeneration:
+              next.extended.telegramPersistentReentryCtaSurfaceGeneration,
           },
         };
         break;

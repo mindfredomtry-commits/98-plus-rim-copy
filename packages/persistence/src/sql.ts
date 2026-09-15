@@ -15,9 +15,11 @@ INSERT INTO product_user_sessions (
   telegram_persistent_reentry_eligible, telegram_persistent_reentry_established,
   telegram_persistent_reentry_active_request_id, telegram_persistent_reentry_bootstrap_sent,
   telegram_persistent_reentry_bootstrap_claimed_until_ms,
-  telegram_persistent_reentry_bootstrap_claim_token
+  telegram_persistent_reentry_bootstrap_claim_token,
+  telegram_persistent_reentry_cta_surface_generation,
+  telegram_persistent_reentry_cta_consumed_surface_generation
 ) VALUES (
-  $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20,$21,$22
+  $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20,$21,$22,$23,$24
 )
 ON CONFLICT (user_id) DO UPDATE SET
   revision = EXCLUDED.revision,
@@ -41,6 +43,8 @@ ON CONFLICT (user_id) DO UPDATE SET
   telegram_persistent_reentry_bootstrap_sent = EXCLUDED.telegram_persistent_reentry_bootstrap_sent,
   telegram_persistent_reentry_bootstrap_claimed_until_ms = EXCLUDED.telegram_persistent_reentry_bootstrap_claimed_until_ms,
   telegram_persistent_reentry_bootstrap_claim_token = EXCLUDED.telegram_persistent_reentry_bootstrap_claim_token,
+  telegram_persistent_reentry_cta_surface_generation = EXCLUDED.telegram_persistent_reentry_cta_surface_generation,
+  telegram_persistent_reentry_cta_consumed_surface_generation = EXCLUDED.telegram_persistent_reentry_cta_consumed_surface_generation,
   updated_at = NOW()
 `.trim(),
   claimTelegramPersistentReentryBootstrapDelivery: `

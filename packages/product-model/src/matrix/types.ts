@@ -22,7 +22,7 @@ export type MatrixEffectDeclaration = Readonly<{
 }>;
 
 export type MatrixSource = Readonly<{
-  document: "MVP9_STATE_EVENT_MATRIX";
+  document: "MVP10_STATE_EVENT_MATRIX";
   section: string;
   locator: string;
   extractedLines: string;

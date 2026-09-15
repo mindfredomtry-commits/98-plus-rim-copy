@@ -53,7 +53,7 @@ export type MatrixStateRef =
   "GLOBAL" | "BOOTSTRAP" | "ALL_STATES" | "E43" | import("./states.ts").ProductControlState;
 
 export type MatrixReference = Readonly<{
-  document: "MVP9_STATE_EVENT_MATRIX";
+  document: "MVP10_STATE_EVENT_MATRIX";
   state: MatrixStateRef;
   event: CanonicalEventName;
   branch?: string;

@@ -35,6 +35,8 @@ export function emptySnapshot(): ProductSnapshot {
       telegramPersistentReentryEligible: false,
       telegramPersistentReentryEstablished: false,
       telegramPersistentReentryActiveRequestId: null,
+      telegramPersistentReentryCtaSurfaceGeneration: 0,
+      telegramPersistentReentryCtaConsumedSurfaceGeneration: null,
       entities: {
         bans: {},
         notificationItems: {},

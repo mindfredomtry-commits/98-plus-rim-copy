@@ -224,6 +224,10 @@ export function sessionFromSnapshot(
     telegramPersistentReentryEstablished: snapshot.extended.telegramPersistentReentryEstablished,
     telegramPersistentReentryActiveRequestId:
       snapshot.extended.telegramPersistentReentryActiveRequestId,
+    telegramPersistentReentryCtaSurfaceGeneration:
+      snapshot.extended.telegramPersistentReentryCtaSurfaceGeneration,
+    telegramPersistentReentryCtaConsumedSurfaceGeneration:
+      snapshot.extended.telegramPersistentReentryCtaConsumedSurfaceGeneration,
     // Persistence-only delivery completion — never derived from established.
     telegramPersistentReentryBootstrapSent: previousBootstrapSent,
     // Persistence-only in-flight claim lease — preserved across Product transitions.
@@ -263,6 +267,10 @@ export function snapshotFromRecords(input: {
         input.session?.telegramPersistentReentryEstablished ?? false,
       telegramPersistentReentryActiveRequestId:
         input.session?.telegramPersistentReentryActiveRequestId ?? null,
+      telegramPersistentReentryCtaSurfaceGeneration:
+        input.session?.telegramPersistentReentryCtaSurfaceGeneration ?? 0,
+      telegramPersistentReentryCtaConsumedSurfaceGeneration:
+        input.session?.telegramPersistentReentryCtaConsumedSurfaceGeneration ?? null,
       entities: {
         bans: Object.fromEntries(input.bans.map((ban) => [ban.id, ban])),
         notificationItems: Object.fromEntries(input.items.map((item) => [item.id, item])),
@@ -316,6 +324,8 @@ export type SessionRecord = Readonly<{
   telegramPersistentReentryEligible: boolean;
   telegramPersistentReentryEstablished: boolean;
   telegramPersistentReentryActiveRequestId: string | null;
+  telegramPersistentReentryCtaSurfaceGeneration: number;
+  telegramPersistentReentryCtaConsumedSurfaceGeneration: number | null;
   /** Persistence-only Bot API send idempotency; not a Product Authority fact. */
   telegramPersistentReentryBootstrapSent: boolean;
   /** Persistence-only claim lease expiry (epoch ms); null if unclaimed. */

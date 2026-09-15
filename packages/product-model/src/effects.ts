@@ -57,6 +57,7 @@ export type Effect =
   | { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE"; eligible: boolean }
   | { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ESTABLISHED"; established: boolean }
   | { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST"; requestId: string | null }
+  | { type: "CONSUME_TELEGRAM_PERSISTENT_REENTRY_CTA_OPPORTUNITY" }
   | { type: "SEND_TELEGRAM_PERSISTENT_REENTRY_BOOTSTRAP_MESSAGE" }
   | { type: "START_OPERATION"; operation: PendingOperation }
   | { type: "CLEAR_OPERATION"; operationId: OperationId }

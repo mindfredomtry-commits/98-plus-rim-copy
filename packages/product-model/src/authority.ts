@@ -1,14 +1,14 @@
 export const AUTHORITY_DOCUMENTS = {
-  productSpecification: "MVP9_PRODUCT_SPECIFICATION",
-  stateRegistry: "MVP9_PRODUCT_CONTROL_STATE_REGISTRY",
-  eventRegistry: "MVP9_EVENT_REGISTRY",
-  matrix: "MVP9_STATE_EVENT_MATRIX",
+  productSpecification: "MVP10_PRODUCT_SPECIFICATION",
+  stateRegistry: "MVP10_PRODUCT_CONTROL_STATE_REGISTRY",
+  eventRegistry: "MVP10_EVENT_REGISTRY",
+  matrix: "MVP10_STATE_EVENT_MATRIX",
 } as const;
 
 export const PRODUCT_SPECIFICATION_SOURCE = {
   document: AUTHORITY_DOCUMENTS.productSpecification,
-  file: "1. MVP9_PRODUCT SPECIFICATION",
-  revision: "9",
+  file: "1. MVP10_PRODUCT SPECIFICATION",
+  revision: "10",
 } as const;
 
 export type AuthorityDocument = (typeof AUTHORITY_DOCUMENTS)[keyof typeof AUTHORITY_DOCUMENTS];

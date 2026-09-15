@@ -60,12 +60,14 @@ describe("Stage 4 migrations", () => {
       "packages/persistence/schema/003_telegram_persistent_reentry.sql",
       "packages/persistence/schema/004_telegram_persistent_reentry_bootstrap_claim.sql",
       "packages/persistence/schema/005_telegram_persistent_reentry_bootstrap_claim_token.sql",
+      "packages/persistence/schema/006_telegram_persistent_reentry_cta_opportunity.sql",
     ]);
     expect(MIGRATION_CHAIN[0]?.authority).toBe("identity");
     expect(MIGRATION_CHAIN[1]?.authority).toBe("persistence");
     expect(MIGRATION_CHAIN[2]?.authority).toBe("persistence");
     expect(MIGRATION_CHAIN[3]?.authority).toBe("persistence");
     expect(MIGRATION_CHAIN[4]?.authority).toBe("persistence");
+    expect(MIGRATION_CHAIN[5]?.authority).toBe("persistence");
     expect(identitySchemaSql()).toContain("identity_users");
     expect(identitySchemaSql()).toContain("telegram_user_id");
   });

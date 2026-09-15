@@ -64,6 +64,8 @@ type SessionRow = {
   telegram_persistent_reentry_bootstrap_sent?: boolean | null;
   telegram_persistent_reentry_bootstrap_claimed_until_ms?: number | string | null;
   telegram_persistent_reentry_bootstrap_claim_token?: string | null;
+  telegram_persistent_reentry_cta_surface_generation?: number | string | null;
+  telegram_persistent_reentry_cta_consumed_surface_generation?: number | string | null;
 };
 
 type BanSqlRow = {
@@ -643,6 +645,8 @@ export class PostgresProductStore implements ProductStore {
       session.telegramPersistentReentryBootstrapSent,
       session.telegramPersistentReentryBootstrapClaimedUntilMs,
       session.telegramPersistentReentryBootstrapClaimToken,
+      session.telegramPersistentReentryCtaSurfaceGeneration,
+      session.telegramPersistentReentryCtaConsumedSurfaceGeneration,
     ]);
     return this.read(tx, currentUserId);
   }
@@ -703,6 +707,22 @@ export class PostgresProductStore implements ProductStore {
           })(),
           telegramPersistentReentryBootstrapClaimToken:
             sessionRow.telegram_persistent_reentry_bootstrap_claim_token ?? null,
+          telegramPersistentReentryCtaSurfaceGeneration: (() => {
+            const raw = sessionRow.telegram_persistent_reentry_cta_surface_generation;
+            if (raw === null || raw === undefined) {
+              return 0;
+            }
+            const value = Number(raw);
+            return Number.isFinite(value) ? value : 0;
+          })(),
+          telegramPersistentReentryCtaConsumedSurfaceGeneration: (() => {
+            const raw = sessionRow.telegram_persistent_reentry_cta_consumed_surface_generation;
+            if (raw === null || raw === undefined) {
+              return null;
+            }
+            const value = Number(raw);
+            return Number.isFinite(value) ? value : null;
+          })(),
         }
       : undefined;
     return {

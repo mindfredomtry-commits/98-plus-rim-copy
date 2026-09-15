@@ -192,7 +192,7 @@ export const GLOBAL_AND_BOOTSTRAP_ROWS: readonly MatrixContractRow[] = [
     result: "STAY",
     source: {
       section: "E-61 TELEGRAM_PERSISTENT_REENTRY.GRANTED Guard A",
-      locator: "MVP9 global",
+      locator: "MVP10 global",
       extractedLines: "E-61-A",
     },
   }),
@@ -212,7 +212,7 @@ export const GLOBAL_AND_BOOTSTRAP_ROWS: readonly MatrixContractRow[] = [
     result: "IGNORE_NOT_ALLOWED",
     source: {
       section: "E-61 TELEGRAM_PERSISTENT_REENTRY.GRANTED Guard B",
-      locator: "MVP9 global",
+      locator: "MVP10 global",
       extractedLines: "E-61-B",
     },
   }),
@@ -228,15 +228,15 @@ export const GLOBAL_AND_BOOTSTRAP_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "current Product Control State",
     nextState: "CURRENT",
     effectsText:
-      "telegramPersistentReentryEligible=false; telegramPersistentReentryActiveRequestId=null; telegramPersistentReentryEstablished remains false; bootstrap message is not sent; Product Control State unchanged",
+      "telegramPersistentReentryEligible remains true; telegramPersistentReentryEstablished remains false; telegramPersistentReentryActiveRequestId=null; consume current CTA opportunity (same-surface suppression); bootstrap message is not sent; Product Control State unchanged",
     effects: [
-      { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE" },
       { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST" },
+      { type: "CONSUME_TELEGRAM_PERSISTENT_REENTRY_CTA_OPPORTUNITY" },
     ],
     result: "STAY",
     source: {
       section: "E-62 TELEGRAM_PERSISTENT_REENTRY.DECLINED Guard A",
-      locator: "MVP9 global",
+      locator: "MVP10 global",
       extractedLines: "E-62-A",
     },
   }),
@@ -256,7 +256,7 @@ export const GLOBAL_AND_BOOTSTRAP_ROWS: readonly MatrixContractRow[] = [
     result: "IGNORE_NOT_ALLOWED",
     source: {
       section: "E-62 TELEGRAM_PERSISTENT_REENTRY.DECLINED Guard B",
-      locator: "MVP9 global",
+      locator: "MVP10 global",
       extractedLines: "E-62-B",
     },
   }),

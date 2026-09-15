@@ -105,6 +105,8 @@ describe("Timer Notification Item vs DomainTimer", () => {
         telegramPersistentReentryEligible: false,
         telegramPersistentReentryEstablished: false,
         telegramPersistentReentryActiveRequestId: null,
+        telegramPersistentReentryCtaSurfaceGeneration: 0,
+        telegramPersistentReentryCtaConsumedSurfaceGeneration: null,
         entities: {
           bans: {},
           notificationItems: {},

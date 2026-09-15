@@ -181,6 +181,12 @@ export type {
 } from "./kernel/index.ts";
 export { IMPLEMENTATION_STAGE, STAGE_1_EXCLUDES, STAGE_2_EXCLUDES } from "./stage.ts";
 export {
+  isTelegramPersistentReentryCtaSurface,
+  shouldShowTelegramPersistentReentryCta,
+  TELEGRAM_PERSISTENT_REENTRY_CTA_STATES,
+} from "./telegram-persistent-reentry-cta.ts";
+export type { TelegramPersistentReentryCtaState } from "./telegram-persistent-reentry-cta.ts";
+export {
   ABSENT_CREATE_BAN_STATE_ID,
   isProductControlState,
   PRODUCT_CONTROL_STATE_COUNT,

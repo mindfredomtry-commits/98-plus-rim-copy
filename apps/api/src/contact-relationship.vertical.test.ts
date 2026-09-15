@@ -159,8 +159,8 @@ async function createTemplateShare(url: string, telegramUserId: string) {
 }
 
 describe("Stage 13B MVP8 Contact relationship", () => {
-  it("keeps frozen 30 / 57 / 337 under MVP8 authority", () => {
-    expect(PRODUCT_SPECIFICATION_SOURCE.revision).toBe("9");
+  it("keeps frozen 30 / 57 / 337 under MVP10 authority", () => {
+    expect(PRODUCT_SPECIFICATION_SOURCE.revision).toBe("10");
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(57);
     expect(MATRIX_CONTRACT_ROWS).toHaveLength(337);

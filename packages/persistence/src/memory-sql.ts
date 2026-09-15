@@ -55,6 +55,10 @@ function sessionToRow(session: SessionRecord) {
       session.telegramPersistentReentryBootstrapClaimedUntilMs,
     telegram_persistent_reentry_bootstrap_claim_token:
       session.telegramPersistentReentryBootstrapClaimToken,
+    telegram_persistent_reentry_cta_surface_generation:
+      session.telegramPersistentReentryCtaSurfaceGeneration,
+    telegram_persistent_reentry_cta_consumed_surface_generation:
+      session.telegramPersistentReentryCtaConsumedSurfaceGeneration,
   };
 }
 
@@ -162,6 +166,10 @@ export class MemorySqlClient implements PersistenceSqlClient {
             params[20] === null || params[20] === undefined ? null : Number(params[20]),
           telegramPersistentReentryBootstrapClaimToken:
             params[21] === null || params[21] === undefined ? null : String(params[21]),
+          telegramPersistentReentryCtaSurfaceGeneration:
+            params[22] === null || params[22] === undefined ? 0 : Number(params[22]),
+          telegramPersistentReentryCtaConsumedSurfaceGeneration:
+            params[23] === null || params[23] === undefined ? null : Number(params[23]),
         });
         return rows([]);
       }

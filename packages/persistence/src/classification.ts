@@ -19,6 +19,8 @@ export const SNAPSHOT_FIELD_CLASSIFICATION = {
   "extended.telegramPersistentReentryEligible": "DURABLE_USER_SESSION_STATE",
   "extended.telegramPersistentReentryEstablished": "DURABLE_USER_SESSION_STATE",
   "extended.telegramPersistentReentryActiveRequestId": "DURABLE_USER_SESSION_STATE",
+  "extended.telegramPersistentReentryCtaSurfaceGeneration": "DURABLE_USER_SESSION_STATE",
+  "extended.telegramPersistentReentryCtaConsumedSurfaceGeneration": "DURABLE_USER_SESSION_STATE",
   "extended.entities.bans.boundViaTelegramShareLink": "DURABLE_PRODUCT_FACT",
   "extended.rimChat": "DURABLE_USER_SESSION_STATE",
   "extended.savedFrozenRimChat": "DURABLE_USER_SESSION_STATE",

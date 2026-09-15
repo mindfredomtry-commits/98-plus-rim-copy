@@ -12,6 +12,7 @@ export {
   productPersistenceSql,
   telegramPersistentReentryBootstrapClaimSql,
   telegramPersistentReentryBootstrapClaimTokenSql,
+  telegramPersistentReentryCtaOpportunitySql,
   telegramPersistentReentrySql,
 } from "./migrations.ts";
 export { PostgresProductStore } from "./postgres-store.ts";

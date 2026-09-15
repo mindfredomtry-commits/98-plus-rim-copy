@@ -109,7 +109,7 @@ describe("Stage 1.5 Matrix coverage audit", () => {
       EXPECTED_LOCAL_TOTAL,
     );
     for (const row of MATRIX_CONTRACT_ROWS) {
-      expect(row.source.document).toBe("MVP9_STATE_EVENT_MATRIX");
+      expect(row.source.document).toBe("MVP10_STATE_EVENT_MATRIX");
       expect(row.source.section.length).toBeGreaterThan(0);
       expect(row.source.locator.length).toBeGreaterThan(0);
       if (row.kind === "GLOBAL") {

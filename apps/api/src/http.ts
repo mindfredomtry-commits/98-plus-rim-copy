@@ -256,8 +256,10 @@ export async function handleCreateBanContactRequest(
         }
       }
 
+      let openExecution: Awaited<ReturnType<typeof openLobbyIfNeeded>>["execution"] = null;
       if (openIfNeeded) {
-        await openLobbyIfNeeded(runtime, context);
+        const opened = await openLobbyIfNeeded(runtime, context);
+        openExecution = opened.execution;
       }
       await applyElapsedDomainTimers(runtime, context);
       const bootstrapDelivery = await deliverPendingTelegramPersistentReentryBootstrap(
@@ -278,11 +280,20 @@ export async function handleCreateBanContactRequest(
             }
           : {}),
       };
+      // Prefer APP.NORMAL_OPEN over a prior pending-entry re-dispatch so CTA /
+      // controlState reflect the post-open Product Snapshot (MVP10 whitelist).
+      const primaryExecution = openExecution ?? lastExecution;
+      const secondaryExecution =
+        openExecution && lastExecution && openExecution !== lastExecution
+          ? lastExecution
+          : firstExecution && firstExecution !== primaryExecution
+            ? firstExecution
+            : null;
       const { diagnostics: baseDiagnostics } = await loadDiagnostics(
         runtime,
         context,
-        lastExecution,
-        firstExecution && firstExecution !== lastExecution ? firstExecution : null,
+        primaryExecution,
+        secondaryExecution,
         undefined,
         externalEntry,
         startParamIntake,

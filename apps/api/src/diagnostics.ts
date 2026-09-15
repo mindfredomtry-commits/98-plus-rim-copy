@@ -1,5 +1,6 @@
 import {
   CANONICAL_EVENT_DEFINITIONS,
+  shouldShowTelegramPersistentReentryCta,
   type CanonicalEvent,
   type CanonicalEventId,
   type Effect,
@@ -160,7 +161,7 @@ export function toTestUiDiagnostics(input: {
       snapshot.extended.telegramPersistentReentryActiveRequestId,
     telegramPersistentReentryBootstrapSent: bootstrapSent,
     telegramPersistentReentry: {
-      showCta: eligible && !established,
+      showCta: shouldShowTelegramPersistentReentryCta(snapshot),
       label: "Закрепить 98+",
       api: "requestWriteAccess",
     },

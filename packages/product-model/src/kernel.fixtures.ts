@@ -449,7 +449,18 @@ export function withControlState(
   snapshot: ProductSnapshot,
   controlState: ProductControlState | null,
 ): ProductSnapshot {
-  return { ...snapshot, controlState };
+  if (controlState === snapshot.controlState) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    controlState,
+    extended: {
+      ...snapshot.extended,
+      telegramPersistentReentryCtaSurfaceGeneration:
+        snapshot.extended.telegramPersistentReentryCtaSurfaceGeneration + 1,
+    },
+  };
 }
 
 export function withChat(snapshot: ProductSnapshot, chat: RimChat | null): ProductSnapshot {
