@@ -52,6 +52,12 @@ export type ExtendedState = Readonly<{
   activeNotificationItemId: NotificationItemId | null;
   priorities: PriorityState;
   pendingExternalEntry: PendingExternalEntry | null;
+  /** User becomes eligible after qualifying E-20 / E-30 FROM_INCOMING_BAN on Share-bound Ban. */
+  telegramPersistentReentryEligible: boolean;
+  /** True after authoritative E-61; never re-offer CTA once established. */
+  telegramPersistentReentryEstablished: boolean;
+  /** Integration fact: active permission request id for Guard A; null when none. */
+  telegramPersistentReentryActiveRequestId: string | null;
   entities: EntityState;
 }>;
 

@@ -45,6 +45,7 @@ describe("Stage 13B Contact directory isolation", () => {
       durationMinutes: 10 as DurationMinutes,
       acceptance: "PENDING",
       status: null,
+      boundViaTelegramShareLink: false,
     };
     sql.tables.upsertBan(ban);
     expect(await directory.listSelectableContacts(A)).toEqual([

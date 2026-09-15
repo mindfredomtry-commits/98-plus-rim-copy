@@ -33,6 +33,7 @@ export {
   REPLY_BAN_FROM_INCOMING_STAGE,
   REPLY_BAN_FROM_STATUS_STAGE,
   TEMPLATE_CREATE_BAN_STAGE,
+  TELEGRAM_PERSISTENT_REENTRY_STAGE,
   STAGE_6_EXCLUDES,
   STAGE_7_EXCLUDES,
   STAGE_8_EXCLUDES,
@@ -73,6 +74,13 @@ export {
   buildTemplateShareDeepLink,
   normalizeTelegramBotUsername,
 } from "./telegram-share.ts";
+export {
+  beginTelegramPersistentReentryRequest,
+  requestWriteAccessOutcomeToEventName,
+  sendBootstrapBotMessage,
+  deliverPendingTelegramPersistentReentryBootstrap,
+  TELEGRAM_PERSISTENT_REENTRY_BOOTSTRAP_TEXT,
+} from "./telegram-persistent-reentry.ts";
 export {
   pendingCheckAnswer,
   shouldCompleteCheckAnswer,

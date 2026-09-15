@@ -176,6 +176,9 @@ export function defaultEvent(name: CanonicalEventName): CanonicalEvent {
       });
     case "TELEGRAM_SHARE_LINK.REJECTED":
       return eventOf(name, { failureReason: {} as ShareLinkFailureReason });
+    case "TELEGRAM_PERSISTENT_REENTRY.GRANTED":
+    case "TELEGRAM_PERSISTENT_REENTRY.DECLINED":
+      return eventOf(name, { requestId: "reentry-request-1" });
     case "RIM.CHANGE_INPUT_DRAFT":
       return eventOf(name, { inputDraft: "hello" });
     case "RIM.PRESS_RETRY_CONTEXT":
@@ -261,6 +264,7 @@ export function makeBan(overrides: Partial<Ban> = {}): Ban {
     durationMinutes: 3 as DurationMinutes,
     acceptance: "ACCEPTED",
     status: null,
+    boundViaTelegramShareLink: false,
     ...overrides,
   };
 }
@@ -924,6 +928,28 @@ function prepareBranchSnapshot(
           [BAN_ID]: makeBan({ senderId: OTHER_USER, receiverId: USER_ID }),
         },
       });
+      break;
+    case "E-61:guard-a":
+      next = {
+        ...next,
+        extended: {
+          ...next.extended,
+          telegramPersistentReentryEligible: true,
+          telegramPersistentReentryEstablished: false,
+          telegramPersistentReentryActiveRequestId: "reentry-request-1",
+        },
+      };
+      break;
+    case "E-62:guard-a":
+      next = {
+        ...next,
+        extended: {
+          ...next.extended,
+          telegramPersistentReentryEligible: true,
+          telegramPersistentReentryEstablished: false,
+          telegramPersistentReentryActiveRequestId: "reentry-request-1",
+        },
+      };
       break;
     case "E-41:established-state":
       next = {

@@ -11,9 +11,13 @@ INSERT INTO product_user_sessions (
   user_id, revision, control_state, session_status, connection, bootstrap,
   rim_chat, saved_frozen_rim_chat, create_ban_draft, reply_ban_draft, reply_source,
   successful_ban_id, active_notification_item_id, status_priority_item_id,
-  timer_priority_item_id, pending_external_entry
+  timer_priority_item_id, pending_external_entry,
+  telegram_persistent_reentry_eligible, telegram_persistent_reentry_established,
+  telegram_persistent_reentry_active_request_id, telegram_persistent_reentry_bootstrap_sent,
+  telegram_persistent_reentry_bootstrap_claimed_until_ms,
+  telegram_persistent_reentry_bootstrap_claim_token
 ) VALUES (
-  $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16::jsonb
+  $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20,$21,$22
 )
 ON CONFLICT (user_id) DO UPDATE SET
   revision = EXCLUDED.revision,
@@ -31,24 +35,74 @@ ON CONFLICT (user_id) DO UPDATE SET
   status_priority_item_id = EXCLUDED.status_priority_item_id,
   timer_priority_item_id = EXCLUDED.timer_priority_item_id,
   pending_external_entry = EXCLUDED.pending_external_entry,
+  telegram_persistent_reentry_eligible = EXCLUDED.telegram_persistent_reentry_eligible,
+  telegram_persistent_reentry_established = EXCLUDED.telegram_persistent_reentry_established,
+  telegram_persistent_reentry_active_request_id = EXCLUDED.telegram_persistent_reentry_active_request_id,
+  telegram_persistent_reentry_bootstrap_sent = EXCLUDED.telegram_persistent_reentry_bootstrap_sent,
+  telegram_persistent_reentry_bootstrap_claimed_until_ms = EXCLUDED.telegram_persistent_reentry_bootstrap_claimed_until_ms,
+  telegram_persistent_reentry_bootstrap_claim_token = EXCLUDED.telegram_persistent_reentry_bootstrap_claim_token,
   updated_at = NOW()
 `.trim(),
+  claimTelegramPersistentReentryBootstrapDelivery: `
+UPDATE product_user_sessions
+SET telegram_persistent_reentry_bootstrap_claimed_until_ms = $2,
+    telegram_persistent_reentry_bootstrap_claim_token = $4,
+    revision = revision + 1,
+    updated_at = NOW()
+WHERE user_id = $1
+  AND telegram_persistent_reentry_established = true
+  AND telegram_persistent_reentry_bootstrap_sent = false
+  AND (
+    telegram_persistent_reentry_bootstrap_claimed_until_ms IS NULL
+    OR telegram_persistent_reentry_bootstrap_claimed_until_ms <= $3
+  )
+RETURNING user_id, telegram_persistent_reentry_bootstrap_claimed_until_ms,
+          telegram_persistent_reentry_bootstrap_claim_token
+`.trim(),
+  markTelegramPersistentReentryBootstrapSent: `
+UPDATE product_user_sessions
+SET telegram_persistent_reentry_bootstrap_sent = true,
+    telegram_persistent_reentry_bootstrap_claimed_until_ms = NULL,
+    telegram_persistent_reentry_bootstrap_claim_token = NULL,
+    revision = revision + 1,
+    updated_at = NOW()
+WHERE user_id = $1
+  AND telegram_persistent_reentry_established = true
+  AND telegram_persistent_reentry_bootstrap_sent = false
+  AND telegram_persistent_reentry_bootstrap_claim_token = $2
+RETURNING user_id
+`.trim(),
+  releaseTelegramPersistentReentryBootstrapClaim: `
+UPDATE product_user_sessions
+SET telegram_persistent_reentry_bootstrap_claimed_until_ms = NULL,
+    telegram_persistent_reentry_bootstrap_claim_token = NULL,
+    revision = revision + 1,
+    updated_at = NOW()
+WHERE user_id = $1
+  AND telegram_persistent_reentry_established = true
+  AND telegram_persistent_reentry_bootstrap_sent = false
+  AND telegram_persistent_reentry_bootstrap_claim_token = $2
+RETURNING user_id
+`.trim(),
   selectBansForUser: `
-SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status, created_seq
+SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
+       bound_via_telegram_share_link, created_seq
 FROM bans
 WHERE sender_id = $1 OR receiver_id = $1
 `.trim(),
   upsertBan: `
 INSERT INTO bans (
-  ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status
-) VALUES ($1,$2,$3,$4,$5,$6,$7)
+  ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
+  bound_via_telegram_share_link
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 ON CONFLICT (ban_id) DO UPDATE SET
   sender_id = EXCLUDED.sender_id,
   receiver_id = EXCLUDED.receiver_id,
   ban_text = EXCLUDED.ban_text,
   duration_minutes = EXCLUDED.duration_minutes,
   acceptance = EXCLUDED.acceptance,
-  status = EXCLUDED.status
+  status = EXCLUDED.status,
+  bound_via_telegram_share_link = EXCLUDED.bound_via_telegram_share_link
 `.trim(),
   selectTimersForBans: `
 SELECT timer_id, ban_id, started_at, duration_minutes, state, check_pair_created
@@ -157,7 +211,8 @@ ORDER BY attempt_id
 LIMIT 1
 `.trim(),
   selectBanById: `
-SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status, created_seq
+SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
+       bound_via_telegram_share_link, created_seq
 FROM bans
 WHERE ban_id = $1
 `.trim(),
@@ -166,7 +221,8 @@ UPDATE bans
 SET receiver_id = $2
 WHERE ban_id = $1
   AND receiver_id IS NULL
-RETURNING ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status, created_seq
+RETURNING ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
+          bound_via_telegram_share_link, created_seq
 `.trim(),
   upsertShare: `
 INSERT INTO share_operations (

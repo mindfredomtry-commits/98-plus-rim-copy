@@ -698,7 +698,7 @@ export const NOTIFICATIONS_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "N-05 STATUS.OVERBOARD.RECEIVER",
     nextState: "NOTIFICATIONS.STATUS.OVERBOARD.RECEIVER",
     effectsText:
-      "Incoming Ban → processed; Ban.status=OVERBOARD; создаются receiver/sender Status Items; receiver Status получает Status Priority и становится active; Timer не создаётсяoriginal Ban remains not accepted; duration does not start; E-42 BAN.DURATION_EXPIRED is not applicable to this Ban; Check Pair for this Ban must not be created.",
+      "Incoming Ban → processed; Ban.status=OVERBOARD; создаются receiver/sender Status Items; receiver Status получает Status Priority и становится active; Timer не создаётся; original Ban remains not accepted; duration does not start; E-42 BAN.DURATION_EXPIRED is not applicable to this Ban; Check Pair for this Ban must not be created; when source Ban.boundViaTelegramShareLink===true and telegramPersistentReentryEstablished===false, SET telegramPersistentReentryEligible=true (Entity effect).",
     effects: [
       { type: "SET_NOTIFICATION_LIFECYCLE" },
       { type: "UPSERT_BAN" },
@@ -706,6 +706,11 @@ export const NOTIFICATIONS_MATRIX_ROWS: readonly MatrixContractRow[] = [
       { type: "SET_STATUS_PRIORITY" },
       { type: "SET_ACTIVE_NOTIFICATION" },
       { type: "SET_CONTROL_STATE" },
+      {
+        type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE",
+        appliesWhen:
+          "source Ban.boundViaTelegramShareLink===true AND telegramPersistentReentryEstablished===false",
+      },
     ],
     result: "TRANSITION",
     source: {

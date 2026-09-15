@@ -26,7 +26,7 @@ import {
   NONDETERMINISTIC_MATRIX_LINES,
 } from "./matrix/expected-coverage.ts";
 
-const CARTESIAN_30_BY_55 = 30 * 55;
+const CARTESIAN_30_BY_57 = 30 * 57;
 const EXPECTED_LOCAL_TOTAL = (Object.values(EXPECTED_LOCAL_ROW_COUNTS) as number[]).reduce(
   (sum, count) => sum + count,
   0,
@@ -99,17 +99,17 @@ describe("Stage 1.5 Matrix coverage audit", () => {
   });
 
   it("keeps global, bootstrap, E-43, and local rows distinguishable", () => {
-    expect(MATRIX_GLOBAL_RULE_COUNT).toBe(7);
+    expect(MATRIX_GLOBAL_RULE_COUNT).toBe(11);
     expect(MATRIX_BOOTSTRAP_RULE_COUNT).toBe(5);
     expect(MATRIX_E43_RULE_COUNT).toBe(8);
-    expect(MATRIX_CONTRACT_ROWS.filter((row) => row.kind === "GLOBAL")).toHaveLength(7);
+    expect(MATRIX_CONTRACT_ROWS.filter((row) => row.kind === "GLOBAL")).toHaveLength(11);
     expect(MATRIX_CONTRACT_ROWS.filter((row) => row.kind === "BOOTSTRAP")).toHaveLength(5);
     expect(MATRIX_CONTRACT_ROWS.filter((row) => row.kind === "E43")).toHaveLength(8);
     expect(MATRIX_CONTRACT_ROWS.filter((row) => row.kind === "LOCAL")).toHaveLength(
       EXPECTED_LOCAL_TOTAL,
     );
     for (const row of MATRIX_CONTRACT_ROWS) {
-      expect(row.source.document).toBe("MVP8_STATE_EVENT_MATRIX");
+      expect(row.source.document).toBe("MVP9_STATE_EVENT_MATRIX");
       expect(row.source.section.length).toBeGreaterThan(0);
       expect(row.source.locator.length).toBeGreaterThan(0);
       if (row.kind === "GLOBAL") {
@@ -222,9 +222,9 @@ describe("Stage 1.5 Matrix coverage audit", () => {
     expect(MATRIX_SPEC_GAP_COUNT).toBe(0);
   });
 
-  it("does not invent a 30 × 55 Cartesian product", () => {
-    expect(MATRIX_CONTRACT_ROWS.length).toBeLessThan(CARTESIAN_30_BY_55);
-    expect(MATRIX_CONTRACT_ROWS.length).toBe(333);
+  it("does not invent a 30 × 57 Cartesian product", () => {
+    expect(MATRIX_CONTRACT_ROWS.length).toBeLessThan(CARTESIAN_30_BY_57);
+    expect(MATRIX_CONTRACT_ROWS.length).toBe(337);
     expect(MATRIX_CONTRACT_ROWS.length).toBe(EXPECTED_AUTHORITATIVE_ROW_IDS.length);
     expect(NONDETERMINISTIC_MATRIX_LINES.length).toBeGreaterThan(0);
   });

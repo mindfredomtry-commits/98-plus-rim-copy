@@ -215,10 +215,10 @@ async function confirmOnce(url: string): Promise<{
 }
 
 describe("Stage 6 Create Ban CONTACT vertical", () => {
-  it("keeps frozen 30 / 55 / 333 and stage markers 2 / 3 / 4 / 5 with CREATE_BAN_CONTACT_STAGE = 6", () => {
+  it("keeps frozen 30 / 57 / 337 and stage markers 2 / 3 / 4 / 5 with CREATE_BAN_CONTACT_STAGE = 6", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(55);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(333);
+    expect(CANONICAL_EVENT_COUNT).toBe(57);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(337);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PERSISTENCE_STAGE).toBe(4);
@@ -520,6 +520,12 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
       persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
+      markTelegramPersistentReentryBootstrapSent: (userId, claimToken) =>
+        inner.markTelegramPersistentReentryBootstrapSent(userId, claimToken),
+      claimTelegramPersistentReentryBootstrapDelivery: (userId, nowMs, leaseMs) =>
+        inner.claimTelegramPersistentReentryBootstrapDelivery(userId, nowMs, leaseMs),
+      releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
+        inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
       persistTransition: async (input) => {
         if (input.result.snapshot.controlState === "CREATE_BAN.WHO") {
           throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");
@@ -648,7 +654,7 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
     const html = await fetch(app.url);
     expect(html.status).toBe(200);
     const page = await html.text();
-    expect(page).toContain("98+ TEST UI — implemented through Stage 12");
+    expect(page).toContain("98+ TEST UI — implemented through Stage 13A");
     expect(page).toContain("PRODUCT SCREEN");
     expect(page).toContain("MACHINE DIAGNOSTICS");
     expect(page).toContain("DEV / AUTH CONTROLS");
@@ -699,8 +705,8 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
     };
     expect(body).toMatchObject({
       PRODUCT_CONTROL_STATE_COUNT: 30,
-      CANONICAL_EVENT_COUNT: 55,
-      MATRIX_RULE_COUNT: 333,
+      CANONICAL_EVENT_COUNT: 57,
+      MATRIX_RULE_COUNT: 337,
       IMPLEMENTATION_STAGE: 2,
       IDENTITY_STAGE: 3,
       PERSISTENCE_STAGE: 4,

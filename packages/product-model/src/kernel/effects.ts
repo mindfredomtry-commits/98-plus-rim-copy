@@ -391,6 +391,35 @@ export function applyEffects(
           };
         }
         break;
+      case "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE":
+        next = {
+          ...next,
+          extended: {
+            ...next.extended,
+            telegramPersistentReentryEligible: effect.eligible,
+          },
+        };
+        break;
+      case "SET_TELEGRAM_PERSISTENT_REENTRY_ESTABLISHED":
+        next = {
+          ...next,
+          extended: {
+            ...next.extended,
+            telegramPersistentReentryEstablished: effect.established,
+          },
+        };
+        break;
+      case "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST":
+        next = {
+          ...next,
+          extended: {
+            ...next.extended,
+            telegramPersistentReentryActiveRequestId: effect.requestId,
+          },
+        };
+        break;
+      case "SEND_TELEGRAM_PERSISTENT_REENTRY_BOOTSTRAP_MESSAGE":
+        break;
       case "SET_TIMER_PRIORITY":
         next = {
           ...next,

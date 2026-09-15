@@ -127,6 +127,12 @@ describe("Stage 5 executeProductEvent", () => {
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
       persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
+      markTelegramPersistentReentryBootstrapSent: (userId, claimToken) =>
+        inner.markTelegramPersistentReentryBootstrapSent(userId, claimToken),
+      claimTelegramPersistentReentryBootstrapDelivery: (userId, nowMs, leaseMs) =>
+        inner.claimTelegramPersistentReentryBootstrapDelivery(userId, nowMs, leaseMs),
+      releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
+        inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
       persistTransition: async () => {
         throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");
       },
@@ -171,6 +177,12 @@ describe("Stage 5 executeProductEvent", () => {
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
       persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
+      markTelegramPersistentReentryBootstrapSent: (userId, claimToken) =>
+        inner.markTelegramPersistentReentryBootstrapSent(userId, claimToken),
+      claimTelegramPersistentReentryBootstrapDelivery: (userId, nowMs, leaseMs) =>
+        inner.claimTelegramPersistentReentryBootstrapDelivery(userId, nowMs, leaseMs),
+      releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
+        inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
       persistTransition: async (_input: PersistTransitionInput) => {
         throw new PersistenceError("INVARIANT", "persistence refused the write");
       },

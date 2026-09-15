@@ -21,6 +21,12 @@ export type PersistenceSqlClient = {
 export type LoadedSnapshot = Readonly<{
   snapshot: ProductSnapshot;
   revision: number;
+  /** Persistence-only bootstrap send marker for Telegram Persistent Re-entry. */
+  telegramPersistentReentryBootstrapSent: boolean;
+  /** Persistence-only active claim lease expiry (epoch ms); null if unclaimed. */
+  telegramPersistentReentryBootstrapClaimedUntilMs: number | null;
+  /** Persistence-only fencing token for the active claim; null if unclaimed. */
+  telegramPersistentReentryBootstrapClaimToken: string | null;
 }>;
 
 export type PersistTransitionInput = Readonly<{
@@ -70,6 +76,26 @@ export type StoredShareLookup = Readonly<{
   ownerId: UserId;
 }>;
 
+/** Durable mark of confirmed bootstrap Bot API delivery (not a Product Event). */
+export type MarkTelegramPersistentReentryBootstrapSentResult =
+  | { status: "MARKED" }
+  | { status: "ALREADY_MARKED" }
+  | { status: "NOT_REQUIRED" }
+  | { status: "STALE_CLAIM" };
+
+/** Atomic claim of pending bootstrap delivery before external send. */
+export type ClaimTelegramPersistentReentryBootstrapDeliveryResult =
+  | { status: "CLAIMED"; claimToken: string; claimedUntilMs: number }
+  | { status: "ALREADY_CLAIMED"; claimedUntilMs: number }
+  | { status: "ALREADY_SENT" }
+  | { status: "NOT_REQUIRED" };
+
+export type ReleaseTelegramPersistentReentryBootstrapClaimResult =
+  | { status: "RELEASED" }
+  | { status: "NOT_HELD" }
+  | { status: "ALREADY_SENT" }
+  | { status: "STALE_CLAIM" };
+
 export type ProductStore = {
   loadProductSnapshot(currentUserId: UserId): Promise<LoadedSnapshot>;
   persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot>;
@@ -80,6 +106,31 @@ export type ProductStore = {
   persistShareLinkResolved(
     input: PersistShareLinkResolvedInput,
   ): Promise<PersistShareLinkResolvedResult>;
+  /**
+   * Atomically claim pending bootstrap delivery ownership before Telegram send.
+   * Stale claims (claimedUntilMs <= nowMs) may be reclaimed with a new claimToken.
+   */
+  claimTelegramPersistentReentryBootstrapDelivery(
+    currentUserId: UserId,
+    nowMs: number,
+    leaseMs: number,
+  ): Promise<ClaimTelegramPersistentReentryBootstrapDeliveryResult>;
+  /**
+   * Mark bootstrap delivery completed only after confirmed successful external send.
+   * Requires matching claimToken fencing ownership. Clears claim on success.
+   */
+  markTelegramPersistentReentryBootstrapSent(
+    currentUserId: UserId,
+    claimToken: string,
+  ): Promise<MarkTelegramPersistentReentryBootstrapSentResult>;
+  /**
+   * Release an in-flight claim after confirmed send failure so a later retry may claim.
+   * Requires matching claimToken fencing ownership.
+   */
+  releaseTelegramPersistentReentryBootstrapClaim(
+    currentUserId: UserId,
+    claimToken: string,
+  ): Promise<ReleaseTelegramPersistentReentryBootstrapClaimResult>;
   withCheckPairLock<T>(
     pairId: string,
     run: (context: CheckPairLockContext) => Promise<T>,

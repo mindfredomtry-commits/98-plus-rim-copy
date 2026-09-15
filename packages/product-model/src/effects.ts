@@ -54,6 +54,10 @@ export type Effect =
   | { type: "SET_FROZEN_RIM_CHAT"; chat: RimChat | null }
   | { type: "SET_ACTIVE_NOTIFICATION"; itemId: NotificationItemId | null }
   | { type: "SET_PENDING_EXTERNAL_ENTRY"; entry: PendingExternalEntry | null }
+  | { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE"; eligible: boolean }
+  | { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ESTABLISHED"; established: boolean }
+  | { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST"; requestId: string | null }
+  | { type: "SEND_TELEGRAM_PERSISTENT_REENTRY_BOOTSTRAP_MESSAGE" }
   | { type: "START_OPERATION"; operation: PendingOperation }
   | { type: "CLEAR_OPERATION"; operationId: OperationId }
   | { type: "MARK_OPERATION_RESULT_APPLIED"; operationId: OperationId }

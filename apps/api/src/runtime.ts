@@ -25,6 +25,7 @@ import {
 import type { UserId } from "@98plus/product-model";
 import { MemorySqlRegisteredUserDirectory, type RegisteredUserDirectory } from "./directory.ts";
 import { toTestUiDiagnostics, type TestUiDiagnostics } from "./diagnostics.ts";
+import type { TelegramPersistentReentryBootstrapIntent } from "./telegram-persistent-reentry.ts";
 
 export const DEFAULT_DEV_AUTH_SECRET = "test-secret";
 export const DEFAULT_TEST_TELEGRAM_USERS = ["1001", "1002"] as const;
@@ -34,6 +35,7 @@ export type OverboardCompletion = "success" | "failure" | "fail-once";
 export type ReplyBanCompletion = "success" | "failure" | "fail-once";
 export type CheckAnswerCompletion = "success" | "failure" | "fail-once";
 export type TelegramSharePrepareMode = "live" | "mock";
+export type TelegramPersistentReentryBootstrapSend = "success" | "failure" | "fail-once";
 
 export type CreateBanContactRuntime = Readonly<{
   sql: MemorySqlClient;
@@ -48,6 +50,20 @@ export type CreateBanContactRuntime = Readonly<{
   replyBanCompletion: ReplyBanCompletion;
   checkAnswerCompletion: CheckAnswerCompletion;
   telegramSharePrepare: TelegramSharePrepareMode;
+  /**
+   * Bootstrap delivery mode. Defaults to telegramSharePrepare.
+   * Explicit "live" never treats missing TELEGRAM_BOT_TOKEN as mock success.
+   */
+  telegramPersistentReentryBootstrapMode: TelegramSharePrepareMode;
+  /** Injected bootstrap send outcome for Stage 13A corrective tests. */
+  telegramPersistentReentryBootstrapSend: TelegramPersistentReentryBootstrapSend;
+  /**
+   * Optional test gate invoked after a durable claim is acquired and before send.
+   * Used to prove concurrent callers observe ALREADY_CLAIMED without double-send.
+   */
+  telegramPersistentReentryBootstrapAfterClaim: (() => Promise<void>) | null;
+  /** Mock/live bootstrap send intents for Stage 13A tests and diagnostics. */
+  telegramPersistentReentryBootstrapIntents: TelegramPersistentReentryBootstrapIntent[];
 }>;
 
 export type CreateBanContactRuntimeOptions = Readonly<{
@@ -65,6 +81,9 @@ export type CreateBanContactRuntimeOptions = Readonly<{
   replyBanCompletion?: ReplyBanCompletion;
   checkAnswerCompletion?: CheckAnswerCompletion;
   telegramSharePrepare?: TelegramSharePrepareMode;
+  telegramPersistentReentryBootstrapMode?: TelegramSharePrepareMode;
+  telegramPersistentReentryBootstrapSend?: TelegramPersistentReentryBootstrapSend;
+  telegramPersistentReentryBootstrapAfterClaim?: () => Promise<void>;
 }>;
 
 export function developmentIdentityConfig(
@@ -100,6 +119,13 @@ export function createCreateBanContactRuntime(
     replyBanCompletion: options.replyBanCompletion ?? "success",
     checkAnswerCompletion: options.checkAnswerCompletion ?? "success",
     telegramSharePrepare: options.telegramSharePrepare ?? "live",
+    telegramPersistentReentryBootstrapMode:
+      options.telegramPersistentReentryBootstrapMode ?? options.telegramSharePrepare ?? "live",
+    telegramPersistentReentryBootstrapSend:
+      options.telegramPersistentReentryBootstrapSend ?? "success",
+    telegramPersistentReentryBootstrapAfterClaim:
+      options.telegramPersistentReentryBootstrapAfterClaim ?? null,
+    telegramPersistentReentryBootstrapIntents: [],
   };
 }
 
@@ -169,6 +195,7 @@ export async function loadDiagnostics(
       snapshot: loaded.snapshot,
       revision: loaded.revision,
       contacts,
+      telegramPersistentReentryBootstrapSent: loaded.telegramPersistentReentryBootstrapSent,
       ...(execution === undefined || execution === null ? {} : { execution }),
       ...(previousExecution === undefined || previousExecution === null
         ? {}

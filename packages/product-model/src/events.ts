@@ -137,6 +137,8 @@ export type EventPayloadMap = {
   "RIM.AI_RESULT_RECEIVED": { requestId: AiRequestId; result: RimAiResult };
   "RIM.AI_REQUEST_FAILED": { requestId: AiRequestId; failure: Failure };
   "RIM.PRESS_NOTIFICATIONS": Record<string, never>;
+  "TELEGRAM_PERSISTENT_REENTRY.GRANTED": { requestId: string };
+  "TELEGRAM_PERSISTENT_REENTRY.DECLINED": { requestId: string };
 };
 
 export type CanonicalEventName = keyof EventPayloadMap;
@@ -203,7 +205,9 @@ export type CanonicalEventId =
   | "E-57"
   | "E-58"
   | "E-59"
-  | "E-60";
+  | "E-60"
+  | "E-61"
+  | "E-62";
 
 export const ABSENT_EVENT_IDS = ["E-36", "E-37", "E-38", "E-39", "E-40"] as const;
 export type AbsentEventId = (typeof ABSENT_EVENT_IDS)[number];
@@ -536,9 +540,21 @@ export const CANONICAL_EVENT_DEFINITIONS = [
     source: "UI",
     references: refs("E-60 RIM.PRESS_NOTIFICATIONS"),
   },
+  {
+    id: "E-61",
+    name: "TELEGRAM_PERSISTENT_REENTRY.GRANTED",
+    source: "TELEGRAM",
+    references: refs("E-61 TELEGRAM_PERSISTENT_REENTRY.GRANTED"),
+  },
+  {
+    id: "E-62",
+    name: "TELEGRAM_PERSISTENT_REENTRY.DECLINED",
+    source: "TELEGRAM",
+    references: refs("E-62 TELEGRAM_PERSISTENT_REENTRY.DECLINED"),
+  },
 ] as const satisfies readonly CanonicalEventDefinition[];
 
-export const CANONICAL_EVENT_COUNT = 55;
+export const CANONICAL_EVENT_COUNT = 57;
 
 export function isCanonicalEventId(value: string): value is CanonicalEventId {
   return CANONICAL_EVENT_DEFINITIONS.some((definition) => definition.id === value);

@@ -70,6 +70,9 @@ function diagnostics(
       ? {}
       : { activeShareAttemptId: extra.activeShareAttemptId }),
     ...(extra.telegramShare === undefined ? {} : { telegramShare: extra.telegramShare }),
+    ...(extra.telegramPersistentReentry === undefined
+      ? {}
+      : { telegramPersistentReentry: extra.telegramPersistentReentry }),
   };
 }
 
@@ -822,9 +825,9 @@ describe("Stage 7 TEST UI Incoming / OVERBOARD screens", () => {
 });
 
 describe("Stage 8 TEST UI Reply Ban FROM_INCOMING screens", () => {
-  it("TEST UI header reports implementation through Stage 12", () => {
-    expect(htmlSource).toContain("<title>98+ TEST UI — implemented through Stage 12</title>");
-    expect(htmlSource).toContain("<h1>98+ TEST UI — implemented through Stage 12</h1>");
+  it("TEST UI header reports implementation through Stage 13A", () => {
+    expect(htmlSource).toContain("<title>98+ TEST UI — implemented through Stage 13A</title>");
+    expect(htmlSource).toContain("<h1>98+ TEST UI — implemented through Stage 13A</h1>");
     expect(htmlSource).not.toContain("Incoming OVERBOARD (Stage 7)");
     expect(htmlSource).not.toContain("Create Ban CONTACT (Stage 6)");
   });
@@ -1521,5 +1524,42 @@ describe("Stage 11 TEST UI Template Create Ban screens", () => {
     expect(pending.html).toContain('data-share-attempt="share-1"');
     expect(pending.html).toContain("DEV: SHARE_CONFIRMED");
     expect(pending.html).toContain("data-dev-only");
+  });
+});
+
+describe("Stage 13A Telegram Persistent Re-entry CTA overlay", () => {
+  it("renders nonblocking CTA without adding a PRODUCT_SCREEN_BY_CONTROL_STATE entry", () => {
+    expect(Object.values(PRODUCT_SCREEN_BY_CONTROL_STATE)).not.toContain(
+      "TelegramPersistentReentryCtaScreen",
+    );
+    expect(screensSource).toContain("telegramPersistentReentryCtaHtml");
+    expect(screensSource).not.toMatch(/PRODUCT_SCREEN_BY_CONTROL_STATE[\s\S]*Закрепить 98\+/);
+    const withCta = renderProductScreen(
+      diagnostics("RIM.LOBBY", {
+        telegramPersistentReentry: {
+          showCta: true,
+          label: "Закрепить 98+",
+          api: "requestWriteAccess",
+        },
+      }),
+    );
+    expect(withCta.screenId).toBe("LobbyTestScreen");
+    expect(withCta.html).toContain("Закрепить 98+");
+    expect(withCta.html).toContain('data-telegram-persistent-reentry-cta="1"');
+    expect(withCta.html).toContain("data-nonblocking");
+    expect(withCta.html).toContain("DEV: GRANT");
+    expect(htmlSource).toContain("telegram-persistent-reentry/begin");
+    expect(htmlSource).toContain("requestWriteAccess");
+
+    const without = renderProductScreen(
+      diagnostics("RIM.LOBBY", {
+        telegramPersistentReentry: {
+          showCta: false,
+          label: "Закрепить 98+",
+          api: "requestWriteAccess",
+        },
+      }),
+    );
+    expect(without.html).not.toContain("data-telegram-persistent-reentry-cta");
   });
 });

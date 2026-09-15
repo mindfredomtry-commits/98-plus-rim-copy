@@ -163,6 +163,7 @@ export type {
 } from "./primitives.ts";
 export { reduce } from "./kernel/index.ts";
 export {
+  applyEffects,
   asInstant,
   cloneSnapshot,
   counterAllocator,

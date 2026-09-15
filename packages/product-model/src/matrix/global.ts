@@ -150,12 +150,17 @@ export const GLOBAL_AND_BOOTSTRAP_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "current Product Control State established by newer External Entry",
     nextState: "CURRENT",
     effectsText:
-      "business result of the corresponding Event is applied exactly once; necessary Entity/Extended State effects apply; late result does not change the Product Control State set by the newer External Entry, restore previous UI, or open old Success; immediate Status Priority or other immediate UI transition is not applied; created Notification Item becomes ordinary waiting FIFO item",
+      "business result of the corresponding Event is applied exactly once; necessary Entity/Extended State effects apply including telegramPersistentReentryEligible Entity effect when the late qualifying E-20 or E-30 FROM_INCOMING_BAN qualifies; late result does not change the Product Control State set by the newer External Entry, restore previous UI, or open old Success; immediate Status Priority or other immediate UI transition is not applied; created Notification Item becomes ordinary waiting FIFO item",
     effects: [
       { type: "UPSERT_BAN", appliesWhen: "created Ban is preserved" },
       {
         type: "SET_NOTIFICATION_LIFECYCLE",
         appliesWhen: "source item processed if the Event requires it",
+      },
+      {
+        type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE",
+        appliesWhen:
+          "qualifying late E-20 or E-30 FROM_INCOMING_BAN with boundViaTelegramShareLink and established===false",
       },
     ],
     result: "STAY",
@@ -163,6 +168,96 @@ export const GLOBAL_AND_BOOTSTRAP_ROWS: readonly MatrixContractRow[] = [
       section: "Global rule — Late server result after newer External Entry",
       locator: "lines 65-72",
       extractedLines: "65-72",
+    },
+  }),
+  matrixRow({
+    kind: "GLOBAL",
+    state: "GLOBAL",
+    eventId: "E-61",
+    eventName: "TELEGRAM_PERSISTENT_REENTRY.GRANTED",
+    branch: "guard-a",
+    guardsText:
+      "Guard A: valid telegramPersistentReentryActiveRequestId exists matching the Event; telegramPersistentReentryEligible===true; telegramPersistentReentryEstablished===false",
+    guards: { type: "TELEGRAM_PERSISTENT_REENTRY_GRANTED_GUARD_A" },
+    nextStateText: "current Product Control State",
+    nextState: "CURRENT",
+    effectsText:
+      "telegramPersistentReentryEstablished=true; telegramPersistentReentryEligible=false; telegramPersistentReentryActiveRequestId=null; SEND bootstrap bot message exactly once; Ban/Status/Timer/Check/Notification Items/Contact unchanged; Product Control State unchanged",
+    effects: [
+      { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ESTABLISHED" },
+      { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE" },
+      { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST" },
+      { type: "SEND_TELEGRAM_PERSISTENT_REENTRY_BOOTSTRAP_MESSAGE" },
+    ],
+    result: "STAY",
+    source: {
+      section: "E-61 TELEGRAM_PERSISTENT_REENTRY.GRANTED Guard A",
+      locator: "MVP9 global",
+      extractedLines: "E-61-A",
+    },
+  }),
+  matrixRow({
+    kind: "GLOBAL",
+    state: "GLOBAL",
+    eventId: "E-61",
+    eventName: "TELEGRAM_PERSISTENT_REENTRY.GRANTED",
+    branch: "guard-b",
+    guardsText: "Guard B: already established or stale/invalid permission result (not Guard A)",
+    guards: { type: "TELEGRAM_PERSISTENT_REENTRY_GRANTED_GUARD_B" },
+    nextStateText: "current Product Control State",
+    nextState: "CURRENT",
+    effectsText:
+      "IGNORE_NOT_ALLOWED; no Entity effects; bootstrap message is not sent; Product Control State unchanged",
+    effects: [],
+    result: "IGNORE_NOT_ALLOWED",
+    source: {
+      section: "E-61 TELEGRAM_PERSISTENT_REENTRY.GRANTED Guard B",
+      locator: "MVP9 global",
+      extractedLines: "E-61-B",
+    },
+  }),
+  matrixRow({
+    kind: "GLOBAL",
+    state: "GLOBAL",
+    eventId: "E-62",
+    eventName: "TELEGRAM_PERSISTENT_REENTRY.DECLINED",
+    branch: "guard-a",
+    guardsText:
+      "Guard A: valid telegramPersistentReentryActiveRequestId exists matching the Event; telegramPersistentReentryEstablished===false",
+    guards: { type: "TELEGRAM_PERSISTENT_REENTRY_DECLINED_GUARD_A" },
+    nextStateText: "current Product Control State",
+    nextState: "CURRENT",
+    effectsText:
+      "telegramPersistentReentryEligible=false; telegramPersistentReentryActiveRequestId=null; telegramPersistentReentryEstablished remains false; bootstrap message is not sent; Product Control State unchanged",
+    effects: [
+      { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE" },
+      { type: "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST" },
+    ],
+    result: "STAY",
+    source: {
+      section: "E-62 TELEGRAM_PERSISTENT_REENTRY.DECLINED Guard A",
+      locator: "MVP9 global",
+      extractedLines: "E-62-A",
+    },
+  }),
+  matrixRow({
+    kind: "GLOBAL",
+    state: "GLOBAL",
+    eventId: "E-62",
+    eventName: "TELEGRAM_PERSISTENT_REENTRY.DECLINED",
+    branch: "guard-b",
+    guardsText: "Guard B: stale/invalid permission result (not Guard A)",
+    guards: { type: "TELEGRAM_PERSISTENT_REENTRY_DECLINED_GUARD_B" },
+    nextStateText: "current Product Control State",
+    nextState: "CURRENT",
+    effectsText:
+      "IGNORE_NOT_ALLOWED; no Entity effects; bootstrap message is not sent; Product Control State unchanged",
+    effects: [],
+    result: "IGNORE_NOT_ALLOWED",
+    source: {
+      section: "E-62 TELEGRAM_PERSISTENT_REENTRY.DECLINED Guard B",
+      locator: "MVP9 global",
+      extractedLines: "E-62-B",
     },
   }),
   matrixRow({

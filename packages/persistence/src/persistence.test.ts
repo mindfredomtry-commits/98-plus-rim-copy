@@ -690,3 +690,306 @@ describe("Stage 4 product persistence", () => {
     ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
   });
 });
+
+describe("Stage 13A corrective — durable bootstrap delivery facts", () => {
+  it("allows established=true with bootstrapSent=false across persist/reload", async () => {
+    const { kit, store } = await setup();
+    const world: ProductSnapshot = {
+      ...withControlState(emptySnapshot(), "RIM.LOBBY"),
+      extended: {
+        ...withControlState(emptySnapshot(), "RIM.LOBBY").extended,
+        telegramPersistentReentryEligible: false,
+        telegramPersistentReentryEstablished: true,
+        telegramPersistentReentryActiveRequestId: null,
+      },
+    };
+    const seeded = await kit.installFixtureSnapshot(USER_ID, world);
+    expect(seeded.snapshot.extended.telegramPersistentReentryEstablished).toBe(true);
+    expect(seeded.telegramPersistentReentryBootstrapSent).toBe(false);
+
+    const reloaded = await store.loadProductSnapshot(USER_ID);
+    expect(reloaded.snapshot.extended.telegramPersistentReentryEstablished).toBe(true);
+    expect(reloaded.telegramPersistentReentryBootstrapSent).toBe(false);
+
+    const marked = await store.markTelegramPersistentReentryBootstrapSent(USER_ID, "orphan-token");
+    expect(marked.status).toBe("STALE_CLAIM");
+
+    const claimed = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      1_000,
+      60_000,
+    );
+    expect(claimed.status).toBe("CLAIMED");
+    if (claimed.status !== "CLAIMED") {
+      throw new Error("expected CLAIMED");
+    }
+    const completedMark = await store.markTelegramPersistentReentryBootstrapSent(
+      USER_ID,
+      claimed.claimToken,
+    );
+    expect(completedMark.status).toBe("MARKED");
+    const completed = await store.loadProductSnapshot(USER_ID);
+    expect(completed.snapshot.extended.telegramPersistentReentryEstablished).toBe(true);
+    expect(completed.telegramPersistentReentryBootstrapSent).toBe(true);
+    expect(completed.telegramPersistentReentryBootstrapClaimToken).toBeNull();
+
+    const again = await store.markTelegramPersistentReentryBootstrapSent(
+      USER_ID,
+      claimed.claimToken,
+    );
+    expect(again.status).toBe("ALREADY_MARKED");
+  });
+
+  it("does not derive bootstrapSent from established on product transition persist", async () => {
+    const { kit, store } = await setup();
+    const seeded = await kit.installFixtureSnapshot(
+      USER_ID,
+      withControlState(emptySnapshot(), "RIM.LOBBY"),
+    );
+    const grantedWorld: ProductSnapshot = {
+      ...seeded.snapshot,
+      extended: {
+        ...seeded.snapshot.extended,
+        telegramPersistentReentryEligible: false,
+        telegramPersistentReentryEstablished: true,
+        telegramPersistentReentryActiveRequestId: null,
+      },
+    };
+    const persisted = await store.persistTransition({
+      currentUserId: USER_ID,
+      expectedRevision: seeded.revision,
+      result: {
+        outcome: "APPLIED",
+        result: "STAY",
+        controlState: grantedWorld.controlState,
+        snapshot: grantedWorld,
+        effects: [],
+        declaredEffects: [],
+        traces: [],
+        composition: "LOCAL_ONLY",
+        error: null,
+      },
+    });
+    expect(persisted.snapshot.extended.telegramPersistentReentryEstablished).toBe(true);
+    expect(persisted.telegramPersistentReentryBootstrapSent).toBe(false);
+  });
+
+  it("atomic claim allows only one owner; stale lease can be reclaimed with a new token", async () => {
+    const { kit, store } = await setup();
+    const world: ProductSnapshot = {
+      ...withControlState(emptySnapshot(), "RIM.LOBBY"),
+      extended: {
+        ...withControlState(emptySnapshot(), "RIM.LOBBY").extended,
+        telegramPersistentReentryEligible: false,
+        telegramPersistentReentryEstablished: true,
+        telegramPersistentReentryActiveRequestId: null,
+      },
+    };
+    await kit.installFixtureSnapshot(USER_ID, world);
+    const first = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      1_000,
+      60_000,
+    );
+    expect(first.status).toBe("CLAIMED");
+    if (first.status !== "CLAIMED") {
+      throw new Error("expected CLAIMED");
+    }
+    expect(first.claimToken.length).toBeGreaterThan(0);
+    const second = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      1_000,
+      60_000,
+    );
+    expect(second.status).toBe("ALREADY_CLAIMED");
+    if (second.status !== "ALREADY_CLAIMED") {
+      throw new Error("expected ALREADY_CLAIMED");
+    }
+    expect(second.claimedUntilMs).toBe(first.claimedUntilMs);
+
+    const stale = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      first.claimedUntilMs + 1,
+      60_000,
+    );
+    expect(stale.status).toBe("CLAIMED");
+    if (stale.status !== "CLAIMED") {
+      throw new Error("expected CLAIMED reclaim");
+    }
+    expect(stale.claimToken).not.toBe(first.claimToken);
+
+    const released = await store.releaseTelegramPersistentReentryBootstrapClaim(
+      USER_ID,
+      stale.claimToken,
+    );
+    expect(released.status).toBe("RELEASED");
+    const afterRelease = await store.loadProductSnapshot(USER_ID);
+    expect(afterRelease.telegramPersistentReentryBootstrapClaimedUntilMs).toBeNull();
+    expect(afterRelease.telegramPersistentReentryBootstrapClaimToken).toBeNull();
+    expect(afterRelease.telegramPersistentReentryBootstrapSent).toBe(false);
+  });
+
+  it("corrective pass 3: stale owner cannot complete or release after reclaim", async () => {
+    const { kit, store } = await setup();
+    const world: ProductSnapshot = {
+      ...withControlState(emptySnapshot(), "RIM.LOBBY"),
+      extended: {
+        ...withControlState(emptySnapshot(), "RIM.LOBBY").extended,
+        telegramPersistentReentryEligible: false,
+        telegramPersistentReentryEstablished: true,
+        telegramPersistentReentryActiveRequestId: null,
+      },
+    };
+    await kit.installFixtureSnapshot(USER_ID, world);
+
+    const claimA = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      1_000,
+      60_000,
+    );
+    expect(claimA.status).toBe("CLAIMED");
+    if (claimA.status !== "CLAIMED") {
+      throw new Error("expected CLAIMED A");
+    }
+
+    const whileActive = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      1_000,
+      60_000,
+    );
+    expect(whileActive.status).toBe("ALREADY_CLAIMED");
+
+    const claimB = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      claimA.claimedUntilMs + 1,
+      60_000,
+    );
+    expect(claimB.status).toBe("CLAIMED");
+    if (claimB.status !== "CLAIMED") {
+      throw new Error("expected CLAIMED B");
+    }
+    expect(claimB.claimToken).not.toBe(claimA.claimToken);
+
+    const staleComplete = await store.markTelegramPersistentReentryBootstrapSent(
+      USER_ID,
+      claimA.claimToken,
+    );
+    expect(staleComplete.status).toBe("STALE_CLAIM");
+    const afterStaleComplete = await store.loadProductSnapshot(USER_ID);
+    expect(afterStaleComplete.telegramPersistentReentryBootstrapSent).toBe(false);
+    expect(afterStaleComplete.telegramPersistentReentryBootstrapClaimToken).toBe(claimB.claimToken);
+    expect(afterStaleComplete.telegramPersistentReentryBootstrapClaimedUntilMs).toBe(
+      claimB.claimedUntilMs,
+    );
+
+    const staleRelease = await store.releaseTelegramPersistentReentryBootstrapClaim(
+      USER_ID,
+      claimA.claimToken,
+    );
+    expect(staleRelease.status).toBe("STALE_CLAIM");
+    const afterStaleRelease = await store.loadProductSnapshot(USER_ID);
+    expect(afterStaleRelease.telegramPersistentReentryBootstrapClaimToken).toBe(claimB.claimToken);
+    expect(afterStaleRelease.telegramPersistentReentryBootstrapClaimedUntilMs).toBe(
+      claimB.claimedUntilMs,
+    );
+
+    const wrongTokenComplete = await store.markTelegramPersistentReentryBootstrapSent(
+      USER_ID,
+      "wrong-token",
+    );
+    expect(wrongTokenComplete.status).toBe("STALE_CLAIM");
+    const wrongTokenRelease = await store.releaseTelegramPersistentReentryBootstrapClaim(
+      USER_ID,
+      "wrong-token",
+    );
+    expect(wrongTokenRelease.status).toBe("STALE_CLAIM");
+
+    const ownerComplete = await store.markTelegramPersistentReentryBootstrapSent(
+      USER_ID,
+      claimB.claimToken,
+    );
+    expect(ownerComplete.status).toBe("MARKED");
+    const completed = await store.loadProductSnapshot(USER_ID);
+    expect(completed.telegramPersistentReentryBootstrapSent).toBe(true);
+    expect(completed.telegramPersistentReentryBootstrapClaimToken).toBeNull();
+    expect(completed.telegramPersistentReentryBootstrapClaimedUntilMs).toBeNull();
+
+    const noMoreClaim = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      claimB.claimedUntilMs + 1,
+      60_000,
+    );
+    expect(noMoreClaim.status).toBe("ALREADY_SENT");
+  });
+
+  it("corrective pass 3: owner failure release restores pending; round-trip preserves claim token", async () => {
+    const { kit, store } = await setup();
+    const world: ProductSnapshot = {
+      ...withControlState(emptySnapshot(), "RIM.LOBBY"),
+      extended: {
+        ...withControlState(emptySnapshot(), "RIM.LOBBY").extended,
+        telegramPersistentReentryEligible: false,
+        telegramPersistentReentryEstablished: true,
+        telegramPersistentReentryActiveRequestId: null,
+      },
+    };
+    const seeded = await kit.installFixtureSnapshot(USER_ID, world);
+    const claim = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      2_000,
+      60_000,
+    );
+    expect(claim.status).toBe("CLAIMED");
+    if (claim.status !== "CLAIMED") {
+      throw new Error("expected CLAIMED");
+    }
+    const held = await store.loadProductSnapshot(USER_ID);
+    expect(held.telegramPersistentReentryBootstrapClaimToken).toBe(claim.claimToken);
+    expect(held.telegramPersistentReentryBootstrapClaimedUntilMs).toBe(claim.claimedUntilMs);
+
+    const reloaded = await store.loadProductSnapshot(USER_ID);
+    expect(reloaded.telegramPersistentReentryBootstrapClaimToken).toBe(claim.claimToken);
+    expect(reloaded.telegramPersistentReentryBootstrapClaimedUntilMs).toBe(claim.claimedUntilMs);
+
+    const preserved = await store.persistTransition({
+      currentUserId: USER_ID,
+      expectedRevision: reloaded.revision,
+      result: {
+        outcome: "APPLIED",
+        result: "STAY",
+        controlState: seeded.snapshot.controlState,
+        snapshot: {
+          ...reloaded.snapshot,
+          extended: {
+            ...reloaded.snapshot.extended,
+            telegramPersistentReentryEstablished: true,
+          },
+        },
+        effects: [],
+        declaredEffects: [],
+        traces: [],
+        composition: "LOCAL_ONLY",
+        error: null,
+      },
+    });
+    expect(preserved.telegramPersistentReentryBootstrapClaimToken).toBe(claim.claimToken);
+    expect(preserved.telegramPersistentReentryBootstrapClaimedUntilMs).toBe(claim.claimedUntilMs);
+
+    const released = await store.releaseTelegramPersistentReentryBootstrapClaim(
+      USER_ID,
+      claim.claimToken,
+    );
+    expect(released.status).toBe("RELEASED");
+    const pending = await store.loadProductSnapshot(USER_ID);
+    expect(pending.telegramPersistentReentryBootstrapSent).toBe(false);
+    expect(pending.telegramPersistentReentryBootstrapClaimToken).toBeNull();
+    expect(pending.telegramPersistentReentryBootstrapClaimedUntilMs).toBeNull();
+
+    const reclaim = await store.claimTelegramPersistentReentryBootstrapDelivery(
+      USER_ID,
+      3_000,
+      60_000,
+    );
+    expect(reclaim.status).toBe("CLAIMED");
+  });
+});

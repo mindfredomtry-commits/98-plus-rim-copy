@@ -102,6 +102,9 @@ describe("Timer Notification Item vs DomainTimer", () => {
         activeNotificationItemId: null,
         priorities: { statusItemId: null, timerItemId: null },
         pendingExternalEntry: null,
+        telegramPersistentReentryEligible: false,
+        telegramPersistentReentryEstablished: false,
+        telegramPersistentReentryActiveRequestId: null,
         entities: {
           bans: {},
           notificationItems: {},

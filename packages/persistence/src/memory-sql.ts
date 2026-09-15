@@ -47,6 +47,14 @@ function sessionToRow(session: SessionRecord) {
     status_priority_item_id: session.statusPriorityItemId,
     timer_priority_item_id: session.timerPriorityItemId,
     pending_external_entry: session.pendingExternalEntry,
+    telegram_persistent_reentry_eligible: session.telegramPersistentReentryEligible,
+    telegram_persistent_reentry_established: session.telegramPersistentReentryEstablished,
+    telegram_persistent_reentry_active_request_id: session.telegramPersistentReentryActiveRequestId,
+    telegram_persistent_reentry_bootstrap_sent: session.telegramPersistentReentryBootstrapSent,
+    telegram_persistent_reentry_bootstrap_claimed_until_ms:
+      session.telegramPersistentReentryBootstrapClaimedUntilMs,
+    telegram_persistent_reentry_bootstrap_claim_token:
+      session.telegramPersistentReentryBootstrapClaimToken,
   };
 }
 
@@ -145,8 +153,85 @@ export class MemorySqlClient implements PersistenceSqlClient {
           statusPriorityItemId: params[13] as SessionRecord["statusPriorityItemId"],
           timerPriorityItemId: params[14] as SessionRecord["timerPriorityItemId"],
           pendingExternalEntry: parseMaybeJson(params[15]),
+          telegramPersistentReentryEligible: Boolean(params[16]),
+          telegramPersistentReentryEstablished: Boolean(params[17]),
+          telegramPersistentReentryActiveRequestId:
+            params[18] === null || params[18] === undefined ? null : String(params[18]),
+          telegramPersistentReentryBootstrapSent: Boolean(params[19]),
+          telegramPersistentReentryBootstrapClaimedUntilMs:
+            params[20] === null || params[20] === undefined ? null : Number(params[20]),
+          telegramPersistentReentryBootstrapClaimToken:
+            params[21] === null || params[21] === undefined ? null : String(params[21]),
         });
         return rows([]);
+      }
+      case SQL.claimTelegramPersistentReentryBootstrapDelivery: {
+        const session = this.tables.lockSession(String(params[0]));
+        const nowMs = Number(params[2]);
+        const leaseUntil = Number(params[1]);
+        const claimToken = String(params[3]);
+        if (!session || !session.telegramPersistentReentryEstablished) {
+          return rows([]);
+        }
+        if (session.telegramPersistentReentryBootstrapSent) {
+          return rows([]);
+        }
+        const claimedUntil = session.telegramPersistentReentryBootstrapClaimedUntilMs;
+        if (claimedUntil !== null && claimedUntil > nowMs) {
+          return rows([]);
+        }
+        this.tables.writeSession({
+          ...session,
+          revision: session.revision + 1,
+          telegramPersistentReentryBootstrapClaimedUntilMs: leaseUntil,
+          telegramPersistentReentryBootstrapClaimToken: claimToken,
+        });
+        return rows([
+          {
+            user_id: session.userId,
+            telegram_persistent_reentry_bootstrap_claimed_until_ms: leaseUntil,
+            telegram_persistent_reentry_bootstrap_claim_token: claimToken,
+          },
+        ]);
+      }
+      case SQL.markTelegramPersistentReentryBootstrapSent: {
+        const session = this.tables.lockSession(String(params[0]));
+        const claimToken = String(params[1]);
+        if (
+          !session ||
+          !session.telegramPersistentReentryEstablished ||
+          session.telegramPersistentReentryBootstrapSent ||
+          session.telegramPersistentReentryBootstrapClaimToken !== claimToken
+        ) {
+          return rows([]);
+        }
+        this.tables.writeSession({
+          ...session,
+          revision: session.revision + 1,
+          telegramPersistentReentryBootstrapSent: true,
+          telegramPersistentReentryBootstrapClaimedUntilMs: null,
+          telegramPersistentReentryBootstrapClaimToken: null,
+        });
+        return rows([{ user_id: session.userId }]);
+      }
+      case SQL.releaseTelegramPersistentReentryBootstrapClaim: {
+        const session = this.tables.lockSession(String(params[0]));
+        const claimToken = String(params[1]);
+        if (
+          !session ||
+          session.telegramPersistentReentryBootstrapSent ||
+          session.telegramPersistentReentryBootstrapClaimToken === null ||
+          session.telegramPersistentReentryBootstrapClaimToken !== claimToken
+        ) {
+          return rows([]);
+        }
+        this.tables.writeSession({
+          ...session,
+          revision: session.revision + 1,
+          telegramPersistentReentryBootstrapClaimedUntilMs: null,
+          telegramPersistentReentryBootstrapClaimToken: null,
+        });
+        return rows([{ user_id: session.userId }]);
       }
       case SQL.selectBansForUser: {
         return rows(
@@ -158,6 +243,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
             duration_minutes: ban.durationMinutes,
             acceptance: ban.acceptance,
             status: ban.status,
+            bound_via_telegram_share_link: ban.boundViaTelegramShareLink,
             created_seq: this.tables.getBan(ban.id)?.createdSeq ?? 0,
           })),
         );
@@ -171,6 +257,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
           durationMinutes: params[4] as DurationMinutes,
           acceptance: params[5] as Ban["acceptance"],
           status: params[6] as Ban["status"],
+          boundViaTelegramShareLink: Boolean(params[7]),
         });
         return rows([]);
       }
@@ -357,6 +444,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
             duration_minutes: ban.durationMinutes,
             acceptance: ban.acceptance,
             status: ban.status,
+            bound_via_telegram_share_link: ban.boundViaTelegramShareLink,
             created_seq: ban.createdSeq,
           },
         ]);
@@ -379,6 +467,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
             duration_minutes: ban.durationMinutes,
             acceptance: ban.acceptance,
             status: ban.status,
+            bound_via_telegram_share_link: ban.boundViaTelegramShareLink,
             created_seq: ban.createdSeq,
           },
         ]);

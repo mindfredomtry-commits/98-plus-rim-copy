@@ -273,7 +273,7 @@ export const REPLY_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "RB-03 SUCCESS.FROM_INCOMING_BAN",
     nextState: "REPLY_BAN.SUCCESS.FROM_INCOMING_BAN",
     effectsText:
-      "reply Ban создаётся exactly once; для replyBan.receiverId создаётся exactly one связанная с reply Ban INCOMING_BAN Notification Item как часть той же authoritative successful business operation; создание этой Item само по себе не изменяет Product Control State receiver; source Incoming Ban → processed; original Ban → accepted; для original Ban создаётся exactly one Timer; timestamp создания Timer является authoritative duration start original Ban; Timer получает Timer Priority; повторный result той же operation не создаёт второй reply Ban, вторую связанную INCOMING_BAN Notification Item или второй Timer; replyBanDraft удаляется (null).",
+      "reply Ban создаётся exactly once; для replyBan.receiverId создаётся exactly one связанная с reply Ban INCOMING_BAN Notification Item как часть той же authoritative successful business operation; создание этой Item само по себе не изменяет Product Control State receiver; source Incoming Ban → processed; original Ban → accepted; для original Ban создаётся exactly one Timer; timestamp создания Timer является authoritative duration start original Ban; Timer получает Timer Priority; повторный result той же operation не создаёт второй reply Ban, вторую связанную INCOMING_BAN Notification Item или второй Timer; replyBanDraft удаляется (null); when source Ban.boundViaTelegramShareLink===true and telegramPersistentReentryEstablished===false, SET telegramPersistentReentryEligible=true (Entity effect).",
     effects: [
       { type: "UPSERT_BAN" },
       { type: "SET_NOTIFICATION_LIFECYCLE" },
@@ -286,6 +286,11 @@ export const REPLY_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
       { type: "CLEAR_OPERATION" },
       { type: "SET_REPLY_BAN_DRAFT" },
       { type: "SET_CONTROL_STATE" },
+      {
+        type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE",
+        appliesWhen:
+          "source Ban.boundViaTelegramShareLink===true AND telegramPersistentReentryEstablished===false",
+      },
     ],
     result: "TRANSITION",
     source: {

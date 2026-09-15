@@ -38,6 +38,8 @@ export type Ban = Readonly<{
   durationMinutes: DurationMinutes;
   acceptance: BanAcceptance;
   status: BanStatus | null;
+  /** True only when receiver was bound via successful Telegram Share Link External Entry (E-45). */
+  boundViaTelegramShareLink: boolean;
 }>;
 
 export type DomainTimerState = "RUNNING" | "EXPIRED";

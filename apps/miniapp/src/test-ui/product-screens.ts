@@ -91,6 +91,8 @@ export const TEST_UI_USER_EVENT_NAMES = [
   "REPLY_BAN.PRESS_BACK",
   "REPLY_BAN.PRESS_FORBID",
   "REPLY_BAN.PRESS_FORBID_MORE",
+  "TELEGRAM_PERSISTENT_REENTRY.GRANTED",
+  "TELEGRAM_PERSISTENT_REENTRY.DECLINED",
 ] as const;
 
 export const TEST_UI_SERVER_RESULT_EVENT_NAMES = [
@@ -202,6 +204,14 @@ export type TestUiScreenDiagnostics = Readonly<{
     shareUrl: string;
     api: "shareMessage";
   }> | null;
+  telegramPersistentReentryEligible?: boolean;
+  telegramPersistentReentryEstablished?: boolean;
+  telegramPersistentReentryActiveRequestId?: string | null;
+  telegramPersistentReentry?: Readonly<{
+    showCta: boolean;
+    label: string;
+    api: "requestWriteAccess";
+  }> | null;
 }>;
 
 export type ProductScreenRender = Readonly<{
@@ -235,69 +245,116 @@ export function renderProductScreen(
     return disconnectedScreen();
   }
   const screenId = productScreenIdFor(diagnostics.controlState);
+  let screen: ProductScreenRender;
   switch (screenId) {
     case "DisconnectedTestScreen":
-      return disconnectedScreen();
+      screen = disconnectedScreen();
+      break;
     case "EmptySnapshotTestScreen":
-      return emptySnapshotScreen(diagnostics);
+      screen = emptySnapshotScreen(diagnostics);
+      break;
     case "LobbyTestScreen":
-      return lobbyScreen(diagnostics);
+      screen = lobbyScreen(diagnostics);
+      break;
     case "CreateBanWhoTestScreen":
-      return whoScreen(diagnostics);
+      screen = whoScreen(diagnostics);
+      break;
     case "CreateBanWhatContactTestScreen":
-      return whatContactScreen(diagnostics);
+      screen = whatContactScreen(diagnostics);
+      break;
     case "CreateBanWhatTemplateTestScreen":
-      return whatTemplateScreen(diagnostics);
+      screen = whatTemplateScreen(diagnostics);
+      break;
     case "CreateBanConfirmContactTestScreen":
-      return confirmContactScreen(diagnostics, options.sending === true);
+      screen = confirmContactScreen(diagnostics, options.sending === true);
+      break;
     case "CreateBanConfirmTemplateTestScreen":
-      return confirmTemplateScreen(diagnostics, options.sending === true);
+      screen = confirmTemplateScreen(diagnostics, options.sending === true);
+      break;
     case "CreateBanSharePendingTestScreen":
-      return sharePendingScreen(diagnostics);
+      screen = sharePendingScreen(diagnostics);
+      break;
     case "CreateBanSuccessTestScreen":
-      return successScreen(diagnostics);
+      screen = successScreen(diagnostics);
+      break;
     case "IncomingBanTestScreen":
-      return incomingBanScreen(diagnostics, options.sending === true);
+      screen = incomingBanScreen(diagnostics, options.sending === true);
+      break;
     case "StatusOverboardReceiverTestScreen":
-      return overboardStatusScreen(
+      screen = overboardStatusScreen(
         diagnostics,
         diagnostics.controlState === "NOTIFICATIONS.STATUS.OVERBOARD.SENDER"
           ? "SENDER"
           : "RECEIVER",
       );
+      break;
     case "ReplyBanWhatFromIncomingTestScreen":
-      return replyBanWhatFromIncomingScreen(diagnostics);
+      screen = replyBanWhatFromIncomingScreen(diagnostics);
+      break;
     case "ReplyBanConfirmFromIncomingTestScreen":
-      return replyBanConfirmFromIncomingScreen(diagnostics, options.sending === true);
+      screen = replyBanConfirmFromIncomingScreen(diagnostics, options.sending === true);
+      break;
     case "ReplyBanSuccessFromIncomingTestScreen":
-      return replyBanSuccessFromIncomingScreen(diagnostics);
+      screen = replyBanSuccessFromIncomingScreen(diagnostics);
+      break;
     case "ReplyBanWhatFromStatusTestScreen":
-      return replyBanWhatFromStatusScreen(diagnostics);
+      screen = replyBanWhatFromStatusScreen(diagnostics);
+      break;
     case "ReplyBanConfirmFromStatusTestScreen":
-      return replyBanConfirmFromStatusScreen(diagnostics, options.sending === true);
+      screen = replyBanConfirmFromStatusScreen(diagnostics, options.sending === true);
+      break;
     case "ReplyBanSuccessFromStatusTestScreen":
-      return replyBanSuccessFromStatusScreen(diagnostics);
+      screen = replyBanSuccessFromStatusScreen(diagnostics);
+      break;
     case "TimerTestScreen":
-      return timerScreen(diagnostics);
+      screen = timerScreen(diagnostics);
+      break;
     case "CheckReceiverTestScreen":
-      return checkScreen(diagnostics, "RECEIVER", options.sending === true);
+      screen = checkScreen(diagnostics, "RECEIVER", options.sending === true);
+      break;
     case "CheckSenderTestScreen":
-      return checkScreen(diagnostics, "SENDER", options.sending === true);
+      screen = checkScreen(diagnostics, "SENDER", options.sending === true);
+      break;
     case "StatusBantasticReceiverTestScreen":
-      return derivedStatusScreen(diagnostics, "BANTASTIC", "RECEIVER");
+      screen = derivedStatusScreen(diagnostics, "BANTASTIC", "RECEIVER");
+      break;
     case "StatusBantasticSenderTestScreen":
-      return derivedStatusScreen(diagnostics, "BANTASTIC", "SENDER");
+      screen = derivedStatusScreen(diagnostics, "BANTASTIC", "SENDER");
+      break;
     case "StatusBanflictReceiverTestScreen":
-      return derivedStatusScreen(diagnostics, "BANFLICT", "RECEIVER");
+      screen = derivedStatusScreen(diagnostics, "BANFLICT", "RECEIVER");
+      break;
     case "StatusBanflictSenderTestScreen":
-      return derivedStatusScreen(diagnostics, "BANFLICT", "SENDER");
+      screen = derivedStatusScreen(diagnostics, "BANFLICT", "SENDER");
+      break;
     case "StatusFairEnoughReceiverTestScreen":
-      return derivedStatusScreen(diagnostics, "FAIR_ENOUGH", "RECEIVER");
+      screen = derivedStatusScreen(diagnostics, "FAIR_ENOUGH", "RECEIVER");
+      break;
     case "StatusFairEnoughSenderTestScreen":
-      return derivedStatusScreen(diagnostics, "FAIR_ENOUGH", "SENDER");
+      screen = derivedStatusScreen(diagnostics, "FAIR_ENOUGH", "SENDER");
+      break;
     case "UnsupportedProductTestScreen":
-      return unsupportedScreen(diagnostics);
+      screen = unsupportedScreen(diagnostics);
+      break;
   }
+  const cta = telegramPersistentReentryCtaHtml(diagnostics);
+  return cta.length === 0 ? screen : { ...screen, html: `${screen.html}${cta}` };
+}
+
+/** Nonblocking overlay — must not appear in PRODUCT_SCREEN_BY_CONTROL_STATE. */
+export function telegramPersistentReentryCtaHtml(diagnostics: TestUiScreenDiagnostics): string {
+  const cta = diagnostics.telegramPersistentReentry;
+  if (!cta?.showCta) {
+    return "";
+  }
+  return [
+    '<aside class="telegram-persistent-reentry-cta" data-telegram-persistent-reentry-cta="1" data-nonblocking="1">',
+    `<button type="button" data-action="telegram-persistent-reentry-pin">${escapeHtml(cta.label)}</button>`,
+    '<p class="dev-label">DEV ONLY — simulate requestWriteAccess outside Telegram (does not fake production grant).</p>',
+    '<div class="row"><button type="button" data-action="telegram-persistent-reentry-dev-grant" data-dev-only="reentry">DEV: GRANT</button>',
+    '<button type="button" data-action="telegram-persistent-reentry-dev-decline" data-dev-only="reentry">DEV: DECLINE</button></div>',
+    "</aside>",
+  ].join("");
 }
 
 function disconnectedScreen(): ProductScreenRender {

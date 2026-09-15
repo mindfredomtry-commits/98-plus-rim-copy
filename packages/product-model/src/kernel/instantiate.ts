@@ -402,6 +402,7 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
       durationMinutes: draft.durationMinutes,
       acceptance: "PENDING",
       status: null,
+      boundViaTelegramShareLink: false,
     };
     return {
       ok: true,
@@ -456,6 +457,7 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
       durationMinutes: draft.durationMinutes,
       acceptance: "PENDING",
       status: null,
+      boundViaTelegramShareLink: false,
     };
     const effects: Effect[] = [{ type: "UPSERT_BAN", ban: created }];
     if (row.state.includes("FROM_INCOMING_BAN")) {
@@ -493,6 +495,7 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
             durationMinutes: draft.durationMinutes,
             acceptance: "PENDING",
             status: null,
+            boundViaTelegramShareLink: false,
           },
         },
       ],
@@ -832,6 +835,63 @@ export function instantiateEffects(
               firstLaunch: snapshot.controlState === null,
             },
           });
+        }
+        break;
+      }
+      case "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE": {
+        if (row.eventId === "E-61") {
+          effects.push({ type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE", eligible: false });
+          break;
+        }
+        if (row.eventId === "E-62") {
+          effects.push({ type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE", eligible: false });
+          break;
+        }
+        if (row.eventId === "E-20") {
+          const sourceBanId = eventField<BanId>(event, "banId");
+          const ban = sourceBanId ? snapshot.extended.entities.bans[sourceBanId] : undefined;
+          if (
+            ban?.boundViaTelegramShareLink === true &&
+            snapshot.extended.telegramPersistentReentryEstablished === false
+          ) {
+            effects.push({ type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE", eligible: true });
+          }
+          break;
+        }
+        if (row.eventId === "E-30" && row.state.includes("FROM_INCOMING_BAN")) {
+          const source = replySourceOf(input);
+          const original = source ? snapshot.extended.entities.bans[source.banId] : undefined;
+          if (
+            original?.boundViaTelegramShareLink === true &&
+            snapshot.extended.telegramPersistentReentryEstablished === false
+          ) {
+            effects.push({ type: "SET_TELEGRAM_PERSISTENT_REENTRY_ELIGIBLE", eligible: true });
+          }
+          break;
+        }
+        break;
+      }
+      case "SET_TELEGRAM_PERSISTENT_REENTRY_ESTABLISHED": {
+        if (row.eventId === "E-61") {
+          effects.push({
+            type: "SET_TELEGRAM_PERSISTENT_REENTRY_ESTABLISHED",
+            established: true,
+          });
+        }
+        break;
+      }
+      case "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST": {
+        if (row.eventId === "E-61" || row.eventId === "E-62") {
+          effects.push({
+            type: "SET_TELEGRAM_PERSISTENT_REENTRY_ACTIVE_REQUEST",
+            requestId: null,
+          });
+        }
+        break;
+      }
+      case "SEND_TELEGRAM_PERSISTENT_REENTRY_BOOTSTRAP_MESSAGE": {
+        if (row.eventId === "E-61" && row.branch === "guard-a") {
+          effects.push({ type: "SEND_TELEGRAM_PERSISTENT_REENTRY_BOOTSTRAP_MESSAGE" });
         }
         break;
       }
@@ -1229,7 +1289,7 @@ export function instantiateEffects(
     ) {
       effects.push({
         type: "UPSERT_BAN",
-        ban: { ...ban, receiverId },
+        ban: { ...ban, receiverId, boundViaTelegramShareLink: true },
       });
     }
     // Bootstrap first-launch Matrix omits UPSERT_NOTIFICATION_ITEM; Guard A still requires

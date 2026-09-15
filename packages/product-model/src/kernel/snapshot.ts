@@ -32,6 +32,9 @@ export function emptySnapshot(): ProductSnapshot {
       activeNotificationItemId: null,
       priorities: { statusItemId: null, timerItemId: null },
       pendingExternalEntry: null,
+      telegramPersistentReentryEligible: false,
+      telegramPersistentReentryEstablished: false,
+      telegramPersistentReentryActiveRequestId: null,
       entities: {
         bans: {},
         notificationItems: {},

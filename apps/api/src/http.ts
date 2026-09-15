@@ -31,6 +31,7 @@ import {
   STAGE_11_EXCLUDES,
   STAGE_12_EXCLUDES,
   STAGE_13B_EXCLUDES,
+  TELEGRAM_PERSISTENT_REENTRY_STAGE,
   TIMER_CHECK_STATUS_STAGE,
   TEMPLATE_CREATE_BAN_STAGE,
 } from "./stage.ts";
@@ -41,6 +42,11 @@ import { assertSelectableContactId } from "./select-contact.ts";
 import { CreateBanContactTransportError } from "./transport-error.ts";
 import { testUiHtmlSource, testUiModuleSource } from "./test-ui-assets.ts";
 import { buildTelegramShareInvocation, shouldOpenTelegramShare } from "./template-share.ts";
+import {
+  beginTelegramPersistentReentryRequest,
+  deliverPendingTelegramPersistentReentryBootstrap,
+  TelegramPersistentReentryError,
+} from "./telegram-persistent-reentry.ts";
 import {
   applyPendingExternalEntryExpiry,
   buildStartParamIntakeProbe,
@@ -155,6 +161,7 @@ export async function handleCreateBanContactRequest(
         TEMPLATE_CREATE_BAN_STAGE,
         EXTERNAL_ENTRY_STAGE,
         CONTACT_RELATIONSHIP_STAGE,
+        TELEGRAM_PERSISTENT_REENTRY_STAGE,
         STAGE_7_EXCLUDES,
         STAGE_8_EXCLUDES,
         STAGE_9_EXCLUDES,
@@ -253,6 +260,10 @@ export async function handleCreateBanContactRequest(
         await openLobbyIfNeeded(runtime, context);
       }
       await applyElapsedDomainTimers(runtime, context);
+      const bootstrapDelivery = await deliverPendingTelegramPersistentReentryBootstrap(
+        runtime,
+        context,
+      );
       const startParamIntake = {
         ...buildStartParamIntakeProbe(startParam, entryExecution),
         ...(clientLaunch
@@ -267,7 +278,7 @@ export async function handleCreateBanContactRequest(
             }
           : {}),
       };
-      const { diagnostics } = await loadDiagnostics(
+      const { diagnostics: baseDiagnostics } = await loadDiagnostics(
         runtime,
         context,
         lastExecution,
@@ -276,6 +287,9 @@ export async function handleCreateBanContactRequest(
         externalEntry,
         startParamIntake,
       );
+      const diagnostics = bootstrapDelivery.error
+        ? { ...baseDiagnostics, error: bootstrapDelivery.error }
+        : baseDiagnostics;
       json(res, 200, {
         diagnostics,
         ...(externalEntry === null ? {} : { externalEntry }),
@@ -317,6 +331,17 @@ export async function handleCreateBanContactRequest(
         diagnostics,
         externalEntry: resolved.orchestration,
         executionStatus: resolved.last?.status ?? "LOADED",
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/telegram-persistent-reentry/begin") {
+      const began = await beginTelegramPersistentReentryRequest(runtime, context);
+      json(res, 200, {
+        requestId: began.requestId,
+        diagnostics: began.diagnostics,
+        telegramPersistentReentryEligible: began.eligible,
+        telegramPersistentReentryEstablished: began.established,
+        telegramPersistentReentryActiveRequestId: began.activeRequestId,
       });
       return;
     }
@@ -365,6 +390,13 @@ export async function handleCreateBanContactRequest(
           last = pending.last;
         }
       }
+      let bootstrapDeliveryError: Readonly<{ code: string; message: string }> | null = null;
+      if (event.name === "TELEGRAM_PERSISTENT_REENTRY.GRANTED") {
+        const delivery = await deliverPendingTelegramPersistentReentryBootstrap(runtime, context);
+        if (delivery.error) {
+          bootstrapDeliveryError = delivery.error;
+        }
+      }
       const telegramShare = shouldOpenTelegramShare(last)
         ? await buildTelegramShareInvocation(
             runtime,
@@ -372,7 +404,7 @@ export async function handleCreateBanContactRequest(
             String(context.currentTelegramUser.telegramUserId),
           )
         : null;
-      const { diagnostics } = await loadDiagnostics(
+      const { diagnostics: baseDiagnostics } = await loadDiagnostics(
         runtime,
         context,
         last,
@@ -380,6 +412,9 @@ export async function handleCreateBanContactRequest(
         telegramShare,
         externalEntry,
       );
+      const diagnostics = bootstrapDeliveryError
+        ? { ...baseDiagnostics, error: bootstrapDeliveryError }
+        : baseDiagnostics;
       json(res, 200, {
         diagnostics,
         executionStatus: last.status,
@@ -390,6 +425,12 @@ export async function handleCreateBanContactRequest(
     }
     json(res, 404, { error: { code: "NOT_FOUND", message: "Unknown TEST UI route" } });
   } catch (error) {
+    if (error instanceof TelegramPersistentReentryError) {
+      json(res, 400, {
+        error: { code: error.code, message: error.message },
+      });
+      return;
+    }
     if (error instanceof CreateBanContactTransportError) {
       json(res, 400, {
         error: { code: error.code, reason: error.reason, message: error.message },

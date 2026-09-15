@@ -72,6 +72,15 @@ export type TestUiDiagnostics = Readonly<{
     shareUrl: string;
     api: "shareMessage";
   }> | null;
+  telegramPersistentReentryEligible: boolean;
+  telegramPersistentReentryEstablished: boolean;
+  telegramPersistentReentryActiveRequestId: string | null;
+  telegramPersistentReentryBootstrapSent: boolean;
+  telegramPersistentReentry: Readonly<{
+    showCta: boolean;
+    label: "Закрепить 98+";
+    api: "requestWriteAccess";
+  }>;
   savedFrozenRimChatPresent: boolean;
   error: Readonly<{ code: string; message: string }> | null;
   contacts: readonly SelectableRegisteredUser[];
@@ -92,6 +101,8 @@ export function toTestUiDiagnostics(input: {
   telegramShare?: TestUiDiagnostics["telegramShare"];
   externalEntry?: TestUiDiagnostics["externalEntry"];
   startParamIntake?: TestUiDiagnostics["startParamIntake"];
+  telegramPersistentReentryBootstrapSent?: boolean;
+  errorOverride?: Readonly<{ code: string; message: string }> | null;
 }): TestUiDiagnostics {
   const snapshot = input.execution?.snapshot ?? input.snapshot;
   const draft = snapshot.extended.createBanDraft;
@@ -99,6 +110,9 @@ export function toTestUiDiagnostics(input: {
   const incomingItems = notificationItems.filter((item) => item.kind === "INCOMING_BAN");
   const shareOperations = Object.values(snapshot.extended.entities.shareOperations);
   const activeShare = shareOperations.find((operation) => operation.status === "ACTIVE") ?? null;
+  const eligible = snapshot.extended.telegramPersistentReentryEligible;
+  const established = snapshot.extended.telegramPersistentReentryEstablished;
+  const bootstrapSent = input.telegramPersistentReentryBootstrapSent ?? false;
   return {
     controlState: snapshot.controlState,
     currentUserId: input.currentUserId,
@@ -140,10 +154,22 @@ export function toTestUiDiagnostics(input: {
     externalEntry: input.externalEntry ?? null,
     startParamIntake: input.startParamIntake ?? null,
     telegramShare: input.telegramShare ?? null,
+    telegramPersistentReentryEligible: eligible,
+    telegramPersistentReentryEstablished: established,
+    telegramPersistentReentryActiveRequestId:
+      snapshot.extended.telegramPersistentReentryActiveRequestId,
+    telegramPersistentReentryBootstrapSent: bootstrapSent,
+    telegramPersistentReentry: {
+      showCta: eligible && !established,
+      label: "Закрепить 98+",
+      api: "requestWriteAccess",
+    },
     savedFrozenRimChatPresent: snapshot.extended.savedFrozenRimChat !== null,
-    error: input.execution?.error
-      ? { code: input.execution.error.code, message: input.execution.error.message }
-      : null,
+    error:
+      input.errorOverride ??
+      (input.execution?.error
+        ? { code: input.execution.error.code, message: input.execution.error.message }
+        : null),
     contacts: input.contacts ?? [],
   };
 }

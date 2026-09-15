@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Ban,
   BanAcceptance,
@@ -57,6 +58,12 @@ type SessionRow = {
   status_priority_item_id: string | null;
   timer_priority_item_id: string | null;
   pending_external_entry: ProductSnapshot["extended"]["pendingExternalEntry"];
+  telegram_persistent_reentry_eligible?: boolean | null;
+  telegram_persistent_reentry_established?: boolean | null;
+  telegram_persistent_reentry_active_request_id?: string | null;
+  telegram_persistent_reentry_bootstrap_sent?: boolean | null;
+  telegram_persistent_reentry_bootstrap_claimed_until_ms?: number | string | null;
+  telegram_persistent_reentry_bootstrap_claim_token?: string | null;
 };
 
 type BanSqlRow = {
@@ -67,6 +74,7 @@ type BanSqlRow = {
   duration_minutes: number;
   acceptance: BanAcceptance;
   status: BanStatus | null;
+  bound_via_telegram_share_link?: boolean | null;
   created_seq: number;
 };
 
@@ -151,6 +159,19 @@ function pairFromRow(row: PairSqlRow): CheckPair {
     receiverAnswer: row.receiver_answer,
     senderAnswer: row.sender_answer,
     resultingStatus: row.resulting_status,
+  };
+}
+
+function banFromRow(row: BanSqlRow): Ban {
+  return {
+    id: row.ban_id as Ban["id"],
+    senderId: row.sender_id as UserId,
+    receiverId: row.receiver_id as UserId | null,
+    banText: row.ban_text,
+    durationMinutes: row.duration_minutes as DurationMinutes,
+    acceptance: row.acceptance,
+    status: row.status,
+    boundViaTelegramShareLink: Boolean(row.bound_via_telegram_share_link),
   };
 }
 
@@ -269,15 +290,115 @@ export class PostgresProductStore implements ProductStore {
     if (!row) {
       return null;
     }
-    return {
-      id: row.ban_id as Ban["id"],
-      senderId: row.sender_id as UserId,
-      receiverId: row.receiver_id as UserId | null,
-      banText: row.ban_text,
-      durationMinutes: row.duration_minutes as DurationMinutes,
-      acceptance: row.acceptance,
-      status: row.status,
-    };
+    return banFromRow(row);
+  }
+
+  async markTelegramPersistentReentryBootstrapSent(currentUserId: UserId, claimToken: string) {
+    return this.client.transaction(async (tx) => {
+      const locked = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [currentUserId]);
+      const row = locked.rows[0];
+      if (!row || !row.telegram_persistent_reentry_established) {
+        return { status: "NOT_REQUIRED" as const };
+      }
+      if (row.telegram_persistent_reentry_bootstrap_sent) {
+        return { status: "ALREADY_MARKED" as const };
+      }
+      if (row.telegram_persistent_reentry_bootstrap_claim_token !== claimToken) {
+        return { status: "STALE_CLAIM" as const };
+      }
+      const updated = await tx.query<{ user_id: string }>(
+        SQL.markTelegramPersistentReentryBootstrapSent,
+        [currentUserId, claimToken],
+      );
+      if (updated.rows.length === 0) {
+        return { status: "STALE_CLAIM" as const };
+      }
+      return { status: "MARKED" as const };
+    });
+  }
+
+  async claimTelegramPersistentReentryBootstrapDelivery(
+    currentUserId: UserId,
+    nowMs: number,
+    leaseMs: number,
+  ) {
+    return this.client.transaction(async (tx) => {
+      const locked = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [currentUserId]);
+      const row = locked.rows[0];
+      if (!row || !row.telegram_persistent_reentry_established) {
+        return { status: "NOT_REQUIRED" as const };
+      }
+      if (row.telegram_persistent_reentry_bootstrap_sent) {
+        return { status: "ALREADY_SENT" as const };
+      }
+      const existingClaim =
+        row.telegram_persistent_reentry_bootstrap_claimed_until_ms === null ||
+        row.telegram_persistent_reentry_bootstrap_claimed_until_ms === undefined
+          ? null
+          : Number(row.telegram_persistent_reentry_bootstrap_claimed_until_ms);
+      if (existingClaim !== null && Number.isFinite(existingClaim) && existingClaim > nowMs) {
+        return { status: "ALREADY_CLAIMED" as const, claimedUntilMs: existingClaim };
+      }
+      const claimedUntilMs = nowMs + leaseMs;
+      const claimToken = randomUUID();
+      const updated = await tx.query<{
+        user_id: string;
+        telegram_persistent_reentry_bootstrap_claimed_until_ms: number | string;
+        telegram_persistent_reentry_bootstrap_claim_token: string;
+      }>(SQL.claimTelegramPersistentReentryBootstrapDelivery, [
+        currentUserId,
+        claimedUntilMs,
+        nowMs,
+        claimToken,
+      ]);
+      if (updated.rows.length === 0) {
+        const again = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [currentUserId]);
+        const againRow = again.rows[0];
+        if (againRow?.telegram_persistent_reentry_bootstrap_sent) {
+          return { status: "ALREADY_SENT" as const };
+        }
+        const againClaim =
+          againRow?.telegram_persistent_reentry_bootstrap_claimed_until_ms === null ||
+          againRow?.telegram_persistent_reentry_bootstrap_claimed_until_ms === undefined
+            ? nowMs
+            : Number(againRow.telegram_persistent_reentry_bootstrap_claimed_until_ms);
+        return {
+          status: "ALREADY_CLAIMED" as const,
+          claimedUntilMs: Number.isFinite(againClaim) ? againClaim : nowMs,
+        };
+      }
+      return { status: "CLAIMED" as const, claimToken, claimedUntilMs };
+    });
+  }
+
+  async releaseTelegramPersistentReentryBootstrapClaim(currentUserId: UserId, claimToken: string) {
+    return this.client.transaction(async (tx) => {
+      const locked = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [currentUserId]);
+      const row = locked.rows[0];
+      if (!row) {
+        return { status: "NOT_HELD" as const };
+      }
+      if (row.telegram_persistent_reentry_bootstrap_sent) {
+        return { status: "ALREADY_SENT" as const };
+      }
+      if (
+        row.telegram_persistent_reentry_bootstrap_claim_token === null ||
+        row.telegram_persistent_reentry_bootstrap_claim_token === undefined
+      ) {
+        return { status: "NOT_HELD" as const };
+      }
+      if (row.telegram_persistent_reentry_bootstrap_claim_token !== claimToken) {
+        return { status: "STALE_CLAIM" as const };
+      }
+      const updated = await tx.query<{ user_id: string }>(
+        SQL.releaseTelegramPersistentReentryBootstrapClaim,
+        [currentUserId, claimToken],
+      );
+      if (updated.rows.length === 0) {
+        return { status: "STALE_CLAIM" as const };
+      }
+      return { status: "RELEASED" as const };
+    });
   }
 
   async bindBanReceiver(banId: BanId, receiverId: UserId): Promise<BanReceiverBindResult> {
@@ -335,15 +456,7 @@ export class PostgresProductStore implements ProductStore {
     if (!existingRow) {
       return { status: "MISSING" };
     }
-    const existing = {
-      id: existingRow.ban_id as Ban["id"],
-      senderId: existingRow.sender_id as UserId,
-      receiverId: existingRow.receiver_id as UserId | null,
-      banText: existingRow.ban_text,
-      durationMinutes: existingRow.duration_minutes as DurationMinutes,
-      acceptance: existingRow.acceptance,
-      status: existingRow.status,
-    };
+    const existing = banFromRow(existingRow);
     if (existing.receiverId === receiverId) {
       return { status: "ALREADY_BOUND", ban: existing };
     }
@@ -355,15 +468,7 @@ export class PostgresProductStore implements ProductStore {
     if (row) {
       return {
         status: "BOUND",
-        ban: {
-          id: row.ban_id as Ban["id"],
-          senderId: row.sender_id as UserId,
-          receiverId: row.receiver_id as UserId | null,
-          banText: row.ban_text,
-          durationMinutes: row.duration_minutes as DurationMinutes,
-          acceptance: row.acceptance,
-          status: row.status,
-        },
+        ban: banFromRow(row),
       };
     }
     const racedResult = await client.query<BanSqlRow>(SQL.selectBanById, [banId]);
@@ -371,15 +476,7 @@ export class PostgresProductStore implements ProductStore {
     if (!racedRow) {
       return { status: "MISSING" };
     }
-    const raced = {
-      id: racedRow.ban_id as Ban["id"],
-      senderId: racedRow.sender_id as UserId,
-      receiverId: racedRow.receiver_id as UserId | null,
-      banText: racedRow.ban_text,
-      durationMinutes: racedRow.duration_minutes as DurationMinutes,
-      acceptance: racedRow.acceptance,
-      status: racedRow.status,
-    };
+    const raced = banFromRow(racedRow);
     if (raced.receiverId === receiverId) {
       return { status: "ALREADY_BOUND", ban: raced };
     }
@@ -440,6 +537,7 @@ export class PostgresProductStore implements ProductStore {
         ban.durationMinutes,
         ban.acceptance,
         ban.status,
+        ban.boundViaTelegramShareLink,
       ]);
     }
     if (this.failAfterBans) {
@@ -504,7 +602,24 @@ export class PostgresProductStore implements ProductStore {
         jsonParam(operation.sendDraft),
       ]);
     }
-    const session = sessionFromSnapshot(currentUserId, snapshot, nextRevision);
+    const previousBootstrapSent = Boolean(
+      sessionResult.rows[0]?.telegram_persistent_reentry_bootstrap_sent,
+    );
+    const previousClaimedUntil =
+      sessionResult.rows[0]?.telegram_persistent_reentry_bootstrap_claimed_until_ms;
+    const previousClaimedUntilMs =
+      previousClaimedUntil === null || previousClaimedUntil === undefined
+        ? null
+        : Number(previousClaimedUntil);
+    const previousClaimToken =
+      sessionResult.rows[0]?.telegram_persistent_reentry_bootstrap_claim_token ?? null;
+    const session = sessionFromSnapshot(currentUserId, snapshot, nextRevision, {
+      telegramPersistentReentryBootstrapSent: previousBootstrapSent,
+      telegramPersistentReentryBootstrapClaimedUntilMs: Number.isFinite(previousClaimedUntilMs)
+        ? previousClaimedUntilMs
+        : null,
+      telegramPersistentReentryBootstrapClaimToken: previousClaimToken,
+    });
     await tx.query(SQL.upsertSession, [
       session.userId,
       session.revision,
@@ -522,6 +637,12 @@ export class PostgresProductStore implements ProductStore {
       session.statusPriorityItemId,
       session.timerPriorityItemId,
       jsonParam(session.pendingExternalEntry),
+      session.telegramPersistentReentryEligible,
+      session.telegramPersistentReentryEstablished,
+      session.telegramPersistentReentryActiveRequestId,
+      session.telegramPersistentReentryBootstrapSent,
+      session.telegramPersistentReentryBootstrapClaimedUntilMs,
+      session.telegramPersistentReentryBootstrapClaimToken,
     ]);
     return this.read(tx, currentUserId);
   }
@@ -532,15 +653,7 @@ export class PostgresProductStore implements ProductStore {
     ]);
     const sessionRow = sessionResult.rows[0];
     const bansResult = await client.query<BanSqlRow>(SQL.selectBansForUser, [currentUserId]);
-    const bans = bansResult.rows.map((row): Ban => ({
-      id: row.ban_id as Ban["id"],
-      senderId: row.sender_id as UserId,
-      receiverId: row.receiver_id as UserId | null,
-      banText: row.ban_text,
-      durationMinutes: row.duration_minutes as DurationMinutes,
-      acceptance: row.acceptance,
-      status: row.status,
-    }));
+    const bans = bansResult.rows.map((row): Ban => banFromRow(row));
     const banIds = bans.map((ban) => ban.id);
     const timersResult = await client.query<TimerSqlRow>(SQL.selectTimersForBans, [banIds]);
     const pairsResult = await client.query<PairSqlRow>(SQL.selectPairsForBans, [banIds]);
@@ -569,10 +682,37 @@ export class PostgresProductStore implements ProductStore {
           timerPriorityItemId:
             sessionRow.timer_priority_item_id as ProductSnapshot["extended"]["priorities"]["timerItemId"],
           pendingExternalEntry: parseJson(sessionRow.pending_external_entry),
+          telegramPersistentReentryEligible: Boolean(
+            sessionRow.telegram_persistent_reentry_eligible,
+          ),
+          telegramPersistentReentryEstablished: Boolean(
+            sessionRow.telegram_persistent_reentry_established,
+          ),
+          telegramPersistentReentryActiveRequestId:
+            sessionRow.telegram_persistent_reentry_active_request_id ?? null,
+          telegramPersistentReentryBootstrapSent: Boolean(
+            sessionRow.telegram_persistent_reentry_bootstrap_sent,
+          ),
+          telegramPersistentReentryBootstrapClaimedUntilMs: (() => {
+            const raw = sessionRow.telegram_persistent_reentry_bootstrap_claimed_until_ms;
+            if (raw === null || raw === undefined) {
+              return null;
+            }
+            const value = Number(raw);
+            return Number.isFinite(value) ? value : null;
+          })(),
+          telegramPersistentReentryBootstrapClaimToken:
+            sessionRow.telegram_persistent_reentry_bootstrap_claim_token ?? null,
         }
       : undefined;
     return {
       revision: session?.revision ?? 0,
+      telegramPersistentReentryBootstrapSent:
+        session?.telegramPersistentReentryBootstrapSent ?? false,
+      telegramPersistentReentryBootstrapClaimedUntilMs:
+        session?.telegramPersistentReentryBootstrapClaimedUntilMs ?? null,
+      telegramPersistentReentryBootstrapClaimToken:
+        session?.telegramPersistentReentryBootstrapClaimToken ?? null,
       snapshot: snapshotFromRecords({
         session,
         bans,

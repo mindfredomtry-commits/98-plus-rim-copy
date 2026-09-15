@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Ban, ProductSnapshot, TransitionResult, UserId } from "@98plus/product-model";
 import type { BanId } from "@98plus/product-model";
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
@@ -47,6 +48,83 @@ export class InMemoryProductStore implements ProductStore {
   async persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot> {
     const snapshot = requireApplied(input.result);
     return this.write(input.currentUserId, input.expectedRevision, snapshot, false);
+  }
+
+  async markTelegramPersistentReentryBootstrapSent(currentUserId: UserId, claimToken: string) {
+    return this.withUserLock(currentUserId, () => {
+      const session = this.tables.lockSession(currentUserId);
+      if (!session || !session.telegramPersistentReentryEstablished) {
+        return { status: "NOT_REQUIRED" as const };
+      }
+      if (session.telegramPersistentReentryBootstrapSent) {
+        return { status: "ALREADY_MARKED" as const };
+      }
+      if (session.telegramPersistentReentryBootstrapClaimToken !== claimToken) {
+        return { status: "STALE_CLAIM" as const };
+      }
+      this.tables.writeSession({
+        ...session,
+        revision: session.revision + 1,
+        telegramPersistentReentryBootstrapSent: true,
+        telegramPersistentReentryBootstrapClaimedUntilMs: null,
+        telegramPersistentReentryBootstrapClaimToken: null,
+      });
+      return { status: "MARKED" as const };
+    });
+  }
+
+  async claimTelegramPersistentReentryBootstrapDelivery(
+    currentUserId: UserId,
+    nowMs: number,
+    leaseMs: number,
+  ) {
+    return this.withUserLock(currentUserId, () => {
+      const session = this.tables.lockSession(currentUserId);
+      if (!session || !session.telegramPersistentReentryEstablished) {
+        return { status: "NOT_REQUIRED" as const };
+      }
+      if (session.telegramPersistentReentryBootstrapSent) {
+        return { status: "ALREADY_SENT" as const };
+      }
+      const claimedUntil = session.telegramPersistentReentryBootstrapClaimedUntilMs;
+      if (claimedUntil !== null && claimedUntil > nowMs) {
+        return { status: "ALREADY_CLAIMED" as const, claimedUntilMs: claimedUntil };
+      }
+      const nextClaimedUntil = nowMs + leaseMs;
+      const claimToken = randomUUID();
+      this.tables.writeSession({
+        ...session,
+        revision: session.revision + 1,
+        telegramPersistentReentryBootstrapClaimedUntilMs: nextClaimedUntil,
+        telegramPersistentReentryBootstrapClaimToken: claimToken,
+      });
+      return { status: "CLAIMED" as const, claimToken, claimedUntilMs: nextClaimedUntil };
+    });
+  }
+
+  async releaseTelegramPersistentReentryBootstrapClaim(currentUserId: UserId, claimToken: string) {
+    return this.withUserLock(currentUserId, () => {
+      const session = this.tables.lockSession(currentUserId);
+      if (!session) {
+        return { status: "NOT_HELD" as const };
+      }
+      if (session.telegramPersistentReentryBootstrapSent) {
+        return { status: "ALREADY_SENT" as const };
+      }
+      if (session.telegramPersistentReentryBootstrapClaimToken === null) {
+        return { status: "NOT_HELD" as const };
+      }
+      if (session.telegramPersistentReentryBootstrapClaimToken !== claimToken) {
+        return { status: "STALE_CLAIM" as const };
+      }
+      this.tables.writeSession({
+        ...session,
+        revision: session.revision + 1,
+        telegramPersistentReentryBootstrapClaimedUntilMs: null,
+        telegramPersistentReentryBootstrapClaimToken: null,
+      });
+      return { status: "RELEASED" as const };
+    });
   }
 
   async withCheckPairLock<T>(
@@ -140,6 +218,12 @@ export class InMemoryProductStore implements ProductStore {
     const banIds = bans.map((ban) => ban.id);
     return {
       revision: session?.revision ?? 0,
+      telegramPersistentReentryBootstrapSent:
+        session?.telegramPersistentReentryBootstrapSent ?? false,
+      telegramPersistentReentryBootstrapClaimedUntilMs:
+        session?.telegramPersistentReentryBootstrapClaimedUntilMs ?? null,
+      telegramPersistentReentryBootstrapClaimToken:
+        session?.telegramPersistentReentryBootstrapClaimToken ?? null,
       snapshot: snapshotFromRecords({
         session,
         bans,
@@ -204,7 +288,16 @@ export class InMemoryProductStore implements ProductStore {
     this.tables.replaceOwnedItems(currentUserId, Object.values(entities.notificationItems));
     this.tables.replaceOwnedShares(currentUserId, Object.values(entities.shareOperations));
     this.tables.replaceOperations(currentUserId, Object.values(snapshot.runtime.pendingOperations));
-    this.tables.writeSession(sessionFromSnapshot(currentUserId, snapshot, nextRevision));
+    this.tables.writeSession(
+      sessionFromSnapshot(currentUserId, snapshot, nextRevision, {
+        telegramPersistentReentryBootstrapSent:
+          current?.telegramPersistentReentryBootstrapSent ?? false,
+        telegramPersistentReentryBootstrapClaimedUntilMs:
+          current?.telegramPersistentReentryBootstrapClaimedUntilMs ?? null,
+        telegramPersistentReentryBootstrapClaimToken:
+          current?.telegramPersistentReentryBootstrapClaimToken ?? null,
+      }),
+    );
     return this.read(currentUserId);
   }
 }

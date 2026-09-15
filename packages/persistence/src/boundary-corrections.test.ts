@@ -387,6 +387,9 @@ describe("Defect C — single identity migration authority", () => {
     expect(existsSync(join(PACKAGES, "persistence/schema/001_identity_users.sql"))).toBe(false);
     expect(readdirSync(join(PACKAGES, "persistence/schema"))).toEqual([
       "002_product_persistence.sql",
+      "003_telegram_persistent_reentry.sql",
+      "004_telegram_persistent_reentry_bootstrap_claim.sql",
+      "005_telegram_persistent_reentry_bootstrap_claim_token.sql",
     ]);
     expect(IDENTITY_MIGRATION_AUTHORITY).toBe("packages/identity/schema/001_identity_users.sql");
     expect(MIGRATION_CHAIN.filter((entry) => entry.authority === "identity")).toHaveLength(1);
@@ -396,9 +399,18 @@ describe("Defect C — single identity migration authority", () => {
     expect(MIGRATION_CHAIN.map((entry) => [entry.authority, entry.file])).toEqual([
       ["identity", "packages/identity/schema/001_identity_users.sql"],
       ["persistence", "packages/persistence/schema/002_product_persistence.sql"],
+      ["persistence", "packages/persistence/schema/003_telegram_persistent_reentry.sql"],
+      [
+        "persistence",
+        "packages/persistence/schema/004_telegram_persistent_reentry_bootstrap_claim.sql",
+      ],
+      [
+        "persistence",
+        "packages/persistence/schema/005_telegram_persistent_reentry_bootstrap_claim_token.sql",
+      ],
     ]);
     const sql = allMigrationSql();
-    expect(sql).toHaveLength(2);
+    expect(sql).toHaveLength(5);
     expect(sql[0]).toBe(identitySchemaSql());
     expect(sql[1]).toBe(productPersistenceSql());
   });

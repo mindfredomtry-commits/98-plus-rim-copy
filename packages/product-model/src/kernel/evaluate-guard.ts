@@ -211,6 +211,29 @@ function externalEntryGuardB(input: ResolveInput): boolean {
   return ban.receiverId === input.context.currentUserId;
 }
 
+function telegramPersistentReentryRequestMatches(input: ResolveInput): boolean {
+  const active = input.snapshot.extended.telegramPersistentReentryActiveRequestId;
+  const requestId = (input.event.payload as { requestId?: string }).requestId;
+  return active !== null && !!requestId && active === requestId;
+}
+
+/** E-61 Guard A: valid active request + eligible + not yet established. */
+function telegramPersistentReentryGrantedGuardA(input: ResolveInput): boolean {
+  return (
+    telegramPersistentReentryRequestMatches(input) &&
+    input.snapshot.extended.telegramPersistentReentryEligible === true &&
+    input.snapshot.extended.telegramPersistentReentryEstablished === false
+  );
+}
+
+/** E-62 Guard A: valid active request + not yet established. */
+function telegramPersistentReentryDeclinedGuardA(input: ResolveInput): boolean {
+  return (
+    telegramPersistentReentryRequestMatches(input) &&
+    input.snapshot.extended.telegramPersistentReentryEstablished === false
+  );
+}
+
 function currentContextRequest(input: ResolveInput): boolean {
   const chat = input.snapshot.extended.rimChat;
   const selectedContactId = (input.event.payload as { selectedContactId?: string })
@@ -281,6 +304,14 @@ function evaluateStructured(guard: Guard, input: ResolveInput): boolean {
       return incomingTargetUnprocessed(input);
     case "EXTERNAL_ENTRY_GUARD_B":
       return externalEntryGuardB(input);
+    case "TELEGRAM_PERSISTENT_REENTRY_GRANTED_GUARD_A":
+      return telegramPersistentReentryGrantedGuardA(input);
+    case "TELEGRAM_PERSISTENT_REENTRY_GRANTED_GUARD_B":
+      return !telegramPersistentReentryGrantedGuardA(input);
+    case "TELEGRAM_PERSISTENT_REENTRY_DECLINED_GUARD_A":
+      return telegramPersistentReentryDeclinedGuardA(input);
+    case "TELEGRAM_PERSISTENT_REENTRY_DECLINED_GUARD_B":
+      return !telegramPersistentReentryDeclinedGuardA(input);
     case "CURRENT_RIM_REQUEST":
       return guard.request === "CONTEXT" ? currentContextRequest(input) : currentAiRequest(input);
     case "SELECTED_CONTACT_ABSENT":

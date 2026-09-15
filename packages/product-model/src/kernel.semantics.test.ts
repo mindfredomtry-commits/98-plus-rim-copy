@@ -1949,6 +1949,6 @@ describe("Stage 2 semantic effect audit", () => {
 
 describe("Stage 2 semantic audit inventory", () => {
   it("keeps every Matrix row identity available for the reachability suite", () => {
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(333);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(337);
   });
 });

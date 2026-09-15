@@ -27,7 +27,7 @@ describe("Stage 4 boundary", () => {
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(333);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(337);
     expect(STAGE_4_EXCLUDES).toContain("external-entry");
     expect(STAGE_4_EXCLUDES).toContain("openai");
     expect(STAGE_4_EXCLUDES).toContain("ui-screens");
@@ -57,9 +57,15 @@ describe("Stage 4 migrations", () => {
     expect(MIGRATION_CHAIN.map((entry) => entry.file)).toEqual([
       "packages/identity/schema/001_identity_users.sql",
       "packages/persistence/schema/002_product_persistence.sql",
+      "packages/persistence/schema/003_telegram_persistent_reentry.sql",
+      "packages/persistence/schema/004_telegram_persistent_reentry_bootstrap_claim.sql",
+      "packages/persistence/schema/005_telegram_persistent_reentry_bootstrap_claim_token.sql",
     ]);
     expect(MIGRATION_CHAIN[0]?.authority).toBe("identity");
     expect(MIGRATION_CHAIN[1]?.authority).toBe("persistence");
+    expect(MIGRATION_CHAIN[2]?.authority).toBe("persistence");
+    expect(MIGRATION_CHAIN[3]?.authority).toBe("persistence");
+    expect(MIGRATION_CHAIN[4]?.authority).toBe("persistence");
     expect(identitySchemaSql()).toContain("identity_users");
     expect(identitySchemaSql()).toContain("telegram_user_id");
   });

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>98+ TEST UI — implemented through Stage 12</title>
+    <title>98+ TEST UI — implemented through Stage 13A</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
       :root {
@@ -51,14 +51,21 @@
       }
       #product-screen {
         min-height: 8em;
+        position: relative;
+      }
+      .telegram-persistent-reentry-cta {
+        margin-top: 8px;
+        padding: 8px;
+        border: 1px dashed #444;
+        background: #f7f7f7;
       }
     </style>
   </head>
   <body>
-    <h1>98+ TEST UI — implemented through Stage 12</h1>
+    <h1>98+ TEST UI — implemented through Stage 13A</h1>
     <p>
       Distinct Product Screens follow backend controlState. Not production / beautiful UI. Temporary
-      Stage 12 Telegram Share Link External Entry verification host.
+      Stage 13A Telegram Persistent Re-entry verification host.
     </p>
     <p id="runtime-auth-mode" class="dev-label"></p>
 
@@ -250,6 +257,64 @@
             void sendEvent(name, payload);
           });
         }
+        for (const button of root.querySelectorAll("[data-action]")) {
+          button.addEventListener("click", () => {
+            const action = button.getAttribute("data-action");
+            if (action === "telegram-persistent-reentry-pin") {
+              void runTelegramPersistentReentryPin();
+              return;
+            }
+            if (action === "telegram-persistent-reentry-dev-grant") {
+              void runTelegramPersistentReentryDev(true);
+              return;
+            }
+            if (action === "telegram-persistent-reentry-dev-decline") {
+              void runTelegramPersistentReentryDev(false);
+            }
+          });
+        }
+      }
+
+      async function beginTelegramPersistentReentry() {
+        const body = await call("/api/telegram-persistent-reentry/begin", {
+          method: "POST",
+          body: "{}",
+        });
+        return body.requestId;
+      }
+
+      async function dispatchReentryOutcome(granted, requestId) {
+        const name = granted
+          ? "TELEGRAM_PERSISTENT_REENTRY.GRANTED"
+          : "TELEGRAM_PERSISTENT_REENTRY.DECLINED";
+        return sendEvent(name, { requestId });
+      }
+
+      async function runTelegramPersistentReentryPin() {
+        const requestId = await beginTelegramPersistentReentry();
+        const webApp = telegramWebApp();
+        if (webApp && typeof webApp.requestWriteAccess === "function") {
+          await new Promise((resolve) => {
+            webApp.requestWriteAccess((granted) => {
+              void dispatchReentryOutcome(Boolean(granted), requestId).finally(resolve);
+            });
+          });
+          return;
+        }
+        diagnostics = {
+          ...(diagnostics || {}),
+          error: {
+            code: "TELEGRAM_WRITE_ACCESS_UNAVAILABLE",
+            message:
+              "Telegram.WebApp.requestWriteAccess unavailable — use DEV ONLY grant/decline (does not fake production).",
+          },
+        };
+        render();
+      }
+
+      async function runTelegramPersistentReentryDev(granted) {
+        const requestId = await beginTelegramPersistentReentry();
+        await dispatchReentryOutcome(granted, requestId);
       }
 
       async function sendForbid() {

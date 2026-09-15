@@ -188,7 +188,21 @@ export function sessionFromSnapshot(
   userId: UserId,
   snapshot: ProductSnapshot,
   revision: number,
+  options?: Readonly<{
+    telegramPersistentReentryBootstrapSent?: boolean;
+    telegramPersistentReentryBootstrapClaimedUntilMs?: number | null;
+    telegramPersistentReentryBootstrapClaimToken?: string | null;
+  }>,
 ): SessionRecord {
+  const previousBootstrapSent = options?.telegramPersistentReentryBootstrapSent ?? false;
+  const previousClaimedUntilMs =
+    options?.telegramPersistentReentryBootstrapClaimedUntilMs === undefined
+      ? null
+      : options.telegramPersistentReentryBootstrapClaimedUntilMs;
+  const previousClaimToken =
+    options?.telegramPersistentReentryBootstrapClaimToken === undefined
+      ? null
+      : options.telegramPersistentReentryBootstrapClaimToken;
   return {
     userId,
     revision,
@@ -206,6 +220,16 @@ export function sessionFromSnapshot(
     statusPriorityItemId: snapshot.extended.priorities.statusItemId,
     timerPriorityItemId: snapshot.extended.priorities.timerItemId,
     pendingExternalEntry: cloneJson(snapshot.extended.pendingExternalEntry),
+    telegramPersistentReentryEligible: snapshot.extended.telegramPersistentReentryEligible,
+    telegramPersistentReentryEstablished: snapshot.extended.telegramPersistentReentryEstablished,
+    telegramPersistentReentryActiveRequestId:
+      snapshot.extended.telegramPersistentReentryActiveRequestId,
+    // Persistence-only delivery completion — never derived from established.
+    telegramPersistentReentryBootstrapSent: previousBootstrapSent,
+    // Persistence-only in-flight claim lease — preserved across Product transitions.
+    telegramPersistentReentryBootstrapClaimedUntilMs: previousClaimedUntilMs,
+    // Persistence-only fencing token — preserved across Product transitions.
+    telegramPersistentReentryBootstrapClaimToken: previousClaimToken,
   };
 }
 
@@ -234,6 +258,11 @@ export function snapshotFromRecords(input: {
         timerItemId: input.session?.timerPriorityItemId ?? null,
       },
       pendingExternalEntry: cloneJson(input.session?.pendingExternalEntry ?? null),
+      telegramPersistentReentryEligible: input.session?.telegramPersistentReentryEligible ?? false,
+      telegramPersistentReentryEstablished:
+        input.session?.telegramPersistentReentryEstablished ?? false,
+      telegramPersistentReentryActiveRequestId:
+        input.session?.telegramPersistentReentryActiveRequestId ?? null,
       entities: {
         bans: Object.fromEntries(input.bans.map((ban) => [ban.id, ban])),
         notificationItems: Object.fromEntries(input.items.map((item) => [item.id, item])),
@@ -284,4 +313,13 @@ export type SessionRecord = Readonly<{
   statusPriorityItemId: ProductSnapshot["extended"]["priorities"]["statusItemId"];
   timerPriorityItemId: ProductSnapshot["extended"]["priorities"]["timerItemId"];
   pendingExternalEntry: PendingExternalEntry | null;
+  telegramPersistentReentryEligible: boolean;
+  telegramPersistentReentryEstablished: boolean;
+  telegramPersistentReentryActiveRequestId: string | null;
+  /** Persistence-only Bot API send idempotency; not a Product Authority fact. */
+  telegramPersistentReentryBootstrapSent: boolean;
+  /** Persistence-only claim lease expiry (epoch ms); null if unclaimed. */
+  telegramPersistentReentryBootstrapClaimedUntilMs: number | null;
+  /** Persistence-only fencing token for the active claim; null if unclaimed. */
+  telegramPersistentReentryBootstrapClaimToken: string | null;
 }>;

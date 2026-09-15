@@ -15,9 +15,9 @@ describe("Stage 3 identity boundary", () => {
   it("does not change canonical Product Control State or Event counts", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(PRODUCT_CONTROL_STATE_DEFINITIONS).toHaveLength(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(55);
-    expect(CANONICAL_EVENT_DEFINITIONS).toHaveLength(55);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(333);
+    expect(CANONICAL_EVENT_COUNT).toBe(57);
+    expect(CANONICAL_EVENT_DEFINITIONS).toHaveLength(57);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(337);
   });
 
   it("does not add authentication Product States or Events", () => {

@@ -10,6 +10,9 @@ export {
   identitySchemaSql,
   MIGRATION_CHAIN,
   productPersistenceSql,
+  telegramPersistentReentryBootstrapClaimSql,
+  telegramPersistentReentryBootstrapClaimTokenSql,
+  telegramPersistentReentrySql,
 } from "./migrations.ts";
 export { PostgresProductStore } from "./postgres-store.ts";
 export { SQL } from "./sql.ts";
@@ -18,12 +21,15 @@ export { DURABLE_COLLECTION_SYNC } from "./sync-policy.ts";
 export type {
   BanReceiverBindResult,
   CheckPairLockContext,
+  ClaimTelegramPersistentReentryBootstrapDeliveryResult,
   LoadedSnapshot,
+  MarkTelegramPersistentReentryBootstrapSentResult,
   PersistShareLinkResolvedInput,
   PersistShareLinkResolvedResult,
   PersistTransitionInput,
   PersistenceSqlClient,
   ProductStore,
   RelationshipBanRecord,
+  ReleaseTelegramPersistentReentryBootstrapClaimResult,
   StoredShareLookup,
 } from "./types.ts";

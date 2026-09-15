@@ -14,6 +14,9 @@ export const EXTERNAL_ENTRY_STAGE = 12;
 
 export const CONTACT_RELATIONSHIP_STAGE = 13;
 
+/** Stage 13A — Telegram Persistent Re-entry Runtime / CTA / bootstrap. */
+export const TELEGRAM_PERSISTENT_REENTRY_STAGE = "13A";
+
 export const STAGE_6_EXCLUDES = [
   "incoming-ban-processing-ui",
   "overboard-action",

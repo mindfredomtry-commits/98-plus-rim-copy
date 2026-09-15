@@ -28,6 +28,10 @@ export type Guard =
   | { type: "PENDING_EXTERNAL_ENTRY_TTL_EXPIRED" }
   | { type: "EXTERNAL_ENTRY_GUARD_A" }
   | { type: "EXTERNAL_ENTRY_GUARD_B" }
+  | { type: "TELEGRAM_PERSISTENT_REENTRY_GRANTED_GUARD_A" }
+  | { type: "TELEGRAM_PERSISTENT_REENTRY_GRANTED_GUARD_B" }
+  | { type: "TELEGRAM_PERSISTENT_REENTRY_DECLINED_GUARD_A" }
+  | { type: "TELEGRAM_PERSISTENT_REENTRY_DECLINED_GUARD_B" }
   | { type: "CURRENT_RIM_REQUEST"; request: "CONTEXT" | "AI" }
   | { type: "SELECTED_CONTACT_ABSENT" }
   | { type: "SELECTED_CONTACT_IS_DIFFERENT" }
@@ -49,7 +53,7 @@ export type MatrixStateRef =
   "GLOBAL" | "BOOTSTRAP" | "ALL_STATES" | "E43" | import("./states.ts").ProductControlState;
 
 export type MatrixReference = Readonly<{
-  document: "MVP8_STATE_EVENT_MATRIX";
+  document: "MVP9_STATE_EVENT_MATRIX";
   state: MatrixStateRef;
   event: CanonicalEventName;
   branch?: string;
