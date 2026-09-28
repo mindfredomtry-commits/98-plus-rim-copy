@@ -168,6 +168,7 @@ function replyWorld(
         durationMinutes: 15 as DurationMinutes,
         selectedContactId: null,
         origin: null,
+        proposalId: null,
       },
     }),
   );
@@ -434,6 +435,7 @@ describe("MVP10 Telegram Persistent Re-entry", () => {
             durationMinutes: 15 as DurationMinutes,
             selectedContactId: null,
             origin: null,
+            proposalId: null,
           },
         }),
       ),

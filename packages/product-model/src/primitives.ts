@@ -35,3 +35,7 @@ export function isValidBanText(value: string): boolean {
 export function isValidPercentage(value: number): boolean {
   return Number.isFinite(value) && value >= 0 && value <= 100;
 }
+
+export function isValidExecutionProbability(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= 1;
+}

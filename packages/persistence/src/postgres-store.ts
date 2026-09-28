@@ -77,6 +77,7 @@ type BanSqlRow = {
   acceptance: BanAcceptance;
   status: BanStatus | null;
   bound_via_telegram_share_link?: boolean | null;
+  source_proposal_id?: string | null;
   created_seq: number;
 };
 
@@ -174,6 +175,9 @@ function banFromRow(row: BanSqlRow): Ban {
     acceptance: row.acceptance,
     status: row.status,
     boundViaTelegramShareLink: Boolean(row.bound_via_telegram_share_link),
+    sourceProposalId: row.source_proposal_id
+      ? (row.source_proposal_id as Ban["sourceProposalId"])
+      : null,
   };
 }
 
@@ -540,6 +544,7 @@ export class PostgresProductStore implements ProductStore {
         ban.acceptance,
         ban.status,
         ban.boundViaTelegramShareLink,
+        ban.sourceProposalId,
       ]);
     }
     if (this.failAfterBans) {

@@ -19,6 +19,7 @@ import type {
   DurationMinutes,
   NotificationItemId,
   OperationId,
+  ProposalId,
   ShareAttemptId,
   ShareLinkId,
   UserId,
@@ -104,6 +105,7 @@ function captureSendDraft(
         durationMinutes: draft.durationMinutes,
         selectedContactId: null,
         origin: null,
+        proposalId: null,
       };
     }
   }
@@ -120,6 +122,7 @@ function captureSendDraft(
         durationMinutes: draft.durationMinutes,
         selectedContactId: draft.selectedContactId,
         origin: draft.origin,
+        proposalId: draft.proposalId,
       };
     }
   }
@@ -150,6 +153,7 @@ function createBanSendFacts(input: ResolveInput): {
   durationMinutes: DurationMinutes;
   selectedContactId: UserId | null;
   origin: NonNullable<PendingSendDraft["origin"]> | null;
+  proposalId: ProposalId | null;
 } | null {
   const sessionDraft = input.snapshot.extended.createBanDraft;
   const captured = correlatedPendingOperation(input)?.sendDraft ?? null;
@@ -157,6 +161,7 @@ function createBanSendFacts(input: ResolveInput): {
   const durationMinutes = sessionDraft?.durationMinutes ?? captured?.durationMinutes ?? null;
   const origin = sessionDraft?.origin ?? captured?.origin ?? null;
   const selectedContactId = sessionDraft?.selectedContactId ?? captured?.selectedContactId ?? null;
+  const proposalId = captured?.proposalId ?? sessionDraft?.proposalId ?? null;
   if (
     !banText ||
     !isValidBanText(banText) ||
@@ -165,7 +170,7 @@ function createBanSendFacts(input: ResolveInput): {
   ) {
     return null;
   }
-  return { banText, durationMinutes, selectedContactId, origin };
+  return { banText, durationMinutes, selectedContactId, origin, proposalId };
 }
 
 function matchingShare(input: ResolveInput): ShareOperation | null {
@@ -403,6 +408,7 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
       acceptance: "PENDING",
       status: null,
       boundViaTelegramShareLink: false,
+      sourceProposalId: null,
     };
     return {
       ok: true,
@@ -458,6 +464,7 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
       acceptance: "PENDING",
       status: null,
       boundViaTelegramShareLink: false,
+      sourceProposalId: null,
     };
     const effects: Effect[] = [{ type: "UPSERT_BAN", ban: created }];
     if (row.state.includes("FROM_INCOMING_BAN")) {
@@ -481,6 +488,17 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
     if (draft.origin === "CONTACT" && !receiverId) {
       return missing(row, "CONTACT Create Ban requires selectedContact as receiver");
     }
+    if (draft.origin === "RIM" && !draft.proposalId) {
+      return missing(row, "RIM Create Ban requires the canonical sourceProposalId");
+    }
+    const linked = draft.proposalId
+      ? Object.values(snapshot.extended.entities.bans).find(
+          (ban) => ban.sourceProposalId === draft.proposalId && ban.id !== createdBanId,
+        )
+      : undefined;
+    if (linked) {
+      return missing(row, "sourceProposalId is already linked to a canonical Ban");
+    }
     const existing = snapshot.extended.entities.bans[createdBanId];
     return {
       ok: true,
@@ -496,6 +514,7 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
             acceptance: "PENDING",
             status: null,
             boundViaTelegramShareLink: false,
+            sourceProposalId: draft.proposalId,
           },
         },
       ],
@@ -616,15 +635,24 @@ export function instantiateEffects(
       }
       case "REQUEST_RIM_AI": {
         const fromChat = effects.find((effect) => effect.type === "SET_RIM_CHAT");
-        const requestId =
+        const pendingFromChat =
           fromChat &&
           fromChat.type === "SET_RIM_CHAT" &&
           fromChat.chat?.aiOperation.status === "PENDING"
-            ? fromChat.chat.aiOperation.requestId
-            : (context.allocateId("ai") as import("../ids.ts").AiRequestId);
+            ? fromChat.chat.aiOperation
+            : null;
+        const failed =
+          snapshot.extended.rimChat?.aiOperation.status === "FAILED"
+            ? snapshot.extended.rimChat.aiOperation
+            : null;
+        const logical = pendingFromChat ?? failed;
+        if (!logical) {
+          return missing(row, "REQUEST_RIM_AI requires the logical RimRequestSnapshot");
+        }
         effects.push({
           type: "REQUEST_RIM_AI",
-          requestId,
+          requestId: logical.requestId,
+          snapshot: logical.snapshot,
         });
         break;
       }

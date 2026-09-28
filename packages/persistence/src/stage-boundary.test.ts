@@ -27,7 +27,7 @@ describe("Stage 4 boundary", () => {
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(337);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(342);
     expect(STAGE_4_EXCLUDES).toContain("external-entry");
     expect(STAGE_4_EXCLUDES).toContain("openai");
     expect(STAGE_4_EXCLUDES).toContain("ui-screens");
@@ -38,13 +38,16 @@ describe("Stage 4 boundary", () => {
 describe("snapshot field classification", () => {
   it("classifies durable facts, session state, transient execution, and derived data", () => {
     expect(SNAPSHOT_FIELD_CLASSIFICATION["extended.entities.bans"]).toBe("DURABLE_PRODUCT_FACT");
+    expect(SNAPSHOT_FIELD_CLASSIFICATION["extended.entities.bans.sourceProposalId"]).toBe(
+      "DURABLE_PRODUCT_FACT",
+    );
     expect(SNAPSHOT_FIELD_CLASSIFICATION["runtime.pendingOperations"]).toBe("DURABLE_PRODUCT_FACT");
     expect(SNAPSHOT_FIELD_CLASSIFICATION["extended.rimChat"]).toBe("DURABLE_USER_SESSION_STATE");
     expect(SNAPSHOT_FIELD_CLASSIFICATION.controlState).toBe("DURABLE_USER_SESSION_STATE");
     expect(SNAPSHOT_FIELD_CLASSIFICATION["runtime.transitionInFlight"]).toBe(
       "TRANSIENT_EXECUTION_STATE",
     );
-    expect(SNAPSHOT_FIELD_CLASSIFICATION["relationshipContext.data.recentBansChronological"]).toBe(
+    expect(SNAPSHOT_FIELD_CLASSIFICATION["relationshipContext.data.recentBans"]).toBe(
       "EXTERNAL_DERIVED_DATA",
     );
     expect(SNAPSHOT_FIELD_CLASSIFICATION.REQUEST_RIM_AI).toBe("TRANSIENT_EXECUTION_STATE");
@@ -61,6 +64,7 @@ describe("Stage 4 migrations", () => {
       "packages/persistence/schema/004_telegram_persistent_reentry_bootstrap_claim.sql",
       "packages/persistence/schema/005_telegram_persistent_reentry_bootstrap_claim_token.sql",
       "packages/persistence/schema/006_telegram_persistent_reentry_cta_opportunity.sql",
+      "packages/persistence/schema/007_ban_source_proposal.sql",
     ]);
     expect(MIGRATION_CHAIN[0]?.authority).toBe("identity");
     expect(MIGRATION_CHAIN[1]?.authority).toBe("persistence");
@@ -68,6 +72,7 @@ describe("Stage 4 migrations", () => {
     expect(MIGRATION_CHAIN[3]?.authority).toBe("persistence");
     expect(MIGRATION_CHAIN[4]?.authority).toBe("persistence");
     expect(MIGRATION_CHAIN[5]?.authority).toBe("persistence");
+    expect(MIGRATION_CHAIN[6]?.authority).toBe("persistence");
     expect(identitySchemaSql()).toContain("identity_users");
     expect(identitySchemaSql()).toContain("telegram_user_id");
   });

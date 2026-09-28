@@ -167,6 +167,7 @@ function replyWorld(): ProductSnapshot {
         durationMinutes: 15 as DurationMinutes,
         selectedContactId: null,
         origin: null,
+        proposalId: null,
       },
     }),
   );
@@ -191,6 +192,7 @@ function createBanPendingWorld(): ProductSnapshot {
         durationMinutes: 3 as DurationMinutes,
         selectedContactId: CONTACT_A,
         origin: "CONTACT",
+        proposalId: null,
       },
     }),
   );

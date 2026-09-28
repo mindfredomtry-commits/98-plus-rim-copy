@@ -8,17 +8,19 @@ import {
   reduce,
 } from "./index.ts";
 import {
-  AI_REQUEST_ID,
   BAN_ID,
+  CHAT_ID,
   CONTACT_A,
   CONTACT_B,
   CONTEXT_DATA,
   INCOMING_ITEM_ID,
   OP_ID,
+  PROPOSAL_ID,
   REQUEST_ID,
   TIMER_ITEM_ID,
   defaultEvent,
   eventOf,
+  failedAi,
   fixtureForRow,
   incomingItem,
   kernelContext,
@@ -26,7 +28,9 @@ import {
   makeBan,
   makeChat,
   makeTimer,
+  pendingAi,
   pendingOp,
+  proposalsMessage,
   readyContext,
   statusItem,
   timerItem,
@@ -40,8 +44,7 @@ import {
 import { cloneSnapshot, emptySnapshot } from "./kernel/snapshot.ts";
 import type { CanonicalEvent } from "./events.ts";
 import type { ProductSnapshot } from "./extended-state.ts";
-import type { DurationMinutes, Percentage } from "./ids.ts";
-import type { Failure } from "./primitives.ts";
+import type { DurationMinutes } from "./ids.ts";
 
 function applied(snapshot: ProductSnapshot, event: CanonicalEvent) {
   return reduce(snapshot, event, kernelContext());
@@ -80,10 +83,16 @@ describe("Stage 2 Product Kernel", () => {
     expect(result.controlState).toBe("RIM.LOBBY");
   });
 
-  it("treats APP.NORMAL_OPEN in an established Product Control State as undefined", () => {
-    const snapshot = withControlState(emptySnapshot(), "RIM.CHAT");
+  it("APP.NORMAL_OPEN in an established Product Control State starts a new RIM.LOBBY session", () => {
+    const chat = makeChat({ selectedContactId: CONTACT_A, inputDraft: "previous session" });
+    const snapshot = withChat(withControlState(emptySnapshot(), "RIM.CHAT"), chat);
     const result = applied(snapshot, defaultEvent("APP.NORMAL_OPEN"));
-    expect(result.outcome).toBe("UNDEFINED");
+    expect(result.outcome).toBe("APPLIED");
+    expect(result.result).toBe("TRANSITION");
+    expect(result.controlState).toBe("RIM.LOBBY");
+    expect(result.traces[0]?.branch).toBe("normal-application-open");
+    expect(result.snapshot.extended.rimChat).toBeNull();
+    expect(result.snapshot.runtime.session).toBe("ACTIVE");
   });
 
   it("fails explicitly when multiple mutually exclusive branches match", () => {
@@ -254,6 +263,7 @@ describe("Stage 2 Product Kernel", () => {
     const result = applied(snapshot, eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_A }));
     expect(result.controlState).toBe("RIM.CHAT");
     expect(result.traces[0]?.branch).toBe("initial-selected-contact");
+    expect(result.snapshot.extended.rimChat?.id).toBe(CHAT_ID);
     expect(result.snapshot.extended.rimChat?.selectedContactId).toBe(CONTACT_A);
     expect(result.snapshot.extended.rimChat?.relationshipContext?.status).toBe("loading");
     expect(result.snapshot.extended.rimChat?.inputDraft).toBe("keep me");
@@ -270,12 +280,14 @@ describe("Stage 2 Product Kernel", () => {
         relationshipContext: readyContext(),
         messages: [{ kind: "USER", text: "old" }],
         inputDraft: "old-draft",
-        aiOperation: { status: "PENDING", requestId: AI_REQUEST_ID },
+        aiOperation: pendingAi(),
       }),
     );
     const result = applied(snapshot, eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_B }));
     expect(result.controlState).toBe("RIM.CHAT");
     expect(result.traces[0]?.branch).toBe("change-selected-contact");
+    expect(result.snapshot.extended.rimChat?.id).not.toBe(CHAT_ID);
+    expect(result.snapshot.extended.rimChat?.askRimOrigin).toBeNull();
     expect(result.snapshot.extended.rimChat?.selectedContactId).toBe(CONTACT_B);
     expect(result.snapshot.extended.rimChat?.messages).toEqual([]);
     expect(result.snapshot.extended.rimChat?.inputDraft).toBe("");
@@ -295,7 +307,7 @@ describe("Stage 2 Product Kernel", () => {
       relationshipContext: readyContext(),
       messages: [{ kind: "RIM", text: "kept" }],
       inputDraft: "kept-draft",
-      aiOperation: { status: "FAILED", requestId: AI_REQUEST_ID, failure: {} as Failure },
+      aiOperation: failedAi(),
     });
     const snapshot = withChat(withControlState(emptySnapshot(), "RIM.SELECT_CONTACT"), chat);
     const result = applied(snapshot, eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_A }));
@@ -318,6 +330,7 @@ describe("Stage 2 Product Kernel", () => {
     const result = applied(
       snapshot,
       eventOf("RIM.CONTEXT_READY", {
+        rimChatId: CHAT_ID,
         selectedContactId: CONTACT_A,
         relationshipContext: CONTEXT_DATA,
         requestId: REQUEST_ID,
@@ -345,6 +358,7 @@ describe("Stage 2 Product Kernel", () => {
     const result = applied(
       snapshot,
       eventOf("RIM.CONTEXT_READY", {
+        rimChatId: CHAT_ID,
         selectedContactId: CONTACT_A,
         relationshipContext: CONTEXT_DATA,
         requestId: REQUEST_ID,
@@ -367,6 +381,7 @@ describe("Stage 2 Product Kernel", () => {
     const result = applied(
       snapshot,
       eventOf("RIM.CONTEXT_READY", {
+        rimChatId: CHAT_ID,
         selectedContactId: CONTACT_A,
         relationshipContext: CONTEXT_DATA,
         requestId: REQUEST_ID,
@@ -485,19 +500,25 @@ describe("Stage 2 Product Kernel", () => {
       selectedContactId: CONTACT_A,
       relationshipContext: readyContext(),
       inputDraft: "frozen-draft",
-      messages: [{ kind: "USER", text: "frozen" }],
+      messages: [{ kind: "USER", text: "frozen" }, proposalsMessage()],
     });
     let snapshot = withChat(withControlState(emptySnapshot(), "RIM.CHAT"), frozen);
     snapshot = applied(
       snapshot,
       eventOf("RIM.PRESS_SUGGESTION_FORBID", {
-        selectedContactId: CONTACT_A,
-        suggestion: { banText: "no phones", fulfillmentProbability: 40 as Percentage },
         rimChatId: frozen.id,
+        proposalId: PROPOSAL_ID,
       }),
     ).snapshot;
     expect(snapshot.controlState).toBe("CREATE_BAN.WHAT.RIM");
     expect(snapshot.extended.savedFrozenRimChat).toEqual(frozen);
+    expect(snapshot.extended.createBanDraft).toEqual({
+      origin: "RIM",
+      selectedContactId: CONTACT_A,
+      banText: "no phones",
+      durationMinutes: null,
+      proposalId: PROPOSAL_ID,
+    });
     snapshot = applied(
       snapshot,
       eventOf("CREATE_BAN.CHANGE_DURATION", { durationMinutes: 5 }),
@@ -623,6 +644,7 @@ describe("Stage 2 Product Kernel", () => {
     const snapshot = withControlState(emptySnapshot(), "RIM.LOBBY");
     const result = applied(snapshot, defaultEvent("RIM.PRESS_START_CHAT"));
     expect(result.controlState).toBe("RIM.CHAT");
+    expect(result.snapshot.extended.rimChat?.askRimOrigin).toBeNull();
     expect(isProductControlState(result.controlState!)).toBe(true);
   });
 

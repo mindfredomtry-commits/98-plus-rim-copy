@@ -14,5 +14,8 @@ export type ShareLinkId = Brand<string, "ShareLinkId">;
 export type RimChatId = Brand<string, "RimChatId">;
 export type ContextRequestId = Brand<string, "ContextRequestId">;
 export type AiRequestId = Brand<string, "AiRequestId">;
+export type ProposalId = Brand<string, "ProposalId">;
 export type DurationMinutes = Brand<number, "IntegerMinutes3To60">;
 export type Percentage = Brand<number, "Percentage0To100">;
+/** Canonical RIM execution probability. Inclusive range 0..1, not a 0..100 percentage. */
+export type ExecutionProbability = Brand<number, "ExecutionProbability0To1">;

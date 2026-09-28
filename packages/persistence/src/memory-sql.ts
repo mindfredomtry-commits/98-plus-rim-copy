@@ -252,6 +252,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
             acceptance: ban.acceptance,
             status: ban.status,
             bound_via_telegram_share_link: ban.boundViaTelegramShareLink,
+            source_proposal_id: ban.sourceProposalId,
             created_seq: this.tables.getBan(ban.id)?.createdSeq ?? 0,
           })),
         );
@@ -266,6 +267,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
           acceptance: params[5] as Ban["acceptance"],
           status: params[6] as Ban["status"],
           boundViaTelegramShareLink: Boolean(params[7]),
+          sourceProposalId: (params[8] ?? null) as Ban["sourceProposalId"],
         });
         return rows([]);
       }
@@ -453,6 +455,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
             acceptance: ban.acceptance,
             status: ban.status,
             bound_via_telegram_share_link: ban.boundViaTelegramShareLink,
+            source_proposal_id: ban.sourceProposalId,
             created_seq: ban.createdSeq,
           },
         ]);
@@ -476,6 +479,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
             acceptance: ban.acceptance,
             status: ban.status,
             bound_via_telegram_share_link: ban.boundViaTelegramShareLink,
+            source_proposal_id: ban.sourceProposalId,
             created_seq: ban.createdSeq,
           },
         ]);

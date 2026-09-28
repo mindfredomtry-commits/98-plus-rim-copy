@@ -8,6 +8,7 @@ import type {
   ReplyBanDraft,
   ReplySource,
   RimChat,
+  RimRequestSnapshot,
   ShareOperation,
 } from "./entities.ts";
 import type { PendingExternalEntry, PendingOperation } from "./extended-state.ts";
@@ -70,7 +71,7 @@ export type Effect =
       requestId: ContextRequestId;
       contactId: UserId;
     }
-  | { type: "REQUEST_RIM_AI"; requestId: AiRequestId };
+  | { type: "REQUEST_RIM_AI"; requestId: AiRequestId; snapshot: RimRequestSnapshot };
 
 export type EffectType = Effect["type"];
 

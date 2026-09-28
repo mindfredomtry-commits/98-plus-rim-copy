@@ -7,6 +7,7 @@ import type {
   ContextRequestId,
   NotificationItemId,
   OperationId,
+  ProposalId,
   RimChatId,
   ShareAttemptId,
   ShareLinkId,
@@ -21,12 +22,7 @@ import type {
   ShareResult,
   TemplateContext,
 } from "./primitives.ts";
-import type {
-  RelationshipContextData,
-  ReplySource,
-  RimAiResult,
-  RimSuggestion,
-} from "./entities.ts";
+import type { RelationshipContextData, ReplySource, RimAiResult } from "./entities.ts";
 
 const eventRegistry = AUTHORITY_DOCUMENTS.eventRegistry;
 
@@ -120,22 +116,23 @@ export type EventPayloadMap = {
   "RIM.PRESS_RETRY_CONTEXT": { failedRequestId: ContextRequestId };
   "RIM.PRESS_RETRY_AI": { failedRequestId: AiRequestId };
   "RIM.PRESS_SUGGESTION_FORBID": {
-    selectedContactId: UserId;
-    suggestion: RimSuggestion;
     rimChatId: RimChatId;
+    proposalId: ProposalId;
   };
   "RIM.CONTEXT_READY": {
+    rimChatId: RimChatId;
     selectedContactId: UserId;
     relationshipContext: RelationshipContextData;
     requestId: ContextRequestId;
   };
   "RIM.CONTEXT_FAILED": {
+    rimChatId: RimChatId;
     selectedContactId: UserId;
     requestId: ContextRequestId;
     failure: Failure;
   };
-  "RIM.AI_RESULT_RECEIVED": { requestId: AiRequestId; result: RimAiResult };
-  "RIM.AI_REQUEST_FAILED": { requestId: AiRequestId; failure: Failure };
+  "RIM.AI_RESULT_RECEIVED": { rimChatId: RimChatId; requestId: AiRequestId; result: RimAiResult };
+  "RIM.AI_REQUEST_FAILED": { rimChatId: RimChatId; requestId: AiRequestId; failure: Failure };
   "RIM.PRESS_NOTIFICATIONS": Record<string, never>;
   "TELEGRAM_PERSISTENT_REENTRY.GRANTED": { requestId: string };
   "TELEGRAM_PERSISTENT_REENTRY.DECLINED": { requestId: string };

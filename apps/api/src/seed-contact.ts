@@ -67,6 +67,7 @@ export function seedAuthoritativeContactBan(
     acceptance: "PENDING",
     status: null,
     boundViaTelegramShareLink: false,
+    sourceProposalId: null,
   };
   runtime.sql.tables.upsertBan(ban);
   return ban;

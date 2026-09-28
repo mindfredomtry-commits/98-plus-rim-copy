@@ -1,4 +1,6 @@
+import { findChatProposal } from "../entities.ts";
 import type { Guard } from "../guards.ts";
+import type { ProposalId } from "../ids.ts";
 import type { MatrixContractRow } from "../matrix.ts";
 import { isValidBanText, isValidDurationMinutes } from "../primitives.ts";
 import type { ResolveInput } from "./types.ts";
@@ -145,6 +147,10 @@ function eventRequestId(input: ResolveInput) {
   return (input.event.payload as { requestId?: string }).requestId ?? null;
 }
 
+function eventRimChatId(input: ResolveInput) {
+  return (input.event.payload as { rimChatId?: string }).rimChatId ?? null;
+}
+
 function contextReady(input: ResolveInput): boolean {
   return input.snapshot.extended.rimChat?.relationshipContext?.status === "ready";
 }
@@ -242,18 +248,35 @@ function currentContextRequest(input: ResolveInput): boolean {
   return (
     !!chat &&
     !!chat.relationshipContext &&
+    chat.id === eventRimChatId(input) &&
     chat.selectedContactId === selectedContactId &&
     chat.relationshipContext.requestId === requestId
   );
 }
 
+/** Current logical AI request that can still accept a result or a failure. */
 function currentAiRequest(input: ResolveInput): boolean {
   const chat = input.snapshot.extended.rimChat;
   const requestId = eventRequestId(input);
   return (
     !!chat &&
-    (chat.aiOperation.status === "PENDING" || chat.aiOperation.status === "FAILED") &&
+    chat.id === eventRimChatId(input) &&
+    chat.aiOperation.status === "PENDING" &&
     chat.aiOperation.requestId === requestId
+  );
+}
+
+function canonicalProposalSelectable(input: ResolveInput): boolean {
+  const chat = input.snapshot.extended.rimChat;
+  const proposalId = (input.event.payload as { proposalId?: ProposalId }).proposalId;
+  if (!chat?.selectedContactId || !proposalId || chat.id !== eventRimChatId(input)) {
+    return false;
+  }
+  if (!findChatProposal(chat, proposalId)) {
+    return false;
+  }
+  return !Object.values(input.snapshot.extended.entities.bans).some(
+    (ban) => ban.sourceProposalId === proposalId,
   );
 }
 
@@ -432,7 +455,10 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
     case "E-56:no-new-selection-prior-contact":
       return currentContextRequest(input);
     case "E-56:stale-replaced-contact":
-      return eventContactId(input) !== null && eventContactId(input) !== currentContactId(input);
+      return !currentContextRequest(input);
+    case "E-57:stale-contact":
+    case "E-57:stale-replaced-contact":
+      return !currentContextRequest(input);
     case "E-58:stale-replaced-contact":
       return !currentAiRequest(input);
     case "E-56:frozen-source-operation":
@@ -444,6 +470,8 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
     case "E-59:current-request":
       return currentAiRequest(input);
     case "E-58:stale-request":
+      return !currentAiRequest(input);
+    case "E-59:stale-request":
       return !currentAiRequest(input);
     case "E-58:no-new-selection-prior-ai":
       return currentAiRequest(input);
@@ -458,10 +486,18 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
       return currentContactId(input) !== null && currentContactId(input) === eventContactId(input);
     case "E-53:failed-current-context":
       return chat?.relationshipContext?.status === "error";
-    case "E-54:failed-ai-request":
-      return chat?.aiOperation.status === "FAILED";
+    case "E-54:failed-ai-request": {
+      const failedRequestId = (input.event.payload as { failedRequestId?: string }).failedRequestId;
+      return (
+        chat?.aiOperation.status === "FAILED" &&
+        !!failedRequestId &&
+        chat.aiOperation.requestId === failedRequestId
+      );
+    }
     case "E-55:valid-current-suggestion":
-      return chat?.selectedContactId === eventContactId(input);
+      return canonicalProposalSelectable(input);
+    case "E-55:invalid-proposal":
+      return !canonicalProposalSelectable(input);
     case "E-48:current-chat-exists":
       return chat !== null;
     case "E-02:real-contact":

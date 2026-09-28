@@ -15,6 +15,7 @@ import type {
   DurationMinutes,
   NotificationItemId,
   OperationId,
+  ProposalId,
   ShareLinkId,
   UserId,
 } from "./ids.ts";
@@ -79,6 +80,7 @@ export type PendingSendDraft = Readonly<{
   durationMinutes: DurationMinutes;
   selectedContactId: UserId | null;
   origin: BanDraft["origin"] | null;
+  proposalId: ProposalId | null;
 }>;
 
 export type PendingOperation = Readonly<{

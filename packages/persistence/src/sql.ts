@@ -90,15 +90,15 @@ RETURNING user_id
 `.trim(),
   selectBansForUser: `
 SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
-       bound_via_telegram_share_link, created_seq
+       bound_via_telegram_share_link, source_proposal_id, created_seq
 FROM bans
 WHERE sender_id = $1 OR receiver_id = $1
 `.trim(),
   upsertBan: `
 INSERT INTO bans (
   ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
-  bound_via_telegram_share_link
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+  bound_via_telegram_share_link, source_proposal_id
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT (ban_id) DO UPDATE SET
   sender_id = EXCLUDED.sender_id,
   receiver_id = EXCLUDED.receiver_id,
@@ -106,7 +106,8 @@ ON CONFLICT (ban_id) DO UPDATE SET
   duration_minutes = EXCLUDED.duration_minutes,
   acceptance = EXCLUDED.acceptance,
   status = EXCLUDED.status,
-  bound_via_telegram_share_link = EXCLUDED.bound_via_telegram_share_link
+  bound_via_telegram_share_link = EXCLUDED.bound_via_telegram_share_link,
+  source_proposal_id = EXCLUDED.source_proposal_id
 `.trim(),
   selectTimersForBans: `
 SELECT timer_id, ban_id, started_at, duration_minutes, state, check_pair_created
@@ -216,7 +217,7 @@ LIMIT 1
 `.trim(),
   selectBanById: `
 SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
-       bound_via_telegram_share_link, created_seq
+       bound_via_telegram_share_link, source_proposal_id, created_seq
 FROM bans
 WHERE ban_id = $1
 `.trim(),
@@ -226,7 +227,7 @@ SET receiver_id = $2
 WHERE ban_id = $1
   AND receiver_id IS NULL
 RETURNING ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
-          bound_via_telegram_share_link, created_seq
+          bound_via_telegram_share_link, source_proposal_id, created_seq
 `.trim(),
   upsertShare: `
 INSERT INTO share_operations (

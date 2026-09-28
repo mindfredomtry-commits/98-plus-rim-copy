@@ -7,6 +7,7 @@ import {
   type CheckPair,
   type DurationMinutes,
   type ProductSnapshot,
+  type ProposalId,
   type TransitionResult,
 } from "@98plus/product-model";
 import {
@@ -191,6 +192,29 @@ describe("Stage 4 product persistence", () => {
       world.extended.entities.domainTimers["timer-1"],
     );
     expect(loaded.snapshot.runtime.transitionInFlight).toBeNull();
+  });
+
+  it("round-trips Ban.sourceProposalId through the relational ban row", async () => {
+    const kit = PersistenceTestKit.postgres();
+    kit.establishIdentity(USER_ID, "tg-user-1");
+    kit.establishIdentity(OTHER_USER, "tg-user-2");
+    const proposalId = branded<ProposalId>("proposal-durable");
+    await kit.installFixtureSnapshot(
+      USER_ID,
+      withEntities(withControlState(emptySnapshot(), "RIM.LOBBY"), {
+        bans: { [BAN_ID]: makeBan({ sourceProposalId: proposalId }) },
+      }),
+    );
+    const loaded = await kit.store.loadProductSnapshot(USER_ID);
+    expect(loaded.snapshot.extended.entities.bans[BAN_ID]?.sourceProposalId).toBe(proposalId);
+    await kit.installFixtureSnapshot(
+      USER_ID,
+      withEntities(withControlState(emptySnapshot(), "RIM.LOBBY"), {
+        bans: { [BAN_ID]: makeBan({ sourceProposalId: null }) },
+      }),
+    );
+    const cleared = await kit.store.loadProductSnapshot(USER_ID);
+    expect(cleared.snapshot.extended.entities.bans[BAN_ID]?.sourceProposalId).toBeNull();
   });
 
   it("B. CONTACT Ban sender/receiver must reference registered UserIds", async () => {
@@ -531,6 +555,7 @@ describe("Stage 4 product persistence", () => {
             selectedContactId: null,
             banText: "share ban",
             durationMinutes: 21 as DurationMinutes,
+            proposalId: null,
           },
         }),
       },

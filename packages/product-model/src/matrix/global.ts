@@ -341,7 +341,13 @@ export const GLOBAL_AND_BOOTSTRAP_ROWS: readonly MatrixContractRow[] = [
     nextState: "RIM.LOBBY",
     effectsText:
       "создаётся новая active product session; незавершённый RIM Chat / Create Ban draft / Reply Ban draft / session-temporary context предыдущей session не восстанавливаются; уже успешно созданные Product Facts / server-side entities сохраняются; unprocessed Notification Items сами по себе не переводят приложение в Notifications и влияют только на кнопку Notifications на RIM.LOBBY",
-    effects: [{ type: "SET_CONTROL_STATE" }],
+    effects: [
+      { type: "SET_RIM_CHAT" },
+      { type: "SET_FROZEN_RIM_CHAT" },
+      { type: "SET_CREATE_BAN_DRAFT" },
+      { type: "SET_REPLY_BAN_DRAFT" },
+      { type: "SET_CONTROL_STATE" },
+    ],
     result: "TRANSITION",
     source: {
       section: "Lifecycle / Bootstrap rule — E-33 APP.NORMAL_OPEN Guard A",

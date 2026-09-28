@@ -29,6 +29,7 @@ import {
   checkItem,
   defaultEvent,
   eventOf,
+  failedAi,
   incomingItem,
   kernelContext,
   makeBan,
@@ -901,6 +902,7 @@ describe("Stage 2 semantic effect audit", () => {
             selectedContactId: null,
             banText: "share ban",
             durationMinutes: 21 as DurationMinutes,
+            proposalId: null,
           },
         }),
       },
@@ -1905,13 +1907,15 @@ describe("Stage 2 semantic effect audit", () => {
         relationshipContext: readyContext(),
         messages: [{ kind: "USER", text: "old" }],
         inputDraft: "old-draft",
-        aiOperation: { status: "FAILED", requestId: branded("ai-1"), failure: {} as never },
+        aiOperation: failedAi(),
       }),
     );
     const before = snapshot.extended.rimChat;
     const result = applied(snapshot, eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_B }));
     expect(result.outcome).toBe("APPLIED");
     expect(result.traces[0]?.branch).toBe("change-selected-contact");
+    expect(result.snapshot.extended.rimChat?.id).not.toBe(snapshot.extended.rimChat?.id);
+    expect(result.snapshot.extended.rimChat?.askRimOrigin).toBeNull();
     expect(result.snapshot.extended.rimChat?.selectedContactId).toBe(CONTACT_B);
     expect(result.snapshot.extended.rimChat?.relationshipContext?.status).toBe("loading");
     expect(result.snapshot.extended.rimChat?.relationshipContext?.selectedContactId).toBe(
@@ -1932,7 +1936,7 @@ describe("Stage 2 semantic effect audit", () => {
       relationshipContext: readyContext(),
       messages: [{ kind: "RIM", text: "kept" }],
       inputDraft: "kept-draft",
-      aiOperation: { status: "FAILED", requestId: branded("ai-1"), failure: {} as never },
+      aiOperation: failedAi(),
     });
     const snapshot = withChat(withControlState(emptySnapshot(), "RIM.SELECT_CONTACT"), chat);
     const result = applied(snapshot, eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_A }));
@@ -1949,6 +1953,6 @@ describe("Stage 2 semantic effect audit", () => {
 
 describe("Stage 2 semantic audit inventory", () => {
   it("keeps every Matrix row identity available for the reachability suite", () => {
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(337);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(342);
   });
 });

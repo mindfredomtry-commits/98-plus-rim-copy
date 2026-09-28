@@ -210,16 +210,24 @@ describe("Stage 5 executeProductEvent", () => {
     expect(selected.snapshot.extended.rimChat?.relationshipContext?.status).toBe("loading");
   });
 
-  it("I. repeated execution follows Kernel + persistence idempotency, not a Stage 5 duplicate path", async () => {
+  it("I. repeated execution follows the Kernel result, not a Stage 5 duplicate path", async () => {
     const { exec, store } = await harness();
     const first = await exec(eventOf("APP.NORMAL_OPEN", { serverState: {} }));
     const second = await exec(eventOf("APP.NORMAL_OPEN", { serverState: {} }));
     expect(first.status).toBe("APPLIED");
-    expect(second.status).toBe("NOT_APPLIED");
-    expect(second.persisted).toBe(false);
+    expect(second.status).toBe("APPLIED");
+    expect(second.persisted).toBe(true);
+    expect(second.snapshot.controlState).toBe("RIM.LOBBY");
+    expect(second.snapshot.extended.rimChat).toBeNull();
     const loaded = await store.loadProductSnapshot(USER_ID);
-    expect(loaded.revision).toBe(first.revision);
+    expect(loaded.revision).toBe(second.revision);
+    expect(loaded.revision).not.toBe(first.revision);
     expect(loaded.snapshot.controlState).toBe("RIM.LOBBY");
+    const undefinedRepeat = await exec(eventOf("REPLY_BAN.CHANGE_BAN_TEXT", { banText: "nope" }));
+    expect(undefinedRepeat.status).toBe("NOT_APPLIED");
+    expect(undefinedRepeat.persisted).toBe(false);
+    const afterUndefined = await store.loadProductSnapshot(USER_ID);
+    expect(afterUndefined.revision).toBe(loaded.revision);
   });
 
   it("J. Stage 5 does not itself create Ban/Timer/Check/Notification facts", async () => {

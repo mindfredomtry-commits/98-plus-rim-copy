@@ -137,6 +137,46 @@ function isAppliedRow(
   return !("outcome" in value);
 }
 
+function completeBootstrap(
+  boot: MatrixContractRow,
+  input: ResolveInput,
+  snapshot: ProductSnapshot,
+  eventId: CanonicalEventId,
+): TransitionResult {
+  const applied = applyRow(boot, input, snapshot, 0);
+  if (!isAppliedRow(applied)) {
+    return applied;
+  }
+  const next =
+    typeof applied.nextState === "string" &&
+    applied.nextState !== "RESULT_OF_NOTIFICATIONS_SELECT_NEXT" &&
+    isProductControlState(applied.nextState)
+      ? applyEffects(applied.snapshot, [{ type: "SET_CONTROL_STATE", state: applied.nextState }])
+      : applied.snapshot;
+  const bootstrapComplete =
+    boot.result === "TRANSITION"
+      ? {
+          ...next,
+          runtime: {
+            ...next.runtime,
+            bootstrap: { status: "COMPLETE" as const },
+            ...(eventId === "E-33" ? { session: "ACTIVE" as const } : {}),
+          },
+        }
+      : next;
+  return {
+    outcome: "APPLIED",
+    result: boot.result,
+    controlState: bootstrapComplete.controlState,
+    snapshot: bootstrapComplete,
+    effects: applied.effects,
+    declaredEffects: [...applied.declared],
+    traces: [applied.trace],
+    composition: "BOOTSTRAP_ONLY",
+    error: null,
+  };
+}
+
 function bootstrapRows(eventId: CanonicalEventId): MatrixContractRow[] {
   return MATRIX_CONTRACT_ROWS.filter((row) => row.kind === "BOOTSTRAP" && row.eventId === eventId);
 }
@@ -347,40 +387,7 @@ export function reduce(
       return boot;
     }
     if (boot) {
-      const applied = applyRow(boot, input, snapshot, 0);
-      if (!isAppliedRow(applied)) {
-        return applied;
-      }
-      const next =
-        typeof applied.nextState === "string" &&
-        applied.nextState !== "RESULT_OF_NOTIFICATIONS_SELECT_NEXT" &&
-        isProductControlState(applied.nextState)
-          ? applyEffects(applied.snapshot, [
-              { type: "SET_CONTROL_STATE", state: applied.nextState },
-            ])
-          : applied.snapshot;
-      const bootstrapComplete =
-        boot.result === "TRANSITION"
-          ? {
-              ...next,
-              runtime: {
-                ...next.runtime,
-                bootstrap: { status: "COMPLETE" as const },
-                ...(eventId === "E-33" ? { session: "ACTIVE" as const } : {}),
-              },
-            }
-          : next;
-      return {
-        outcome: "APPLIED",
-        result: boot.result,
-        controlState: bootstrapComplete.controlState,
-        snapshot: bootstrapComplete,
-        effects: applied.effects,
-        declaredEffects: [...applied.declared],
-        traces: [applied.trace],
-        composition: "BOOTSTRAP_ONLY",
-        error: null,
-      };
+      return completeBootstrap(boot, input, snapshot, eventId);
     }
     const global = requireExclusive(globalRows(eventId, late), input, snapshot);
     if (global && "outcome" in global) {
@@ -404,6 +411,16 @@ export function reduce(
       };
     }
     return undefinedResult(snapshot);
+  }
+
+  if (eventId === "E-33") {
+    const boot = requireExclusive(bootstrapRows(eventId), input, snapshot);
+    if (boot && "outcome" in boot) {
+      return boot;
+    }
+    if (boot?.branch === "normal-application-open") {
+      return completeBootstrap(boot, input, snapshot, eventId);
+    }
   }
 
   const globals = globalRows(eventId, false);

@@ -1,10 +1,27 @@
-import type { BanDraft, RelationshipContext, RimChat, RimMessage } from "../entities.ts";
+import type {
+  BanDraft,
+  RelationshipContext,
+  RimAiResult,
+  RimChat,
+  RimMessage,
+  RimRequestSnapshot,
+  ThreeApplicationProposals,
+} from "../entities.ts";
+import { findChatProposal } from "../entities.ts";
 import { isTimerNotificationItem, markTimerNotificationItemProcessed } from "../entities.ts";
 import type { Effect } from "../effects.ts";
 import type { CanonicalEvent } from "../events.ts";
 import type { ProductSnapshot } from "../extended-state.ts";
 import type { MatrixContractRow } from "../matrix.ts";
-import type { ContextRequestId, DurationMinutes, RimChatId, UserId } from "../ids.ts";
+import type {
+  AiRequestId,
+  ContextRequestId,
+  DurationMinutes,
+  ProposalId,
+  RimChatId,
+  UserId,
+} from "../ids.ts";
+import type { Failure } from "../primitives.ts";
 import type { ProductControlState } from "../states.ts";
 import type { ResolveInput } from "./types.ts";
 import { statusControlState } from "./snapshot.ts";
@@ -21,12 +38,40 @@ function eventField<T>(event: CanonicalEvent, key: string): T | undefined {
   return (event.payload as Record<string, T | undefined>)[key];
 }
 
+function pendingOperation(snapshot: RimRequestSnapshot) {
+  return { status: "PENDING" as const, requestId: snapshot.requestId, snapshot };
+}
+
+function canonicalProposals(
+  proposals: Extract<RimAiResult, { kind: "BAN_PROPOSALS" }>["proposals"],
+  context: ResolveInput["context"],
+): ThreeApplicationProposals {
+  return [
+    {
+      proposalId: context.allocateId("proposal") as ProposalId,
+      banText: proposals[0].banText,
+      executionProbability: proposals[0].executionProbability,
+    },
+    {
+      proposalId: context.allocateId("proposal") as ProposalId,
+      banText: proposals[1].banText,
+      executionProbability: proposals[1].executionProbability,
+    },
+    {
+      proposalId: context.allocateId("proposal") as ProposalId,
+      banText: proposals[2].banText,
+      executionProbability: proposals[2].executionProbability,
+    },
+  ];
+}
+
 function emptyDraft(origin: BanDraft["origin"], contactId: UserId | null = null): BanDraft {
   return {
     origin,
     selectedContactId: contactId,
     banText: "",
     durationMinutes: null,
+    proposalId: null,
   };
 }
 
@@ -45,6 +90,7 @@ export function nextRimChat(
       messages: [lobbyPrompt()],
       inputDraft: "",
       aiOperation: { status: "IDLE" },
+      askRimOrigin: null,
     };
   }
   if (row.eventId === "E-50" && row.state === "RIM.CHAT") {
@@ -54,6 +100,12 @@ export function nextRimChat(
     return null;
   }
   if (row.eventId === "E-32") {
+    return null;
+  }
+  if (row.eventId === "E-10" && row.state === "CREATE_BAN.CONFIRM.RIM") {
+    return null;
+  }
+  if (row.eventId === "E-33" && row.branch === "normal-application-open") {
     return null;
   }
   if (row.eventId === "E-07" && snapshot.extended.savedFrozenRimChat) {
@@ -88,7 +140,7 @@ export function nextRimChat(
     }
     const requestId = context.allocateId("context") as ContextRequestId;
     return {
-      ...current,
+      id: context.allocateId("rim-chat") as RimChatId,
       selectedContactId: contactId,
       relationshipContext: {
         selectedContactId: contactId,
@@ -100,6 +152,7 @@ export function nextRimChat(
       messages: [],
       inputDraft: "",
       aiOperation: { status: "IDLE" },
+      askRimOrigin: null,
     };
   }
   if (row.eventId === "E-49" && row.branch === "same-current-selected-contact") {
@@ -110,14 +163,22 @@ export function nextRimChat(
   }
   if (row.eventId === "E-52" && row.branch === "valid") {
     const text = current.inputDraft;
+    const contextRequestId = current.relationshipContext?.requestId;
+    if (!contextRequestId) {
+      return current;
+    }
+    const requestId = context.allocateId("ai") as AiRequestId;
+    const snapshot: RimRequestSnapshot = {
+      requestId,
+      rimChatId: current.id,
+      userMessage: text,
+      contextRequestId,
+    };
     return {
       ...current,
       messages: [...current.messages, { kind: "USER", text }],
       inputDraft: "",
-      aiOperation: {
-        status: "PENDING",
-        requestId: context.allocateId("ai") as import("../ids.ts").AiRequestId,
-      },
+      aiOperation: pendingOperation(snapshot),
     };
   }
   if (row.eventId === "E-53") {
@@ -138,19 +199,32 @@ export function nextRimChat(
     };
   }
   if (row.eventId === "E-54") {
+    if (current.aiOperation.status !== "FAILED") {
+      return current;
+    }
+    const failedRequestId = eventField<AiRequestId>(event, "failedRequestId");
+    if (!failedRequestId || failedRequestId !== current.aiOperation.requestId) {
+      return current;
+    }
     return {
       ...current,
-      aiOperation: {
-        status: "PENDING",
-        requestId: context.allocateId("ai") as import("../ids.ts").AiRequestId,
-      },
+      aiOperation: pendingOperation(current.aiOperation.snapshot),
     };
   }
   if (row.eventId === "E-56" && row.result === "STAY") {
     const data = eventField<RelationshipContext["data"]>(event, "relationshipContext");
     const requestId = eventField<ContextRequestId>(event, "requestId");
     const selectedContactId = eventField<UserId>(event, "selectedContactId");
-    if (!requestId || !selectedContactId || !data) {
+    const rimChatId = eventField<RimChatId>(event, "rimChatId");
+    if (
+      !requestId ||
+      !selectedContactId ||
+      !data ||
+      !current.relationshipContext ||
+      rimChatId !== current.id ||
+      requestId !== current.relationshipContext.requestId ||
+      selectedContactId !== current.selectedContactId
+    ) {
       return current;
     }
     const ready: RelationshipContext = {
@@ -172,7 +246,15 @@ export function nextRimChat(
   if (row.eventId === "E-57") {
     const requestId = eventField<ContextRequestId>(event, "requestId");
     const selectedContactId = eventField<UserId>(event, "selectedContactId");
-    if (!current.relationshipContext || !requestId || !selectedContactId) {
+    const rimChatId = eventField<RimChatId>(event, "rimChatId");
+    if (
+      !current.relationshipContext ||
+      !requestId ||
+      !selectedContactId ||
+      rimChatId !== current.id ||
+      requestId !== current.relationshipContext.requestId ||
+      selectedContactId !== current.selectedContactId
+    ) {
       return current;
     }
     return {
@@ -184,22 +266,25 @@ export function nextRimChat(
       },
     };
   }
-  if (
-    row.eventId === "E-58" &&
-    row.branch !== "stale-request" &&
-    row.branch !== "stale-replaced-contact"
-  ) {
-    const result = eventField<{
-      kind: string;
-      text?: string;
-      suggestions?: RimChat["messages"][number] extends infer _ ? never : never;
-    }>(event, "result") as import("../entities.ts").RimAiResult | undefined;
-    if (!result) {
+  if (row.eventId === "E-58" && row.result === "STAY") {
+    const result = eventField<RimAiResult>(event, "result");
+    const rimChatId = eventField<RimChatId>(event, "rimChatId");
+    const requestId = eventField<AiRequestId>(event, "requestId");
+    if (
+      !result ||
+      current.aiOperation.status !== "PENDING" ||
+      rimChatId !== current.id ||
+      requestId !== current.aiOperation.requestId
+    ) {
       return current;
     }
     const message: RimMessage =
-      result.kind === "BAN_SUGGESTIONS"
-        ? { kind: "SUGGESTIONS", suggestions: result.suggestions }
+      result.kind === "BAN_PROPOSALS"
+        ? {
+            kind: "BAN_PROPOSALS",
+            message: result.message,
+            proposals: canonicalProposals(result.proposals, context),
+          }
         : { kind: "RIM", text: result.text };
     return {
       ...current,
@@ -208,12 +293,22 @@ export function nextRimChat(
     };
   }
   if (row.eventId === "E-59") {
+    const rimChatId = eventField<RimChatId>(event, "rimChatId");
+    const requestId = eventField<AiRequestId>(event, "requestId");
+    if (
+      current.aiOperation.status !== "PENDING" ||
+      rimChatId !== current.id ||
+      requestId !== current.aiOperation.requestId
+    ) {
+      return current;
+    }
     return {
       ...current,
       aiOperation: {
         status: "FAILED",
-        requestId: eventField(event, "requestId") ?? ("" as import("../ids.ts").AiRequestId),
-        failure: eventField(event, "failure") as import("../primitives.ts").Failure,
+        requestId: current.aiOperation.requestId,
+        snapshot: current.aiOperation.snapshot,
+        failure: eventField<Failure>(event, "failure") as Failure,
       },
     };
   }
@@ -242,17 +337,25 @@ export function nextCreateDraft(
       selectedContactId: contactId,
       banText: current?.banText ?? "",
       durationMinutes: current?.durationMinutes ?? null,
+      proposalId: current?.proposalId ?? null,
     };
   }
   if (row.eventId === "E-03") {
     return emptyDraft("TEMPLATE");
   }
   if (row.eventId === "E-55") {
+    const chat = snapshot.extended.rimChat;
+    const proposalId = eventField<ProposalId>(event, "proposalId");
+    const proposal = chat && proposalId ? findChatProposal(chat, proposalId) : null;
+    if (!chat?.selectedContactId || !proposal) {
+      return current;
+    }
     return {
       origin: "RIM",
-      selectedContactId: eventField<UserId>(event, "selectedContactId") ?? null,
-      banText: eventField<{ banText: string }>(event, "suggestion")?.banText ?? "",
+      selectedContactId: chat.selectedContactId,
+      banText: proposal.banText,
       durationMinutes: null,
+      proposalId: proposal.proposalId,
     };
   }
   if (
@@ -287,7 +390,7 @@ export function nextCreateDraft(
         null) as DurationMinutes | null,
     };
   }
-  if (row.eventId === "E-32" || row.eventId === "E-45") {
+  if (row.eventId === "E-32" || row.eventId === "E-45" || row.eventId === "E-33") {
     return null;
   }
   if (row.eventId === "E-10" || row.eventId === "E-12") {
@@ -321,7 +424,12 @@ export function nextReplyDraft(
   if (row.eventId === "E-27" && row.branch !== "no-pending-send") {
     return null;
   }
-  if (row.eventId === "E-32" || row.eventId === "E-45" || row.eventId === "E-30") {
+  if (
+    row.eventId === "E-32" ||
+    row.eventId === "E-45" ||
+    row.eventId === "E-30" ||
+    row.eventId === "E-33"
+  ) {
     return null;
   }
   return current;
@@ -679,7 +787,11 @@ export function applyEffects(
               ...next.extended,
               rimChat: {
                 ...chat,
-                aiOperation: { status: "PENDING", requestId: effect.requestId },
+                aiOperation: {
+                  status: "PENDING",
+                  requestId: effect.snapshot.requestId,
+                  snapshot: effect.snapshot,
+                },
               },
             },
           };

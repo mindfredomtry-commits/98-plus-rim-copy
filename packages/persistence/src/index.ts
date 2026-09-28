@@ -6,6 +6,7 @@ export { InMemoryProductStore } from "./in-memory-store.ts";
 export { MemorySqlClient } from "./memory-sql.ts";
 export {
   allMigrationSql,
+  banSourceProposalSql,
   IDENTITY_MIGRATION_AUTHORITY,
   identitySchemaSql,
   MIGRATION_CHAIN,

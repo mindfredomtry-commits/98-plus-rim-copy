@@ -757,10 +757,11 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "—",
     nextState: null,
     effectsText:
-      "RIM-origin draft удаляется; saved frozen RIM Chat удаляется; RIM Chat автоматически не восстанавливается",
+      "RIM-origin draft удаляется; saved frozen RIM Chat и live RIM Chat удаляются; RIM Chat автоматически не восстанавливается",
     effects: [
       { type: "SET_CREATE_BAN_DRAFT" },
       { type: "SET_FROZEN_RIM_CHAT" },
+      { type: "SET_RIM_CHAT" },
       { type: "END_SESSION" },
     ],
     result: "SESSION_END",
@@ -827,10 +828,11 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "N-01 NOTIFICATIONS.INCOMING_BAN",
     nextState: "NOTIFICATIONS.INCOMING_BAN",
     effectsText:
-      "RIM-origin Create Ban прекращается; draft удаляется; saved frozen RIM Chat удаляется; target Incoming Ban становится active; предыдущий RIM Chat автоматически не восстанавливается",
+      "RIM-origin Create Ban прекращается; draft удаляется; saved frozen RIM Chat и live RIM Chat удаляются; target Incoming Ban становится active; предыдущий RIM Chat автоматически не восстанавливается",
     effects: [
       { type: "SET_CREATE_BAN_DRAFT" },
       { type: "SET_FROZEN_RIM_CHAT" },
+      { type: "SET_RIM_CHAT" },
       { type: "SET_ACTIVE_NOTIFICATION" },
       { type: "SET_CONTROL_STATE" },
     ],
@@ -1290,12 +1292,13 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "CB-10 CREATE_BAN.SUCCESS",
     nextState: "CREATE_BAN.SUCCESS",
     effectsText:
-      "Ban фиксируется как успешно отправленный; pending operation прекращается; RIM-origin draft завершается; saved frozen RIM Chat удаляется и больше не может быть восстановлен",
+      "Ban фиксируется как успешно отправленный и сохраняет sourceProposalId; pending operation прекращается; RIM-origin draft завершается; saved frozen RIM Chat и live RIM Chat удаляются и больше не могут быть восстановлены",
     effects: [
       { type: "UPSERT_BAN" },
       { type: "CLEAR_OPERATION" },
       { type: "SET_CREATE_BAN_DRAFT" },
       { type: "SET_FROZEN_RIM_CHAT" },
+      { type: "SET_RIM_CHAT" },
       { type: "SET_CONTROL_STATE" },
     ],
     result: "TRANSITION",
@@ -1334,10 +1337,11 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "—",
     nextState: null,
     effectsText:
-      "RIM-origin UI scenario прекращается; draft и saved frozen RIM Chat удаляются; late server result при наличии обрабатывается по global late-result rules",
+      "RIM-origin UI scenario прекращается; draft, saved frozen RIM Chat и live RIM Chat удаляются; late server result при наличии обрабатывается по global late-result rules",
     effects: [
       { type: "SET_CREATE_BAN_DRAFT" },
       { type: "SET_FROZEN_RIM_CHAT" },
+      { type: "SET_RIM_CHAT" },
       { type: "END_SESSION" },
     ],
     result: "SESSION_END",
@@ -1420,10 +1424,11 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "N-01 NOTIFICATIONS.INCOMING_BAN",
     nextState: "NOTIFICATIONS.INCOMING_BAN",
     effectsText:
-      "RIM-origin Create Ban UI прекращается; draft и saved frozen RIM Chat удаляются; target Incoming Ban становится active; pending send при наличии не получает права позднее восстановить старый Confirm или Success",
+      "RIM-origin Create Ban UI прекращается; draft, saved frozen RIM Chat и live RIM Chat удаляются; target Incoming Ban становится active; pending send при наличии не получает права позднее восстановить старый Confirm или Success",
     effects: [
       { type: "SET_CREATE_BAN_DRAFT" },
       { type: "SET_FROZEN_RIM_CHAT" },
+      { type: "SET_RIM_CHAT" },
       { type: "SET_ACTIVE_NOTIFICATION" },
       { type: "SET_CONTROL_STATE" },
     ],

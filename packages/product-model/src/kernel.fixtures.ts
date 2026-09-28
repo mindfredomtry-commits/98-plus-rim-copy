@@ -1,4 +1,6 @@
 import type {
+  AiOperation,
+  ApplicationProposal,
   Ban,
   BanDraft,
   CheckPair,
@@ -7,6 +9,8 @@ import type {
   RelationshipContext,
   RelationshipContextData,
   RimChat,
+  RimMessage,
+  RimRequestSnapshot,
   ShareOperation,
 } from "./entities.ts";
 import type { CanonicalEvent, CanonicalEventName, EventPayloadMap } from "./events.ts";
@@ -18,9 +22,10 @@ import type {
   ContextRequestId,
   DomainTimerId,
   DurationMinutes,
+  ExecutionProbability,
   NotificationItemId,
   OperationId,
-  Percentage,
+  ProposalId,
   RimChatId,
   ShareAttemptId,
   ShareLinkId,
@@ -49,6 +54,10 @@ export const BAN_ID = branded<BanId>("ban-1");
 export const OP_ID = branded<OperationId>("op-1");
 export const REQUEST_ID = branded<ContextRequestId>("context-1");
 export const AI_REQUEST_ID = branded<AiRequestId>("ai-1");
+export const CHAT_ID = branded<RimChatId>("chat-1");
+export const PROPOSAL_ID = branded<ProposalId>("proposal-1");
+export const PROPOSAL_ID_2 = branded<ProposalId>("proposal-2");
+export const PROPOSAL_ID_3 = branded<ProposalId>("proposal-3");
 export const SHARE_ATTEMPT_ID = branded<ShareAttemptId>("share-1");
 export const INCOMING_ITEM_ID = branded<NotificationItemId>("incoming-1");
 export const TIMER_ITEM_ID = branded<NotificationItemId>("timer-item-1");
@@ -58,10 +67,19 @@ export const CHECK_SENDER_ITEM_ID = branded<NotificationItemId>("check-sender-1"
 export const OTHER_USER = branded<UserId>("user-2");
 export const REPLY_BAN_ID = branded<BanId>("ban-reply");
 
+const EMPTY_STATUS_COUNTS = {
+  bantastic: 0,
+  banflict: 0,
+  fairEnough: 0,
+  overboard: 0,
+} as const;
+
 export const CONTEXT_DATA: RelationshipContextData = {
-  recentBansChronological: [],
-  statusCounts: null,
-  bantasticPercentage: null,
+  aggregates: {
+    userToContact: { bansSentCount: 0, statusCounts: { ...EMPTY_STATUS_COUNTS } },
+    contactToUser: { bansSentCount: 0, statusCounts: { ...EMPTY_STATUS_COUNTS } },
+  },
+  recentBans: [],
 };
 
 export function kernelContext(now = 1_000_000): ExecutionContext {
@@ -187,29 +205,35 @@ export function defaultEvent(name: CanonicalEventName): CanonicalEvent {
       return eventOf(name, { failedRequestId: AI_REQUEST_ID });
     case "RIM.PRESS_SUGGESTION_FORBID":
       return eventOf(name, {
-        selectedContactId: CONTACT_A,
-        suggestion: { banText: "no phones", fulfillmentProbability: 50 as Percentage },
-        rimChatId: branded<RimChatId>("chat-1"),
+        rimChatId: CHAT_ID,
+        proposalId: PROPOSAL_ID,
       });
     case "RIM.CONTEXT_READY":
       return eventOf(name, {
+        rimChatId: CHAT_ID,
         selectedContactId: CONTACT_A,
         relationshipContext: CONTEXT_DATA,
         requestId: REQUEST_ID,
       });
     case "RIM.CONTEXT_FAILED":
       return eventOf(name, {
+        rimChatId: CHAT_ID,
         selectedContactId: CONTACT_A,
         requestId: REQUEST_ID,
         failure: {} as Failure,
       });
     case "RIM.AI_RESULT_RECEIVED":
       return eventOf(name, {
+        rimChatId: CHAT_ID,
         requestId: AI_REQUEST_ID,
-        result: { kind: "CONVERSATIONAL", text: "ok" },
+        result: { kind: "MESSAGE", text: "ok" },
       });
     case "RIM.AI_REQUEST_FAILED":
-      return eventOf(name, { requestId: AI_REQUEST_ID, failure: {} as Failure });
+      return eventOf(name, {
+        rimChatId: CHAT_ID,
+        requestId: AI_REQUEST_ID,
+        failure: {} as Failure,
+      });
     default: {
       const _never: never = name;
       return _never;
@@ -217,14 +241,40 @@ export function defaultEvent(name: CanonicalEventName): CanonicalEvent {
   }
 }
 
+export function logicalAiSnapshot(overrides: Partial<RimRequestSnapshot> = {}): RimRequestSnapshot {
+  const requestId = overrides.requestId ?? AI_REQUEST_ID;
+  return {
+    requestId,
+    rimChatId: overrides.rimChatId ?? CHAT_ID,
+    userMessage: overrides.userMessage ?? "hello",
+    contextRequestId: overrides.contextRequestId ?? REQUEST_ID,
+  };
+}
+
+export function pendingAi(
+  overrides: Partial<RimRequestSnapshot> = {},
+): Extract<AiOperation, { status: "PENDING" }> {
+  const snapshot = logicalAiSnapshot(overrides);
+  return { status: "PENDING", requestId: snapshot.requestId, snapshot };
+}
+
+export function failedAi(
+  failure: Failure = {} as Failure,
+  overrides: Partial<RimRequestSnapshot> = {},
+): Extract<AiOperation, { status: "FAILED" }> {
+  const snapshot = logicalAiSnapshot(overrides);
+  return { status: "FAILED", requestId: snapshot.requestId, snapshot, failure };
+}
+
 export function makeChat(overrides: Partial<RimChat> = {}): RimChat {
   return {
-    id: branded<RimChatId>("chat-1"),
+    id: CHAT_ID,
     selectedContactId: null,
     relationshipContext: null,
     messages: [],
     inputDraft: "",
     aiOperation: { status: "IDLE" },
+    askRimOrigin: null,
     ...overrides,
   };
 }
@@ -265,8 +315,28 @@ export function makeBan(overrides: Partial<Ban> = {}): Ban {
     acceptance: "ACCEPTED",
     status: null,
     boundViaTelegramShareLink: false,
+    sourceProposalId: null,
     ...overrides,
   };
+}
+
+export function applicationProposal(
+  proposalId: ProposalId,
+  banText = "no phones",
+  executionProbability = 0.5 as ExecutionProbability,
+): ApplicationProposal {
+  return { proposalId, banText, executionProbability };
+}
+
+export function proposalsMessage(
+  proposals: readonly [ApplicationProposal, ApplicationProposal, ApplicationProposal] = [
+    applicationProposal(PROPOSAL_ID),
+    applicationProposal(PROPOSAL_ID_2, "no meetings"),
+    applicationProposal(PROPOSAL_ID_3, "no mail"),
+  ],
+  message = "three bans",
+): Extract<RimMessage, { kind: "BAN_PROPOSALS" }> {
+  return { kind: "BAN_PROPOSALS", message, proposals };
 }
 
 export function makeTimer(overrides: Partial<DomainTimer> = {}): DomainTimer {
@@ -437,6 +507,7 @@ export function shareOp(overrides: Partial<ShareOperation> = {}): ShareOperation
       selectedContactId: null,
       banText: "no phones",
       durationMinutes: 3 as DurationMinutes,
+      proposalId: null,
     },
     token: "share-token" as never,
     status: "ACTIVE",
@@ -514,6 +585,7 @@ export function validCreateDraft(origin: "CONTACT" | "TEMPLATE" | "RIM" = "CONTA
     selectedContactId: origin === "TEMPLATE" ? null : CONTACT_A,
     banText: "no phones",
     durationMinutes: 3 as DurationMinutes,
+    proposalId: origin === "RIM" ? PROPOSAL_ID : null,
   };
 }
 
@@ -536,6 +608,7 @@ function withDrafts(snapshot: ProductSnapshot, row: MatrixContractRow): ProductS
                 selectedContactId: origin === "TEMPLATE" ? null : CONTACT_A,
                 banText: "",
                 durationMinutes: null,
+                proposalId: null,
               }
             : validCreateDraft(origin),
       },
@@ -656,7 +729,7 @@ function prepareBranchSnapshot(
           relationshipContext: readyContext(),
           messages: [{ kind: "USER", text: "old" }],
           inputDraft: "old-draft",
-          aiOperation: { status: "FAILED", requestId: AI_REQUEST_ID, failure: {} as Failure },
+          aiOperation: failedAi(),
         }),
       );
       break;
@@ -668,7 +741,7 @@ function prepareBranchSnapshot(
           relationshipContext: readyContext(),
           messages: [{ kind: "RIM", text: "kept" }],
           inputDraft: "kept-draft",
-          aiOperation: { status: "FAILED", requestId: AI_REQUEST_ID, failure: {} as Failure },
+          aiOperation: failedAi(),
         }),
       );
       break;
@@ -689,7 +762,7 @@ function prepareBranchSnapshot(
           selectedContactId: CONTACT_A,
           relationshipContext: readyContext(),
           inputDraft: "hello",
-          aiOperation: { status: "PENDING", requestId: AI_REQUEST_ID },
+          aiOperation: pendingAi(),
         }),
       );
       break;
@@ -720,13 +793,22 @@ function prepareBranchSnapshot(
       );
       break;
     case "E-54:failed-ai-request":
+      next = withChat(
+        next,
+        makeChat({
+          selectedContactId: CONTACT_A,
+          relationshipContext: readyContext(),
+          aiOperation: failedAi(),
+        }),
+      );
+      break;
     case "E-59:current-request":
       next = withChat(
         next,
         makeChat({
           selectedContactId: CONTACT_A,
           relationshipContext: readyContext(),
-          aiOperation: { status: "FAILED", requestId: AI_REQUEST_ID, failure: {} as Failure },
+          aiOperation: pendingAi(),
         }),
       );
       break;
@@ -739,30 +821,50 @@ function prepareBranchSnapshot(
         makeChat({
           selectedContactId: CONTACT_A,
           relationshipContext: loadingContext(),
-          aiOperation:
-            row.eventId === "E-58"
-              ? { status: "PENDING", requestId: AI_REQUEST_ID }
-              : { status: "IDLE" },
+          aiOperation: row.eventId === "E-58" ? pendingAi() : { status: "IDLE" },
         }),
       );
       break;
     case "E-56:stale-contact":
     case "E-56:stale-replaced-contact":
+    case "E-57:stale-contact":
+    case "E-57:stale-replaced-contact":
     case "E-58:stale-request":
     case "E-58:stale-replaced-contact":
+    case "E-59:stale-request":
       next = withChat(
         next,
         makeChat({
           selectedContactId: CONTACT_B,
           relationshipContext: loadingContext(CONTACT_B, branded<ContextRequestId>("context-new")),
-          aiOperation: { status: "PENDING", requestId: branded<AiRequestId>("ai-new") },
+          aiOperation: pendingAi({ requestId: branded<AiRequestId>("ai-new") }),
         }),
       );
       break;
     case "E-55:valid-current-suggestion":
       next = withChat(
         next,
-        makeChat({ selectedContactId: CONTACT_A, relationshipContext: readyContext() }),
+        makeChat({
+          selectedContactId: CONTACT_A,
+          relationshipContext: readyContext(),
+          messages: [proposalsMessage()],
+        }),
+      );
+      break;
+    case "E-55:invalid-proposal":
+      next = withChat(
+        next,
+        makeChat({
+          selectedContactId: CONTACT_A,
+          relationshipContext: readyContext(),
+          messages: [
+            proposalsMessage([
+              applicationProposal(branded<ProposalId>("proposal-other")),
+              applicationProposal(PROPOSAL_ID_2, "no meetings"),
+              applicationProposal(PROPOSAL_ID_3, "no mail"),
+            ]),
+          ],
+        }),
       );
       break;
     case "E-48:current-chat-exists":
@@ -1118,6 +1220,7 @@ function eventForRow(row: MatrixContractRow): CanonicalEvent {
   }
   if (row.eventId === "E-56" && row.branch.startsWith("stale")) {
     return eventOf("RIM.CONTEXT_READY", {
+      rimChatId: CHAT_ID,
       selectedContactId: CONTACT_A,
       relationshipContext: CONTEXT_DATA,
       requestId: REQUEST_ID,
@@ -1125,8 +1228,9 @@ function eventForRow(row: MatrixContractRow): CanonicalEvent {
   }
   if (row.eventId === "E-58" && row.branch.startsWith("stale")) {
     return eventOf("RIM.AI_RESULT_RECEIVED", {
+      rimChatId: CHAT_ID,
       requestId: AI_REQUEST_ID,
-      result: { kind: "CONVERSATIONAL", text: "stale" },
+      result: { kind: "MESSAGE", text: "stale" },
     });
   }
   return base;

@@ -22,6 +22,7 @@ export const SNAPSHOT_FIELD_CLASSIFICATION = {
   "extended.telegramPersistentReentryCtaSurfaceGeneration": "DURABLE_USER_SESSION_STATE",
   "extended.telegramPersistentReentryCtaConsumedSurfaceGeneration": "DURABLE_USER_SESSION_STATE",
   "extended.entities.bans.boundViaTelegramShareLink": "DURABLE_PRODUCT_FACT",
+  "extended.entities.bans.sourceProposalId": "DURABLE_PRODUCT_FACT",
   "extended.rimChat": "DURABLE_USER_SESSION_STATE",
   "extended.savedFrozenRimChat": "DURABLE_USER_SESSION_STATE",
   "extended.createBanDraft": "DURABLE_USER_SESSION_STATE",
@@ -34,7 +35,7 @@ export const SNAPSHOT_FIELD_CLASSIFICATION = {
   "runtime.session": "DURABLE_USER_SESSION_STATE",
   "runtime.bootstrap": "DURABLE_USER_SESSION_STATE",
   "runtime.transitionInFlight": "TRANSIENT_EXECUTION_STATE",
-  "relationshipContext.data.recentBansChronological": "EXTERNAL_DERIVED_DATA",
+  "relationshipContext.data.recentBans": "EXTERNAL_DERIVED_DATA",
   REQUEST_RELATIONSHIP_CONTEXT: "TRANSIENT_EXECUTION_STATE",
   REQUEST_RIM_AI: "TRANSIENT_EXECUTION_STATE",
 } as const satisfies Record<string, SnapshotFieldClass>;
