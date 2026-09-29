@@ -32,6 +32,7 @@ export type {
   PersistenceSqlClient,
   ProductStore,
   RelationshipBanRecord,
+  RelationshipContextSource,
   ReleaseTelegramPersistentReentryBootstrapClaimResult,
   StoredShareLookup,
 } from "./types.ts";

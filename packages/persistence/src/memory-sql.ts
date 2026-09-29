@@ -494,6 +494,30 @@ export class MemorySqlClient implements PersistenceSqlClient {
         });
         return rows([]);
       }
+      case SQL.selectRelationshipContextSources: {
+        const records = this.tables.listRelationshipContextSources(
+          params[0] as UserId,
+          params[1] as UserId,
+        );
+        return rows(
+          records.map((record) => ({
+            ban_id: record.banId,
+            sender_id: record.senderId,
+            receiver_id: record.receiverId,
+            ban_text: record.banText,
+            acceptance: record.acceptance,
+            status: record.status,
+            created_seq: record.createdSeq,
+            created_at: record.createdAtMs,
+            started_at: record.timerStartedAtMs,
+            timer_state: record.timerState,
+            check_pair_created: record.checkPairCreated,
+            receiver_answer: record.receiverAnswer,
+            sender_answer: record.senderAnswer,
+            resulting_status: record.resultingStatus,
+          })),
+        );
+      }
       case SQL.selectRelationshipBans: {
         const records = this.tables.listRelationshipBans(params[0] as UserId, params[1] as UserId);
         return rows(

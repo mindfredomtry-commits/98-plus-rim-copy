@@ -73,6 +73,7 @@ function diagnostics(
     ...(extra.telegramPersistentReentry === undefined
       ? {}
       : { telegramPersistentReentry: extra.telegramPersistentReentry }),
+    ...(extra.rimChat === undefined ? {} : { rimChat: extra.rimChat }),
   };
 }
 
@@ -282,9 +283,44 @@ describe("Stage 6 TEST UI product screens", () => {
     expect(htmlSource).toContain("renderProductScreen(diagnostics");
     expect(htmlSource).not.toContain("history.pushState");
     expect(htmlSource).not.toContain("localStorage");
-    expect(productScreenIdFor("RIM.CHAT")).toBe("UnsupportedProductTestScreen");
+    expect(productScreenIdFor("RIM.CHAT")).toBe("RimChatTestScreen");
+    expect(productScreenIdFor("RIM.SELECT_CONTACT")).toBe("RimSelectContactTestScreen");
+    expect(productScreenIdFor("CREATE_BAN.WHAT.RIM")).toBe("CreateBanWhatRimTestScreen");
+    expect(productScreenIdFor("CREATE_BAN.CONFIRM.RIM")).toBe("CreateBanConfirmRimTestScreen");
     expect(productScreenIdFor(null)).toBe("EmptySnapshotTestScreen");
     expect(productScreenIdFor(undefined)).toBe("DisconnectedTestScreen");
+  });
+
+  it("renders RIM Chat proposals and keeps Select Contact available after a contact is chosen", () => {
+    const screen = renderProductScreen(
+      diagnostics("RIM.CHAT", {
+        rimChat: {
+          id: "rim-chat-1",
+          selectedContactId: USER_B,
+          inputDraft: "",
+          relationshipContext: { status: "ready", requestId: "context-1" },
+          aiOperation: { status: "IDLE" },
+          messages: [
+            { kind: "RIM", text: "я могу предложить 3 запрета, написать?" },
+            {
+              kind: "BAN_PROPOSALS",
+              message: "вот три",
+              proposals: [
+                { proposalId: "proposal-1", banText: "запрет один", executionProbability: 0.2 },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    expect(screen.screenId).toBe("RimChatTestScreen");
+    expect(screen.html).toContain('data-selected-contact="user-b-internal"');
+    expect(screen.html).toContain('data-event="RIM.PRESS_SELECT_CONTACT"');
+    expect(screen.html).toContain('data-rim-message="BAN_PROPOSALS"');
+    expect(screen.html).toContain('data-proposal-id="proposal-1"');
+    expect(screen.html).toContain('data-event="RIM.PRESS_SUGGESTION_FORBID"');
+    expect(screen.html).toContain('data-rim-chat-id="rim-chat-1"');
+    expect(screen.html).toContain('data-event="RIM.PRESS_SEND"');
   });
 
   it("L. diagnostics remain visible and show canonical machine fields", () => {

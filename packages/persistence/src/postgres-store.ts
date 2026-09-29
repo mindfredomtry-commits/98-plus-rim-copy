@@ -38,6 +38,7 @@ import type {
   PersistenceSqlClient,
   ProductStore,
   RelationshipBanRecord,
+  RelationshipContextSource,
   StoredShareLookup,
 } from "./types.ts";
 
@@ -67,6 +68,37 @@ type SessionRow = {
   telegram_persistent_reentry_cta_surface_generation?: number | string | null;
   telegram_persistent_reentry_cta_consumed_surface_generation?: number | string | null;
 };
+
+type RelationshipContextSourceSqlRow = {
+  ban_id: string;
+  sender_id: string;
+  receiver_id: string;
+  ban_text: string;
+  acceptance: BanAcceptance;
+  status: BanStatus | null;
+  created_seq: number;
+  created_at: Date | string | number | null;
+  started_at: number | null;
+  timer_state: DomainTimer["state"] | null;
+  check_pair_created: boolean | null;
+  receiver_answer: CheckAnswer | null;
+  sender_answer: CheckAnswer | null;
+  resulting_status: CheckDerivedStatus | null;
+};
+
+function createdAtMs(value: Date | string | number | null): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
 
 type BanSqlRow = {
   ban_id: string;
@@ -269,6 +301,33 @@ export class PostgresProductStore implements ProductStore {
         receiverId: row.receiver_id as UserId,
         status: row.status,
       },
+    }));
+  }
+
+  async listRelationshipContextSources(
+    leftUserId: UserId,
+    rightUserId: UserId,
+  ): Promise<readonly RelationshipContextSource[]> {
+    const result = await this.client.query<RelationshipContextSourceSqlRow>(
+      SQL.selectRelationshipContextSources,
+      [leftUserId, rightUserId],
+    );
+    return result.rows.map((row) => ({
+      banId: row.ban_id as Ban["id"],
+      senderId: row.sender_id as UserId,
+      receiverId: row.receiver_id as UserId,
+      banText: row.ban_text,
+      acceptance: row.acceptance,
+      status: row.status,
+      createdSeq: Number(row.created_seq),
+      createdAtMs: createdAtMs(row.created_at),
+      timerStartedAtMs:
+        row.started_at === null || row.started_at === undefined ? null : Number(row.started_at),
+      timerState: row.timer_state ?? null,
+      checkPairCreated: Boolean(row.check_pair_created),
+      receiverAnswer: row.receiver_answer ?? null,
+      senderAnswer: row.sender_answer ?? null,
+      resultingStatus: row.resulting_status ?? null,
     }));
   }
 

@@ -1,4 +1,8 @@
-import type { ApplicationExecutionResult, ProductEventInput } from "@98plus/application";
+import {
+  continueRimEffects,
+  type ApplicationExecutionResult,
+  type ProductEventInput,
+} from "@98plus/application";
 import type { AuthenticatedContext } from "@98plus/identity";
 import type {
   BanId,
@@ -22,7 +26,11 @@ import {
   shouldCompleteCheckAnswer,
 } from "./check-answer.ts";
 import { applyElapsedDomainTimers } from "./duration-expired.ts";
-import { executeAuthenticatedEvent, type CreateBanContactRuntime } from "./runtime.ts";
+import {
+  executeAuthenticatedEvent,
+  executorDeps,
+  type CreateBanContactRuntime,
+} from "./runtime.ts";
 
 export function pendingOverboard(snapshot: ProductSnapshot) {
   return (
@@ -112,47 +120,72 @@ export async function executeIncomingOverboardVertical(
     clientClaimedUserId,
   );
   if (contact.orchestration !== null) {
-    return finishWithElapsedTimers(runtime, context, contact);
+    return finishWithElapsedTimers(runtime, context, contact, clientClaimedUserId);
   }
   if (shouldCompleteOverboard(contact.last)) {
     const server = await completeOverboard(runtime, context, contact.last, clientClaimedUserId);
-    const afterExpiry = await finishWithElapsedTimers(runtime, context, {
-      first: contact.last,
-      last: server,
-      orchestration: overboardOrchestration(contact.last, server),
-    });
+    const afterExpiry = await finishWithElapsedTimers(
+      runtime,
+      context,
+      {
+        first: contact.last,
+        last: server,
+        orchestration: overboardOrchestration(contact.last, server),
+      },
+      clientClaimedUserId,
+    );
     return afterExpiry;
   }
   if (shouldCompleteReplyBanSend(contact.last)) {
     const server = await completeReplyBanSend(runtime, context, contact.last, clientClaimedUserId);
-    return finishWithElapsedTimers(runtime, context, {
-      first: contact.last,
-      last: server,
-      orchestration: replyBanOrchestration(contact.last, server),
-    });
+    return finishWithElapsedTimers(
+      runtime,
+      context,
+      {
+        first: contact.last,
+        last: server,
+        orchestration: replyBanOrchestration(contact.last, server),
+      },
+      clientClaimedUserId,
+    );
   }
   if (shouldCompleteCheckAnswer(contact.last)) {
     const server = await completeCheckAnswer(runtime, context, contact.last, clientClaimedUserId);
-    return finishWithElapsedTimers(runtime, context, {
-      first: contact.last,
-      last: server,
-      orchestration: checkAnswerOrchestration(contact.last, server),
-    });
+    return finishWithElapsedTimers(
+      runtime,
+      context,
+      {
+        first: contact.last,
+        last: server,
+        orchestration: checkAnswerOrchestration(contact.last, server),
+      },
+      clientClaimedUserId,
+    );
   }
-  return finishWithElapsedTimers(runtime, context, contact);
+  return finishWithElapsedTimers(runtime, context, contact, clientClaimedUserId);
 }
 
 async function finishWithElapsedTimers(
   runtime: CreateBanContactRuntime,
   context: AuthenticatedContext,
   execution: CreateBanContactExecution,
+  clientClaimedUserId?: string,
 ): Promise<CreateBanContactExecution> {
+  const settled = await continueRimEffects(execution.last, {
+    context,
+    ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
+    deps: executorDeps(runtime),
+    rimAi: runtime.rimAi,
+    contextFailures: runtime.rimContextFailures,
+    loadSources: (currentUserId, contactId) =>
+      runtime.productStore.listRelationshipContextSources(currentUserId, contactId),
+  });
   await applyElapsedDomainTimers(runtime, context);
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
   return {
     ...execution,
     last: {
-      ...execution.last,
+      ...settled,
       snapshot: loaded.snapshot,
       controlState: loaded.snapshot.controlState,
     },

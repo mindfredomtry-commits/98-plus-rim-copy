@@ -122,6 +122,8 @@ describe("Stage 5 executeProductEvent", () => {
     const racing: ProductStore = {
       loadProductSnapshot: (userId) => inner.loadProductSnapshot(userId),
       listRelationshipBans: (left, right) => inner.listRelationshipBans(left, right),
+      listRelationshipContextSources: (left, right) =>
+        inner.listRelationshipContextSources(left, right),
       withCheckPairLock: (pairId, run) => inner.withCheckPairLock(pairId, run),
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),
@@ -172,6 +174,8 @@ describe("Stage 5 executeProductEvent", () => {
     const failing: ProductStore = {
       loadProductSnapshot: (userId) => inner.loadProductSnapshot(userId),
       listRelationshipBans: (left, right) => inner.listRelationshipBans(left, right),
+      listRelationshipContextSources: (left, right) =>
+        inner.listRelationshipContextSources(left, right),
       withCheckPairLock: (pairId, run) => inner.withCheckPairLock(pairId, run),
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),

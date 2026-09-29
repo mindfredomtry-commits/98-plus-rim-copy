@@ -65,6 +65,24 @@ export type RelationshipBanRecord = Readonly<{
   relationshipBan: RelationshipBan;
 }>;
 
+/** Pair history for the Application RelationshipContext builder. Chronological, not limited to 10. */
+export type RelationshipContextSource = Readonly<{
+  banId: BanId;
+  senderId: UserId;
+  receiverId: UserId;
+  banText: string;
+  acceptance: Ban["acceptance"];
+  status: Ban["status"];
+  createdSeq: number;
+  createdAtMs: number | null;
+  timerStartedAtMs: number | null;
+  timerState: "RUNNING" | "EXPIRED" | null;
+  checkPairCreated: boolean;
+  receiverAnswer: CheckPair["receiverAnswer"] | null;
+  senderAnswer: CheckPair["senderAnswer"] | null;
+  resultingStatus: CheckPair["resultingStatus"] | null;
+}>;
+
 export type BanReceiverBindResult =
   | { status: "BOUND"; ban: Ban }
   | { status: "ALREADY_BOUND"; ban: Ban }
@@ -139,6 +157,10 @@ export type ProductStore = {
     leftUserId: UserId,
     rightUserId: UserId,
   ): Promise<readonly RelationshipBanRecord[]>;
+  listRelationshipContextSources(
+    leftUserId: UserId,
+    rightUserId: UserId,
+  ): Promise<readonly RelationshipContextSource[]>;
   findShareByToken(token: string): Promise<StoredShareLookup | null>;
   getBanById(banId: BanId): Promise<Ban | null>;
   bindBanReceiver(banId: BanId, receiverId: UserId): Promise<BanReceiverBindResult>;

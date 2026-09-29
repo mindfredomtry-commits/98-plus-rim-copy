@@ -18,7 +18,11 @@ import {
   notificationItemToRecord,
 } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
-import type { BanReceiverBindResult, RelationshipBanRecord } from "./types.ts";
+import type {
+  BanReceiverBindResult,
+  RelationshipBanRecord,
+  RelationshipContextSource,
+} from "./types.ts";
 
 type IdentityRow = { userId: UserId; telegramUserId: string };
 type BanRecord = Ban & { createdSeq: number };
@@ -381,5 +385,41 @@ export class ProductTables {
         status: ban.status,
       } satisfies RelationshipBan,
     }));
+  }
+
+  listRelationshipContextSources(
+    leftUserId: UserId,
+    rightUserId: UserId,
+  ): RelationshipContextSource[] {
+    const timers = [...this.data.timers.values()];
+    const pairs = [...this.data.pairs.values()];
+    return [...this.data.bans.values()]
+      .filter((ban) => ban.receiverId)
+      .filter(
+        (ban) =>
+          (ban.senderId === leftUserId && ban.receiverId === rightUserId) ||
+          (ban.senderId === rightUserId && ban.receiverId === leftUserId),
+      )
+      .sort((a, b) => a.createdSeq - b.createdSeq)
+      .map((ban) => {
+        const timer = timers.find((item) => item.banId === ban.id) ?? null;
+        const pair = pairs.find((item) => item.banId === ban.id) ?? null;
+        return {
+          banId: ban.id,
+          senderId: ban.senderId,
+          receiverId: ban.receiverId as UserId,
+          banText: ban.banText,
+          acceptance: ban.acceptance,
+          status: ban.status,
+          createdSeq: ban.createdSeq,
+          createdAtMs: null,
+          timerStartedAtMs: timer ? Number(timer.startedAt) : null,
+          timerState: timer?.state ?? null,
+          checkPairCreated: timer?.checkPairCreated ?? pair !== null,
+          receiverAnswer: pair?.receiverAnswer ?? null,
+          senderAnswer: pair?.senderAnswer ?? null,
+          resultingStatus: pair?.resultingStatus ?? null,
+        };
+      });
   }
 }

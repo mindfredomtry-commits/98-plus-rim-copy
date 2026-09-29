@@ -251,4 +251,30 @@ WHERE receiver_id IS NOT NULL
 ORDER BY created_seq DESC
 LIMIT 10
 `.trim(),
+  selectRelationshipContextSources: `
+SELECT
+  b.ban_id,
+  b.sender_id,
+  b.receiver_id,
+  b.ban_text,
+  b.acceptance,
+  b.status,
+  b.created_seq,
+  b.created_at,
+  t.started_at,
+  t.state AS timer_state,
+  t.check_pair_created,
+  p.receiver_answer,
+  p.sender_answer,
+  p.resulting_status
+FROM bans b
+LEFT JOIN domain_timers t ON t.ban_id = b.ban_id
+LEFT JOIN check_pairs p ON p.ban_id = b.ban_id
+WHERE b.receiver_id IS NOT NULL
+  AND (
+    (b.sender_id = $1 AND b.receiver_id = $2)
+    OR (b.sender_id = $2 AND b.receiver_id = $1)
+  )
+ORDER BY b.created_seq ASC
+`.trim(),
 } as const;

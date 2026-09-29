@@ -9,9 +9,13 @@ export type TestUiScreenId =
   | "DisconnectedTestScreen"
   | "EmptySnapshotTestScreen"
   | "LobbyTestScreen"
+  | "RimChatTestScreen"
+  | "RimSelectContactTestScreen"
   | "CreateBanWhoTestScreen"
   | "CreateBanWhatContactTestScreen"
   | "CreateBanWhatTemplateTestScreen"
+  | "CreateBanWhatRimTestScreen"
+  | "CreateBanConfirmRimTestScreen"
   | "CreateBanConfirmContactTestScreen"
   | "CreateBanConfirmTemplateTestScreen"
   | "CreateBanSharePendingTestScreen"
@@ -37,6 +41,10 @@ export type TestUiScreenId =
 
 export const PRODUCT_SCREEN_BY_CONTROL_STATE = {
   "RIM.LOBBY": "LobbyTestScreen",
+  "RIM.CHAT": "RimChatTestScreen",
+  "RIM.SELECT_CONTACT": "RimSelectContactTestScreen",
+  "CREATE_BAN.WHAT.RIM": "CreateBanWhatRimTestScreen",
+  "CREATE_BAN.CONFIRM.RIM": "CreateBanConfirmRimTestScreen",
   "CREATE_BAN.WHO": "CreateBanWhoTestScreen",
   "CREATE_BAN.WHAT.CONTACT": "CreateBanWhatContactTestScreen",
   "CREATE_BAN.WHAT.TEMPLATE": "CreateBanWhatTemplateTestScreen",
@@ -68,6 +76,15 @@ export const PRODUCT_SCREEN_BY_CONTROL_STATE = {
 
 export const TEST_UI_USER_EVENT_NAMES = [
   "CREATE_BAN.PRESS_START",
+  "RIM.PRESS_START_CHAT",
+  "RIM.PRESS_SELECT_CONTACT",
+  "RIM.SELECT_CONTACT",
+  "RIM.PRESS_BACK",
+  "RIM.CHANGE_INPUT_DRAFT",
+  "RIM.PRESS_SEND",
+  "RIM.PRESS_RETRY_CONTEXT",
+  "RIM.PRESS_RETRY_AI",
+  "RIM.PRESS_SUGGESTION_FORBID",
   "CREATE_BAN.SELECT_CONTACT",
   "CREATE_BAN.SELECT_TEMPLATE",
   "CREATE_BAN.CHANGE_BAN_TEXT",
@@ -118,6 +135,7 @@ export type TestUiCreateBanDraft = Readonly<{
   selectedContactId?: string | null;
   banText?: string | null;
   durationMinutes?: number | null;
+  proposalId?: string | null;
 }>;
 
 export type TestUiBan = Readonly<{
@@ -212,6 +230,35 @@ export type TestUiScreenDiagnostics = Readonly<{
     label: string;
     api: "requestWriteAccess";
   }> | null;
+  rimChat?: TestUiRimChat | null;
+}>;
+
+export type TestUiRimProposal = Readonly<{
+  proposalId: string;
+  banText: string;
+  executionProbability: number;
+}>;
+
+export type TestUiRimMessage = Readonly<{
+  kind: "USER" | "RIM" | "BAN_PROPOSALS";
+  text?: string;
+  message?: string;
+  proposals?: readonly TestUiRimProposal[];
+}>;
+
+export type TestUiRimChat = Readonly<{
+  id: string;
+  selectedContactId: string | null;
+  messages: readonly TestUiRimMessage[];
+  inputDraft: string;
+  relationshipContext: {
+    status: "loading" | "ready" | "error";
+    requestId: string;
+  } | null;
+  aiOperation: {
+    status: "IDLE" | "PENDING" | "FAILED";
+    requestId?: string;
+  };
 }>;
 
 export type ProductScreenRender = Readonly<{
@@ -255,6 +302,18 @@ export function renderProductScreen(
       break;
     case "LobbyTestScreen":
       screen = lobbyScreen(diagnostics);
+      break;
+    case "RimChatTestScreen":
+      screen = rimChatScreen(diagnostics);
+      break;
+    case "RimSelectContactTestScreen":
+      screen = rimSelectContactScreen(diagnostics);
+      break;
+    case "CreateBanWhatRimTestScreen":
+      screen = whatRimScreen(diagnostics);
+      break;
+    case "CreateBanConfirmRimTestScreen":
+      screen = confirmRimScreen(diagnostics, options.sending === true);
       break;
     case "CreateBanWhoTestScreen":
       screen = whoScreen(diagnostics);
@@ -385,7 +444,11 @@ function lobbyScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRender 
   return wrap(
     "LobbyTestScreen",
     "RIM LOBBY",
-    [actionButton("CREATE BAN", "CREATE_BAN.PRESS_START"), notifications].join(""),
+    [
+      actionButton("START CHAT", "RIM.PRESS_START_CHAT"),
+      actionButton("CREATE BAN", "CREATE_BAN.PRESS_START"),
+      notifications,
+    ].join(""),
   );
 }
 
@@ -1160,14 +1223,161 @@ function wrap(screenId: TestUiScreenId, title: string, body: string): ProductScr
   };
 }
 
+function rimMessages(chat: TestUiRimChat): string {
+  return chat.messages
+    .map((message) => {
+      if (message.kind === "BAN_PROPOSALS") {
+        const proposals = (message.proposals ?? [])
+          .map(
+            (proposal) =>
+              `<li data-proposal-id="${escapeAttr(proposal.proposalId)}"><span>${escapeHtml(proposal.banText)}</span> <span data-execution-probability="${escapeAttr(String(proposal.executionProbability))}">${escapeHtml(String(proposal.executionProbability))}</span> ${actionButton("запретить", "RIM.PRESS_SUGGESTION_FORBID", { proposalId: proposal.proposalId, rimChatId: chat.id })}</li>`,
+          )
+          .join("");
+        return `<article data-rim-message="BAN_PROPOSALS"><p>${escapeHtml(message.message ?? "")}</p><ol>${proposals}</ol></article>`;
+      }
+      const text = message.text ?? "";
+      return `<p data-rim-message="${escapeAttr(message.kind)}">${escapeHtml(text)}</p>`;
+    })
+    .join("");
+}
+
+function rimChatScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRender {
+  const chat = diagnostics.rimChat;
+  if (!chat) {
+    return wrap("RimChatTestScreen", "RIM CHAT", "<p>Canonical RIM Chat is absent.</p>");
+  }
+  const context = chat.relationshipContext;
+  const ai = chat.aiOperation.status;
+  const canSend = context?.status === "ready" && ai === "IDLE";
+  const parts = [
+    `<p>Chat <code data-rim-chat-id="${escapeAttr(chat.id)}">${escapeHtml(chat.id)}</code></p>`,
+    chat.selectedContactId
+      ? `<p>Contact <code data-selected-contact="${escapeAttr(chat.selectedContactId)}">${escapeHtml(chat.selectedContactId)}</code></p>`
+      : '<p data-selected-contact="absent">selectedContact absent</p>',
+    rimMessages(chat),
+  ];
+  parts.push(actionButton("Выбрать человека", "RIM.PRESS_SELECT_CONTACT"));
+  if (context?.status === "loading") {
+    parts.push('<p data-context-status="loading">Relationship context loading</p>');
+  }
+  if (context?.status === "error") {
+    parts.push('<p data-context-status="error">Relationship context failed</p>');
+    parts.push(
+      actionButton("Retry context", "RIM.PRESS_RETRY_CONTEXT", {
+        failedRequestId: context.requestId,
+      }),
+    );
+  }
+  if (ai === "PENDING") {
+    parts.push('<p data-ai-status="pending">RIM is responding</p>');
+  }
+  if (ai === "FAILED" && chat.aiOperation.requestId) {
+    parts.push('<p data-ai-status="failed">RIM request failed</p>');
+    parts.push(
+      actionButton("Retry AI", "RIM.PRESS_RETRY_AI", {
+        failedRequestId: chat.aiOperation.requestId,
+      }),
+    );
+  }
+  if (canSend || !chat.selectedContactId) {
+    parts.push(
+      `<div class="row"><label for="rimInputDraft">Message</label> <input id="rimInputDraft" data-change-event="RIM.CHANGE_INPUT_DRAFT" data-change-field="inputDraft" value="${escapeAttr(chat.inputDraft)}" /></div>`,
+    );
+    if (canSend) {
+      parts.push(actionButton("SEND", "RIM.PRESS_SEND"));
+    }
+  }
+  parts.push(actionButton("BACK", "RIM.PRESS_BACK"));
+  return wrap("RimChatTestScreen", "RIM CHAT", parts.join(""));
+}
+
+function rimSelectContactScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRender {
+  const selectable = diagnostics.contacts.filter(
+    (contact) => contact.userId !== diagnostics.currentUserId,
+  );
+  const choices =
+    selectable.length === 0
+      ? "<p class='warn'>No other registered 98+ users are selectable.</p>"
+      : selectable
+          .map((contact) =>
+            [
+              '<div class="receiver-choice">',
+              `<div>UserId: <code data-contact-user-id="${escapeAttr(contact.userId)}">${escapeHtml(contact.userId)}</code></div>`,
+              actionButton("Choose", "RIM.SELECT_CONTACT", { contactId: contact.userId }),
+              "</div>",
+            ].join(""),
+          )
+          .join("");
+  return wrap(
+    "RimSelectContactTestScreen",
+    "RIM — SELECT CONTACT",
+    ["<p>Choose an internal contact.</p>", choices, actionButton("BACK", "RIM.PRESS_BACK")].join(
+      "",
+    ),
+  );
+}
+
+function whatRimScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRender {
+  const draft = diagnostics.createBanDraft ?? {};
+  const duration =
+    draft.durationMinutes === null || draft.durationMinutes === undefined
+      ? ""
+      : String(draft.durationMinutes);
+  return wrap(
+    "CreateBanWhatRimTestScreen",
+    "CREATE BAN — WHAT (RIM)",
+    [
+      "<p>Frozen RIM Chat stays saved. Ban text comes from the selected proposal.</p>",
+      `<p>Proposal: <code data-draft-proposal="${escapeAttr(String(draft.proposalId ?? ""))}">${escapeHtml(String(draft.proposalId ?? ""))}</code></p>`,
+      `<p>Ban: ${escapeHtml(String(draft.banText ?? ""))}</p>`,
+      '<div class="row"><label for="durationMinutes">Duration</label> ',
+      `<input id="durationMinutes" type="number" step="1" data-change-event="CREATE_BAN.CHANGE_DURATION" data-change-field="durationMinutes" data-change-type="number" value="${escapeAttr(duration)}" placeholder="3–60" /></div>`,
+      actionButton("BACK", "CREATE_BAN.PRESS_BACK"),
+      actionButton("NEXT", "CREATE_BAN.PRESS_NEXT"),
+    ].join(""),
+  );
+}
+
+function confirmRimScreen(
+  diagnostics: TestUiScreenDiagnostics,
+  sending: boolean,
+): ProductScreenRender {
+  const draft = diagnostics.createBanDraft ?? {};
+  const forbidDisabled = sending ? " disabled" : "";
+  return wrap(
+    "CreateBanConfirmRimTestScreen",
+    "CREATE BAN — CONFIRM (RIM)",
+    [
+      `<p>Ban: ${escapeHtml(String(draft.banText ?? ""))}</p>`,
+      `<p>Duration: ${escapeHtml(String(draft.durationMinutes ?? "(none)"))}</p>`,
+      `<p>Proposal: <code>${escapeHtml(String(draft.proposalId ?? ""))}</code></p>`,
+      actionButton("BACK", "CREATE_BAN.PRESS_BACK"),
+      `<div class="row"><button type="button" data-event="CREATE_BAN.PRESS_FORBID"${forbidDisabled}>FORBID</button></div>`,
+    ].join(""),
+  );
+}
+
 function actionButton(
   label: string,
   eventName: (typeof TEST_UI_USER_EVENT_NAMES)[number],
-  extra: { contactId?: string } = {},
+  extra: {
+    contactId?: string;
+    proposalId?: string;
+    rimChatId?: string;
+    failedRequestId?: string;
+  } = {},
 ): string {
   const contactAttr =
     extra.contactId === undefined ? "" : ` data-contact-id="${escapeAttr(extra.contactId)}"`;
-  return `<div class="row"><button type="button" data-event="${escapeAttr(eventName)}"${contactAttr}>${escapeHtml(label)}</button></div>`;
+  const proposalAttr =
+    extra.proposalId === undefined ? "" : ` data-proposal-id="${escapeAttr(extra.proposalId)}"`;
+  const chatAttr =
+    extra.rimChatId === undefined ? "" : ` data-rim-chat-id="${escapeAttr(extra.rimChatId)}"`;
+  const failedAttr =
+    extra.failedRequestId === undefined
+      ? ""
+      : ` data-failed-request-id="${escapeAttr(extra.failedRequestId)}"`;
+  return `<div class="row"><button type="button" data-event="${escapeAttr(eventName)}"${contactAttr}${proposalAttr}${chatAttr}${failedAttr}>${escapeHtml(label)}</button></div>`;
 }
 
 export function escapeHtml(value: string): string {

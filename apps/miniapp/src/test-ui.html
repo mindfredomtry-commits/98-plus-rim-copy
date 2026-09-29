@@ -214,6 +214,12 @@
             const payload = {};
             const contactId = button.getAttribute("data-contact-id");
             if (contactId) payload.contactId = contactId;
+            const proposalId = button.getAttribute("data-proposal-id");
+            if (proposalId) payload.proposalId = proposalId;
+            const rimChatId = button.getAttribute("data-rim-chat-id");
+            if (rimChatId) payload.rimChatId = rimChatId;
+            const failedRequestId = button.getAttribute("data-failed-request-id");
+            if (failedRequestId) payload.failedRequestId = failedRequestId;
             const shareAttemptId = button.getAttribute("data-share-attempt-id");
             if (shareAttemptId) payload.shareAttemptId = shareAttemptId;
             if (name === "CREATE_BAN.PRESS_FORBID") {

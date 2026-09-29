@@ -1,11 +1,14 @@
 import {
   executeProductEvent,
+  FakeRimAiAdapter,
   randomIdAllocator,
   systemClock,
   type ApplicationClock,
   type IdAllocator,
   type ProductEventInput,
   type ProductExecutorDependencies,
+  type RimAiPort,
+  type RimContextFailures,
 } from "@98plus/application";
 import {
   authenticate,
@@ -64,6 +67,8 @@ export type CreateBanContactRuntime = Readonly<{
   telegramPersistentReentryBootstrapAfterClaim: (() => Promise<void>) | null;
   /** Mock/live bootstrap send intents for Stage 13A tests and diagnostics. */
   telegramPersistentReentryBootstrapIntents: TelegramPersistentReentryBootstrapIntent[];
+  rimAi: RimAiPort;
+  rimContextFailures: RimContextFailures;
 }>;
 
 export type CreateBanContactRuntimeOptions = Readonly<{
@@ -84,6 +89,8 @@ export type CreateBanContactRuntimeOptions = Readonly<{
   telegramPersistentReentryBootstrapMode?: TelegramSharePrepareMode;
   telegramPersistentReentryBootstrapSend?: TelegramPersistentReentryBootstrapSend;
   telegramPersistentReentryBootstrapAfterClaim?: () => Promise<void>;
+  rimAi?: RimAiPort;
+  rimContextFailures?: RimContextFailures;
 }>;
 
 export function developmentIdentityConfig(
@@ -126,6 +133,8 @@ export function createCreateBanContactRuntime(
     telegramPersistentReentryBootstrapAfterClaim:
       options.telegramPersistentReentryBootstrapAfterClaim ?? null,
     telegramPersistentReentryBootstrapIntents: [],
+    rimAi: options.rimAi ?? new FakeRimAiAdapter(),
+    rimContextFailures: options.rimContextFailures ?? { remainingFailures: 0 },
   };
 }
 

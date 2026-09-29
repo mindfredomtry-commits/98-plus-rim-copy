@@ -15,6 +15,10 @@ const SERVER_RESULT_EVENTS = new Set([
   "NOTIFICATIONS.CHECK_ANSWER_CONFIRMED.FIRST",
   "NOTIFICATIONS.CHECK_ANSWER_CONFIRMED.SECOND",
   "BAN.DURATION_EXPIRED",
+  "RIM.CONTEXT_READY",
+  "RIM.CONTEXT_FAILED",
+  "RIM.AI_RESULT_RECEIVED",
+  "RIM.AI_REQUEST_FAILED",
   "TELEGRAM_SHARE_LINK.OPENED",
   "TELEGRAM_SHARE_LINK.RESOLVED",
   "TELEGRAM_SHARE_LINK.REJECTED",
@@ -85,8 +89,10 @@ export function shouldCompleteContactSend(execution: ApplicationExecutionResult)
   return (
     execution.event.name === "CREATE_BAN.PRESS_FORBID" &&
     execution.status === "APPLIED" &&
-    execution.snapshot.controlState === "CREATE_BAN.CONFIRM.CONTACT" &&
-    execution.snapshot.extended.createBanDraft?.origin === "CONTACT" &&
+    ((execution.snapshot.controlState === "CREATE_BAN.CONFIRM.CONTACT" &&
+      execution.snapshot.extended.createBanDraft?.origin === "CONTACT") ||
+      (execution.snapshot.controlState === "CREATE_BAN.CONFIRM.RIM" &&
+        execution.snapshot.extended.createBanDraft?.origin === "RIM")) &&
     pendingCreateBanSend(execution.snapshot) !== null
   );
 }

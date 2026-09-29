@@ -16,3 +16,9 @@ export type {
   ShareLinkResolvedExecution,
 } from "./execute.ts";
 export { APPLICATION_STAGE, STAGE_5_EXCLUDES } from "./stage.ts";
+export { buildRelationshipContextData } from "./rim/relationship-context.ts";
+export { FakeRimAiAdapter, FakeRimAiFailure } from "./rim/fake-rim-ai-adapter.ts";
+export type { FakeRimAiStep } from "./rim/fake-rim-ai-adapter.ts";
+export { continueRimEffects } from "./rim/continue-rim.ts";
+export type { RimContextFailures } from "./rim/continue-rim.ts";
+export type { RimAiPort, RimAiRequest } from "./rim/rim-ai-port.ts";

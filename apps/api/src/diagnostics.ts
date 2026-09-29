@@ -85,6 +85,7 @@ export type TestUiDiagnostics = Readonly<{
   savedFrozenRimChatPresent: boolean;
   error: Readonly<{ code: string; message: string }> | null;
   contacts: readonly SelectableRegisteredUser[];
+  rimChat: ProductSnapshot["extended"]["rimChat"];
 }>;
 
 function eventIdOf(event: CanonicalEvent): CanonicalEventId | null {
@@ -172,5 +173,6 @@ export function toTestUiDiagnostics(input: {
         ? { code: input.execution.error.code, message: input.execution.error.message }
         : null),
     contacts: input.contacts ?? [],
+    rimChat: snapshot.extended.rimChat,
   };
 }

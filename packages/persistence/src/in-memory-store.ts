@@ -144,6 +144,10 @@ export class InMemoryProductStore implements ProductStore {
     return this.tables.listRelationshipBans(leftUserId, rightUserId);
   }
 
+  async listRelationshipContextSources(leftUserId: UserId, rightUserId: UserId) {
+    return this.tables.listRelationshipContextSources(leftUserId, rightUserId);
+  }
+
   async findShareByToken(token: string) {
     const share = this.tables.findShareByToken(token);
     if (!share) {
