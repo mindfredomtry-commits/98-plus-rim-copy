@@ -7,6 +7,7 @@ import type { ProductEventInput } from "../event.ts";
 import { FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
 import { buildRelationshipContextData } from "./relationship-context.ts";
 import type { RimAiPort } from "./rim-ai-port.ts";
+import { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./validate-rim-ai-output.ts";
 
 export type RimContextFailures = { remainingFailures: number };
 
@@ -24,7 +25,9 @@ function rimEffect(execution: ApplicationExecutionResult) {
 
 /**
  * Completes frozen RIM external effects by dispatching E-56/E-57 or E-58/E-59.
- * The Kernel remains the only writer of Product state.
+ * Provider completion is structurally validated before E-58. Invalid output uses
+ * the existing E-59 failure path and does not mint proposalId values.
+ * The Kernel remains the correlation authority and the only writer of Product state.
  */
 export async function continueRimEffects(
   execution: ApplicationExecutionResult,
@@ -144,9 +147,27 @@ async function followUpEvent(
       messages: chat?.messages ?? [],
       conversationalOrigin: effect.conversationalOrigin,
     });
+    const validated = validateRimAiOutput(result);
+    if (!validated.ok) {
+      return {
+        name: "RIM.AI_REQUEST_FAILED",
+        payload: {
+          rimChatId: snapshot.rimChatId,
+          requestId: snapshot.requestId,
+          failure: {
+            code: RIM_AI_OUTPUT_INVALID,
+            message: validated.reason,
+          } as unknown as Failure,
+        },
+      };
+    }
     return {
       name: "RIM.AI_RESULT_RECEIVED",
-      payload: { rimChatId: snapshot.rimChatId, requestId: snapshot.requestId, result },
+      payload: {
+        rimChatId: snapshot.rimChatId,
+        requestId: snapshot.requestId,
+        result: validated.result,
+      },
     };
   } catch (error) {
     const failure =
