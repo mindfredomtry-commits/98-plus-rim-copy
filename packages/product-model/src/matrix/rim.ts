@@ -182,14 +182,42 @@ export const RIM_MATRIX_ROWS: readonly MatrixContractRow[] = [
     state: "RIM.CHAT",
     eventId: "E-50",
     eventName: "RIM.PRESS_BACK",
-    branch: "back-from-chat",
-    guardsText: "применимое Back из RIM Chat",
+    branch: "no-ask-rim-origin",
+    guardsText: "действительный askRimOrigin отсутствует",
     nextStateText: "RIM-01 RIM.LOBBY",
     nextState: "RIM.LOBBY",
-    effectsText: "Текущий session-temporary RIM Chat прекращается",
+    effectsText: "текущий session-temporary RIM Chat прекращается",
     effects: [{ type: "SET_RIM_CHAT" }, { type: "SET_CONTROL_STATE" }],
     result: "TRANSITION",
-    source: { section: "RIM-02 — RIM.CHAT", locator: "line 115", extractedLines: "115" },
+    source: {
+      section: "RIM-02 — RIM.CHAT",
+      locator: "E-50 no askRimOrigin",
+      extractedLines: "173",
+    },
+  }),
+  matrixRow({
+    kind: "LOCAL",
+    state: "RIM.CHAT",
+    eventId: "E-50",
+    eventName: "RIM.PRESS_BACK",
+    branch: "valid-ask-rim-origin",
+    guardsText:
+      "существует действительный askRimOrigin, ссылающийся на исходную unprocessed Status Notification Item",
+    nextStateText: "соответствующий исходной Status Item Product Control State N-05…N-12",
+    nextState: "ASK_RIM_ORIGIN_STATUS",
+    effectsText:
+      "текущий session-temporary RIM Chat прекращается; исходная Status Notification Item становится active и остаётся unprocessed; askRimOrigin удаляется вместе с завершением RIM Chat",
+    effects: [
+      { type: "SET_RIM_CHAT" },
+      { type: "SET_ACTIVE_NOTIFICATION" },
+      { type: "SET_CONTROL_STATE" },
+    ],
+    result: "TRANSITION",
+    source: {
+      section: "RIM-02 — RIM.CHAT",
+      locator: "E-50 valid askRimOrigin",
+      extractedLines: "175",
+    },
   }),
   matrixRow({
     kind: "LOCAL",
@@ -225,7 +253,7 @@ export const RIM_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "RIM-02 RIM.CHAT",
     nextState: "RIM.CHAT",
     effectsText:
-      "Сообщение пользователя добавляется в текущий RIM Chat; создаётся соответствующий AI request; input draft обрабатывается по правилам Product Specification",
+      "Сообщение пользователя добавляется в текущий RIM Chat; создаётся соответствующий AI request; если текущий RIM Chat содержит действительный askRimOrigin, он включается в context создаваемого AI request как conversational origin конкретных исходных Status Notification Item, Ban и итогового Status; input draft обрабатывается по правилам Product Specification",
     effects: [{ type: "SET_RIM_CHAT" }, { type: "REQUEST_RIM_AI" }],
     result: "STAY",
     source: { section: "RIM-02 — RIM.CHAT", locator: "line 117", extractedLines: "117" },
@@ -352,7 +380,7 @@ export const RIM_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "RIM-02 RIM.CHAT",
     nextState: "RIM.CHAT",
     effectsText:
-      "Полученный relationship context становится текущим relationship context пары; состояние загрузки relationship context завершается; relationshipContext.status = ready; UI-индикация загрузки context прекращается; отправка сообщений становится доступна; если применимо, в Chat добавляется первоначальное сообщение «я могу предложить 3 запрета, написать?»",
+      "Полученный relationship context становится текущим relationship context пары; состояние загрузки relationship context завершается; relationshipContext.status = ready; UI-индикация загрузки context прекращается; отправка сообщений становится доступна; если это первоначальное успешное получение relationship context текущего RIM Chat и действительный askRimOrigin отсутствует, если применимо, в Chat добавляется первоначальное сообщение «я могу предложить 3 запрета, написать?»; если это первоначальное успешное получение relationship context текущего RIM Chat и действительный askRimOrigin существует, в Chat вместо обычного первоначального сообщения добавляется «что хочешь спросить?»; добавление любого из этих первоначальных сообщений само по себе не создаёт AI request",
     effects: [{ type: "SET_RIM_CHAT" }],
     result: "STAY",
     source: { section: "RIM-02 — RIM.CHAT", locator: "line 124", extractedLines: "124" },
@@ -644,7 +672,7 @@ export const RIM_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "RIM-02 RIM.CHAT",
     nextState: "RIM.CHAT",
     effectsText:
-      "Происходит возврат в тот же RIM Chat с прежним selectedContact; существующий RIM Chat context сохраняется",
+      "Происходит возврат в тот же RIM Chat с прежним selectedContact; существующий RIM Chat context сохраняется; действительный askRimOrigin, если он существует, сохраняется без изменений",
     effects: [{ type: "SET_CONTROL_STATE" }],
     result: "TRANSITION",
     source: { section: "RIM-03 — RIM.SELECT_CONTACT", locator: "line 142", extractedLines: "142" },

@@ -100,6 +100,7 @@ export const TEST_UI_USER_EVENT_NAMES = [
   "NOTIFICATIONS.PRESS_REPLY_BAN",
   "NOTIFICATIONS.PRESS_BAN_MORE",
   "NOTIFICATIONS.PRESS_TO_BANS",
+  "NOTIFICATIONS.PRESS_ASK_RIM",
   "NOTIFICATIONS.CHECK_ANSWER.FULFILLED",
   "NOTIFICATIONS.CHECK_ANSWER.NOT_FULFILLED",
   "REPLY_BAN.CHANGE_BAN_TEXT",
@@ -741,7 +742,11 @@ function statusRoleActions(role: "RECEIVER" | "SENDER"): string {
     role === "RECEIVER"
       ? actionButton("ЗАПРЕТИТЬ В ОТВЕТ", "NOTIFICATIONS.PRESS_REPLY_BAN")
       : actionButton("ЗАПРЕТИТЬ ЕЩЁ", "NOTIFICATIONS.PRESS_BAN_MORE");
-  return [stage10, actionButton("К ЗАПРЕТАМ", "NOTIFICATIONS.PRESS_TO_BANS")].join("");
+  return [
+    stage10,
+    actionButton("К ЗАПРЕТАМ", "NOTIFICATIONS.PRESS_TO_BANS"),
+    actionButton("спросить RIM", "NOTIFICATIONS.PRESS_ASK_RIM"),
+  ].join("");
 }
 
 type ActiveBinding =

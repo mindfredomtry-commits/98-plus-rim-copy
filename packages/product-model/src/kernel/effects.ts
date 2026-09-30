@@ -24,7 +24,7 @@ import type {
 import type { Failure } from "../primitives.ts";
 import type { ProductControlState } from "../states.ts";
 import type { ResolveInput } from "./types.ts";
-import { statusControlState } from "./snapshot.ts";
+import { activeItem, statusControlState, validAskRimOrigin } from "./snapshot.ts";
 
 function introMessage(): RimMessage {
   return { kind: "RIM", text: "я могу предложить 3 запрета, написать?" };
@@ -32,6 +32,10 @@ function introMessage(): RimMessage {
 
 function lobbyPrompt(): RimMessage {
   return { kind: "RIM", text: "выбери человека и я предложу новые запреты" };
+}
+
+function askRimPrompt(): RimMessage {
+  return { kind: "RIM", text: "что хочешь спросить?" };
 }
 
 function eventField<T>(event: CanonicalEvent, key: string): T | undefined {
@@ -91,6 +95,50 @@ export function nextRimChat(
       inputDraft: "",
       aiOperation: { status: "IDLE" },
       askRimOrigin: null,
+    };
+  }
+  if (row.eventId === "E-63") {
+    const item = activeItem(snapshot);
+    const ban = item ? snapshot.extended.entities.bans[item.banId] : undefined;
+    if (!item || item.kind !== "STATUS" || !ban || ban.status === null) {
+      return current;
+    }
+    const sourceRole =
+      ban.senderId === context.currentUserId
+        ? "SENDER"
+        : ban.receiverId === context.currentUserId
+          ? "RECEIVER"
+          : null;
+    const selectedContactId =
+      sourceRole === "SENDER" ? ban.receiverId : sourceRole === "RECEIVER" ? ban.senderId : null;
+    if (
+      !sourceRole ||
+      !selectedContactId ||
+      sourceRole !== item.role ||
+      ban.status !== item.status
+    ) {
+      return current;
+    }
+    const requestId = context.allocateId("context") as ContextRequestId;
+    return {
+      id: context.allocateId("rim-chat") as RimChatId,
+      selectedContactId,
+      relationshipContext: {
+        selectedContactId,
+        status: "loading",
+        requestId,
+        data: null,
+        failure: null,
+      },
+      messages: [],
+      inputDraft: "",
+      aiOperation: { status: "IDLE" },
+      askRimOrigin: {
+        sourceStatusItemId: item.id,
+        banId: ban.id,
+        status: ban.status,
+        sourceRole,
+      },
     };
   }
   if (row.eventId === "E-50" && row.state === "RIM.CHAT") {
@@ -234,13 +282,25 @@ export function nextRimChat(
       data,
       failure: null,
     };
+    const askText = "что хочешь спросить?";
+    const origin = validAskRimOrigin(snapshot, context.currentUserId);
+    const alreadyAsk = current.messages.some(
+      (message) => message.kind === "RIM" && message.text === askText,
+    );
     const hasIntro = current.messages.some(
       (message) => message.kind === "RIM" && message.text.includes("я могу предложить 3 запрета"),
     );
+    const messages = origin
+      ? alreadyAsk
+        ? current.messages
+        : [...current.messages, askRimPrompt()]
+      : hasIntro
+        ? current.messages
+        : [...current.messages, introMessage()];
     return {
       ...current,
       relationshipContext: ready,
-      messages: hasIntro ? current.messages : [...current.messages, introMessage()],
+      messages,
     };
   }
   if (row.eventId === "E-57") {
@@ -831,6 +891,13 @@ export function resolveSymbolicState(
     return item && item.kind === "STATUS"
       ? statusControlState(item.status, item.role)
       : "RIM.LOBBY";
+  }
+  if (row.nextState === "ASK_RIM_ORIGIN_STATUS") {
+    const origin = snapshot.extended.rimChat?.askRimOrigin;
+    if (origin) {
+      return statusControlState(origin.status, origin.sourceRole);
+    }
+    return snapshot.controlState;
   }
   if (row.nextState === "SOURCE_STATUS_ITEM") {
     const source = snapshot.extended.replySource;

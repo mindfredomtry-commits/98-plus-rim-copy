@@ -1,5 +1,6 @@
 import type {
   AiRequestId,
+  AskRimOrigin,
   ContextRequestId,
   RelationshipContextData,
   RimAiResult,
@@ -18,6 +19,8 @@ export type RimAiRequest = Readonly<{
   contextRequestId: ContextRequestId;
   relationshipContext: RelationshipContextData;
   messages: readonly RimMessage[];
+  /** Valid Ask RIM conversational origin. Null for an ordinary RIM Chat. */
+  conversationalOrigin: AskRimOrigin | null;
 }>;
 
 export type RimAiPort = {

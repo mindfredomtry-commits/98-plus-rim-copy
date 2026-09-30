@@ -159,11 +159,11 @@ async function createTemplateShare(url: string, telegramUserId: string) {
 }
 
 describe("Stage 13B MVP8 Contact relationship", () => {
-  it("keeps frozen 30 / 57 / 342 under MVP10 authority", () => {
+  it("keeps frozen 30 / 58 / 351 under MVP10 authority", () => {
     expect(PRODUCT_SPECIFICATION_SOURCE.revision).toBe("10");
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(57);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(342);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(351);
     expect(ABSENT_EVENT_IDS).toEqual(["E-36", "E-37", "E-38", "E-39", "E-40"]);
     expect(CONTACT_RELATIONSHIP_STAGE).toBe(13);
     expect(STAGE_13B_EXCLUDES).toContain("rim-ai");

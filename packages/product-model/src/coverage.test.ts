@@ -26,7 +26,7 @@ import {
   NONDETERMINISTIC_MATRIX_LINES,
 } from "./matrix/expected-coverage.ts";
 
-const CARTESIAN_30_BY_57 = 30 * 57;
+const CARTESIAN_30_BY_EVENT_COUNT = 30 * 58;
 const EXPECTED_LOCAL_TOTAL = (Object.values(EXPECTED_LOCAL_ROW_COUNTS) as number[]).reduce(
   (sum, count) => sum + count,
   0,
@@ -222,9 +222,9 @@ describe("Stage 1.5 Matrix coverage audit", () => {
     expect(MATRIX_SPEC_GAP_COUNT).toBe(0);
   });
 
-  it("does not invent a 30 × 57 Cartesian product", () => {
-    expect(MATRIX_CONTRACT_ROWS.length).toBeLessThan(CARTESIAN_30_BY_57);
-    expect(MATRIX_CONTRACT_ROWS.length).toBe(342);
+  it("does not invent a 30 × 58 Cartesian product", () => {
+    expect(MATRIX_CONTRACT_ROWS.length).toBeLessThan(CARTESIAN_30_BY_EVENT_COUNT);
+    expect(MATRIX_CONTRACT_ROWS.length).toBe(351);
     expect(MATRIX_CONTRACT_ROWS.length).toBe(EXPECTED_AUTHORITATIVE_ROW_IDS.length);
     expect(NONDETERMINISTIC_MATRIX_LINES.length).toBeGreaterThan(0);
   });

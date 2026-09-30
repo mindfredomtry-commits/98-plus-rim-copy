@@ -10,8 +10,10 @@ import {
   instantValue,
   pendingOfKind,
   sourceReplyBanTimerIsUnprocessed,
+  statusControlState,
   ttlExpired,
   unprocessedItems,
+  validAskRimOrigin,
 } from "./snapshot.ts";
 
 function checkAnswerPayload(input: ResolveInput) {
@@ -409,6 +411,34 @@ function expiredBanEligible(input: ResolveInput): boolean {
   return domainTimerDurationElapsed(input, banId);
 }
 
+function askRimEntryApplicable(input: ResolveInput): boolean {
+  const active = activeItem(input.snapshot);
+  if (!active || active.kind !== "STATUS" || active.lifecycle.status !== "UNPROCESSED") {
+    return false;
+  }
+  if (active.ownerId !== input.context.currentUserId) {
+    return false;
+  }
+  const ban = input.snapshot.extended.entities.bans[active.banId];
+  if (!ban || ban.status !== active.status) {
+    return false;
+  }
+  const role =
+    ban.senderId === input.context.currentUserId
+      ? "SENDER"
+      : ban.receiverId === input.context.currentUserId
+        ? "RECEIVER"
+        : null;
+  if (!role || role !== active.role) {
+    return false;
+  }
+  const counterpart = role === "SENDER" ? ban.receiverId : ban.senderId;
+  if (!counterpart) {
+    return false;
+  }
+  return input.snapshot.controlState === statusControlState(active.status, active.role);
+}
+
 function otherEligibleBan(input: ResolveInput): boolean {
   if (!expiredBanEligible(input)) {
     return false;
@@ -665,7 +695,13 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
     case "E-43:queue-empty":
       return unprocessedItems(input.snapshot, input.context.currentUserId).length === 0;
     case "E-50:no-new-selection":
-    case "E-50:back-from-chat":
+      return true;
+    case "E-50:no-ask-rim-origin":
+      return validAskRimOrigin(input.snapshot, input.context.currentUserId) === null;
+    case "E-50:valid-ask-rim-origin":
+      return validAskRimOrigin(input.snapshot, input.context.currentUserId) !== null;
+    case "E-63:active-status-unprocessed":
+      return askRimEntryApplicable(input);
     case "E-47:default":
     case "E-01:default":
     case "E-51:default":

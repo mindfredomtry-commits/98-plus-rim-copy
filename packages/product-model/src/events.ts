@@ -56,6 +56,7 @@ export type EventPayloadMap = {
   "NOTIFICATIONS.CHECK_ANSWER.NOT_FULFILLED": Record<string, never>;
   "NOTIFICATIONS.PRESS_BAN_MORE": Record<string, never>;
   "NOTIFICATIONS.PRESS_TO_BANS": Record<string, never>;
+  "NOTIFICATIONS.PRESS_ASK_RIM": Record<string, never>;
   "NOTIFICATIONS.OVERBOARD_CONFIRMED": {
     sourceItemId: NotificationItemId;
     banId: BanId;
@@ -204,7 +205,8 @@ export type CanonicalEventId =
   | "E-59"
   | "E-60"
   | "E-61"
-  | "E-62";
+  | "E-62"
+  | "E-63";
 
 export const ABSENT_EVENT_IDS = ["E-36", "E-37", "E-38", "E-39", "E-40"] as const;
 export type AbsentEventId = (typeof ABSENT_EVENT_IDS)[number];
@@ -549,9 +551,15 @@ export const CANONICAL_EVENT_DEFINITIONS = [
     source: "TELEGRAM",
     references: refs("E-62 TELEGRAM_PERSISTENT_REENTRY.DECLINED"),
   },
+  {
+    id: "E-63",
+    name: "NOTIFICATIONS.PRESS_ASK_RIM",
+    source: "UI",
+    references: refs("E-63 NOTIFICATIONS.PRESS_ASK_RIM"),
+  },
 ] as const satisfies readonly CanonicalEventDefinition[];
 
-export const CANONICAL_EVENT_COUNT = 57;
+export const CANONICAL_EVENT_COUNT = 58;
 
 export function isCanonicalEventId(value: string): value is CanonicalEventId {
   return CANONICAL_EVENT_DEFINITIONS.some((definition) => definition.id === value);

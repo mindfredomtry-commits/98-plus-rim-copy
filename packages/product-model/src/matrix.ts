@@ -70,6 +70,7 @@ const SYMBOLIC_NEXT_STATES = new Set([
   "STATUS_PRIORITY_ITEM",
   "FIFO_STATUS_ITEM",
   "SOURCE_STATUS_ITEM",
+  "ASK_RIM_ORIGIN_STATUS",
 ]);
 
 export function isValidMatrixNextState(nextState: MatrixContractRow["nextState"]): boolean {

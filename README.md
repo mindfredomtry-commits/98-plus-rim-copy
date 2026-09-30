@@ -13,5 +13,5 @@ npm install
 npm run verify
 ```
 
-The authoritative model currently contains exactly 30 Product Control States and 55
+The authoritative model currently contains exactly 30 Product Control States and 58
 canonical Product Events. Event IDs E-36 through E-40 are intentionally absent.

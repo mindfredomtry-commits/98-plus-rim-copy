@@ -215,10 +215,10 @@ async function confirmOnce(url: string): Promise<{
 }
 
 describe("Stage 6 Create Ban CONTACT vertical", () => {
-  it("keeps frozen 30 / 57 / 342 and stage markers 2 / 3 / 4 / 5 with CREATE_BAN_CONTACT_STAGE = 6", () => {
+  it("keeps frozen 30 / 58 / 351 and stage markers 2 / 3 / 4 / 5 with CREATE_BAN_CONTACT_STAGE = 6", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(57);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(342);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(351);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PERSISTENCE_STAGE).toBe(4);
@@ -710,8 +710,8 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
     };
     expect(body).toMatchObject({
       PRODUCT_CONTROL_STATE_COUNT: 30,
-      CANONICAL_EVENT_COUNT: 57,
-      MATRIX_RULE_COUNT: 342,
+      CANONICAL_EVENT_COUNT: 58,
+      MATRIX_RULE_COUNT: 351,
       IMPLEMENTATION_STAGE: 2,
       IDENTITY_STAGE: 3,
       PERSISTENCE_STAGE: 4,

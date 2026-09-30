@@ -138,10 +138,10 @@ async function createTemplateBanWithToken(url: string): Promise<{
 }
 
 describe("Stage 12 Telegram Share Link External Entry", () => {
-  it("keeps frozen 30 / 57 / 342 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
+  it("keeps frozen 30 / 58 / 351 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(57);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(342);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(351);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(TEMPLATE_CREATE_BAN_STAGE).toBe(11);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
@@ -153,7 +153,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     const app = await start();
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.EXTERNAL_ENTRY_STAGE).toBe(12);
-    expect(meta.MATRIX_RULE_COUNT).toBe(342);
+    expect(meta.MATRIX_RULE_COUNT).toBe(351);
   });
 
   it("parses start_param share_<token>", () => {

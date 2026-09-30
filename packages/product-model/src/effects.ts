@@ -1,4 +1,5 @@
 import type {
+  AskRimOrigin,
   Ban,
   BanDraft,
   CheckPair,
@@ -71,7 +72,12 @@ export type Effect =
       requestId: ContextRequestId;
       contactId: UserId;
     }
-  | { type: "REQUEST_RIM_AI"; requestId: AiRequestId; snapshot: RimRequestSnapshot };
+  | {
+      type: "REQUEST_RIM_AI";
+      requestId: AiRequestId;
+      snapshot: RimRequestSnapshot;
+      conversationalOrigin: AskRimOrigin | null;
+    };
 
 export type EffectType = Effect["type"];
 

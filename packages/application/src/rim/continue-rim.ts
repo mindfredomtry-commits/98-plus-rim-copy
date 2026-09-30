@@ -142,6 +142,7 @@ async function followUpEvent(
         recentBans: [],
       },
       messages: chat?.messages ?? [],
+      conversationalOrigin: effect.conversationalOrigin,
     });
     return {
       name: "RIM.AI_RESULT_RECEIVED",

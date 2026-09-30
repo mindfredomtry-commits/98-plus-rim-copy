@@ -110,6 +110,7 @@ export function defaultEvent(name: CanonicalEventName): CanonicalEvent {
     case "NOTIFICATIONS.CHECK_ANSWER.NOT_FULFILLED":
     case "NOTIFICATIONS.PRESS_BAN_MORE":
     case "NOTIFICATIONS.PRESS_TO_BANS":
+    case "NOTIFICATIONS.PRESS_ASK_RIM":
     case "REPLY_BAN.PRESS_NEXT":
     case "REPLY_BAN.PRESS_BACK":
     case "REPLY_BAN.PRESS_FORBID":
@@ -870,6 +871,75 @@ function prepareBranchSnapshot(
     case "E-48:current-chat-exists":
       next = withChat(next, makeChat({ selectedContactId: CONTACT_A }));
       break;
+    case "E-50:valid-ask-rim-origin": {
+      const item = statusItem({
+        role: "RECEIVER",
+        status: "BANTASTIC",
+        ownerId: USER_ID,
+        lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+      });
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: CONTACT_A,
+            receiverId: USER_ID,
+            status: "BANTASTIC",
+            acceptance: "ACCEPTED",
+          }),
+        },
+        notificationItems: { [item.id]: item },
+      });
+      next = withChat(
+        next,
+        makeChat({
+          selectedContactId: CONTACT_A,
+          relationshipContext: readyContext(CONTACT_A),
+          askRimOrigin: {
+            sourceStatusItemId: item.id,
+            banId: BAN_ID,
+            status: "BANTASTIC",
+            sourceRole: "RECEIVER",
+          },
+        }),
+      );
+      next = {
+        ...next,
+        extended: { ...next.extended, activeNotificationItemId: item.id },
+      };
+      break;
+    }
+    case "E-63:active-status-unprocessed": {
+      const role = row.state.endsWith("SENDER") ? "SENDER" : "RECEIVER";
+      const status = row.state.includes("OVERBOARD")
+        ? "OVERBOARD"
+        : row.state.includes("BANTASTIC")
+          ? "BANTASTIC"
+          : row.state.includes("BANFLICT")
+            ? "BANFLICT"
+            : "FAIR_ENOUGH";
+      const item = statusItem({
+        role,
+        status,
+        ownerId: USER_ID,
+        lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+      });
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: role === "SENDER" ? USER_ID : CONTACT_A,
+            receiverId: role === "RECEIVER" ? USER_ID : CONTACT_A,
+            status,
+            acceptance: status === "OVERBOARD" ? "PENDING" : "ACCEPTED",
+          }),
+        },
+        notificationItems: { [item.id]: item },
+      });
+      next = {
+        ...next,
+        extended: { ...next.extended, activeNotificationItemId: item.id },
+      };
+      break;
+    }
     case "E-56:frozen-source-operation":
     case "E-57:frozen-source-operation":
     case "E-58:frozen-source-operation":

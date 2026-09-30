@@ -28,11 +28,11 @@ describe("Stage 1 closed registries", () => {
     ).toBe(false);
   });
 
-  it("contains exactly 57 canonical Product Events", () => {
-    expect(CANONICAL_EVENT_DEFINITIONS).toHaveLength(57);
-    expect(CANONICAL_EVENT_COUNT).toBe(57);
-    expect(new Set(CANONICAL_EVENT_DEFINITIONS.map((definition) => definition.id)).size).toBe(57);
-    expect(new Set(CANONICAL_EVENT_DEFINITIONS.map((definition) => definition.name)).size).toBe(57);
+  it("contains exactly 58 canonical Product Events", () => {
+    expect(CANONICAL_EVENT_DEFINITIONS).toHaveLength(58);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(new Set(CANONICAL_EVENT_DEFINITIONS.map((definition) => definition.id)).size).toBe(58);
+    expect(new Set(CANONICAL_EVENT_DEFINITIONS.map((definition) => definition.name)).size).toBe(58);
   });
 
   it("rejects E-36 through E-40", () => {

@@ -39,6 +39,7 @@ import { correlatedPendingOperation } from "./evaluate-guard.ts";
 import {
   activeItem,
   nextFifoSequence,
+  validAskRimOrigin,
   timerNotificationItemForBan,
   unprocessedItems,
   unprocessedTimerItems,
@@ -653,6 +654,7 @@ export function instantiateEffects(
           type: "REQUEST_RIM_AI",
           requestId: logical.requestId,
           snapshot: logical.snapshot,
+          conversationalOrigin: validAskRimOrigin(snapshot, context.currentUserId),
         });
         break;
       }
@@ -784,6 +786,13 @@ export function instantiateEffects(
       }
       case "SET_ACTIVE_NOTIFICATION": {
         if (suppressImmediateUi) {
+          break;
+        }
+        if (row.eventId === "E-50" && row.branch === "valid-ask-rim-origin") {
+          effects.push({
+            type: "SET_ACTIVE_NOTIFICATION",
+            itemId: snapshot.extended.rimChat?.askRimOrigin?.sourceStatusItemId ?? null,
+          });
           break;
         }
         if (row.kind === "E43") {

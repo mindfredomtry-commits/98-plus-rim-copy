@@ -14,6 +14,7 @@ export type MatrixNextState =
   | "STATUS_PRIORITY_ITEM"
   | "FIFO_STATUS_ITEM"
   | "SOURCE_STATUS_ITEM"
+  | "ASK_RIM_ORIGIN_STATUS"
   | null;
 
 export type MatrixEffectDeclaration = Readonly<{

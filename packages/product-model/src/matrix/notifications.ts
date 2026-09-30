@@ -361,6 +361,30 @@ function statusReceiverRows(
     matrixRow({
       kind: "LOCAL",
       state,
+      eventId: "E-63",
+      eventName: "NOTIFICATIONS.PRESS_ASK_RIM",
+      branch: "active-status-unprocessed",
+      guardsText:
+        "active Status unprocessed; related Ban существует; counterpart internal UserId определяется как другой участник Ban",
+      nextStateText: "RIM-02 RIM.CHAT",
+      nextState: "RIM.CHAT",
+      effectsText:
+        "текущая Status Item остаётся unprocessed; создаётся новый session-temporary RIM Chat context; selectedContact = counterpart internal UserId (другой участник связанного Ban); создаётся askRimOrigin = { sourceStatusItemId, banId, status, sourceRole = receiver }; relationshipContext.status = loading; начинается формирование relationship context текущий пользователь ↔ selectedContact; Chat отображается сразу; input draft первоначально empty; отправка сообщения недоступна до применимого E-56; пользовательское сообщение и AI request не создаются",
+      effects: [
+        { type: "SET_RIM_CHAT" },
+        { type: "REQUEST_RELATIONSHIP_CONTEXT" },
+        { type: "SET_CONTROL_STATE" },
+      ],
+      result: "TRANSITION",
+      source: {
+        section,
+        locator: "N-05 / N-07 / N-09 / N-11 E-63",
+        extractedLines: "904-908",
+      },
+    }),
+    matrixRow({
+      kind: "LOCAL",
+      state,
       eventId: "E-32",
       eventName: "APP.FULL_CLOSE",
       branch: "local",
@@ -521,6 +545,30 @@ function statusSenderRows(state: StatusSenderState, section: string): readonly M
         section,
         locator: "shared Status SENDER table line 428 expanded",
         extractedLines: "428,419-435",
+      },
+    }),
+    matrixRow({
+      kind: "LOCAL",
+      state,
+      eventId: "E-63",
+      eventName: "NOTIFICATIONS.PRESS_ASK_RIM",
+      branch: "active-status-unprocessed",
+      guardsText:
+        "active Status unprocessed; related Ban существует; counterpart internal UserId определяется как другой участник Ban",
+      nextStateText: "RIM-02 RIM.CHAT",
+      nextState: "RIM.CHAT",
+      effectsText:
+        "текущая Status Item остаётся unprocessed; создаётся новый session-temporary RIM Chat context; selectedContact = counterpart internal UserId (другой участник связанного Ban); создаётся askRimOrigin = { sourceStatusItemId, banId, status, sourceRole = sender }; relationshipContext.status = loading; начинается формирование relationship context текущий пользователь ↔ selectedContact; Chat отображается сразу; input draft первоначально empty; отправка сообщения недоступна до применимого E-56; пользовательское сообщение и AI request не создаются",
+      effects: [
+        { type: "SET_RIM_CHAT" },
+        { type: "REQUEST_RELATIONSHIP_CONTEXT" },
+        { type: "SET_CONTROL_STATE" },
+      ],
+      result: "TRANSITION",
+      source: {
+        section,
+        locator: "N-06 / N-08 / N-10 / N-12 E-63",
+        extractedLines: "963-967",
       },
     }),
     matrixRow({

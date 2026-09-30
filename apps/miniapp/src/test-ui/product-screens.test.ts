@@ -90,6 +90,7 @@ describe("Stage 6 TEST UI product screens", () => {
     expect(screen.screenId).toBe("LobbyTestScreen");
     expect(screen.title).toBe("RIM LOBBY");
     expect(screen.html).toContain("RIM LOBBY");
+    expect(screen.html).not.toContain("спросить RIM");
     expect(screen.html).toContain('data-screen="LobbyTestScreen"');
   });
 
@@ -1446,6 +1447,9 @@ describe("Stage 9 TEST UI Timer Check Status screens", () => {
       expect(screen.html).not.toContain("UNSUPPORTED STAGE 9 SCREEN");
       expect(screen.html).toContain('data-event="NOTIFICATIONS.PRESS_TO_BANS"');
       expect(screen.html).toContain(">К ЗАПРЕТАМ</button>");
+      expect(screen.html).toContain('data-event="NOTIFICATIONS.PRESS_ASK_RIM"');
+      expect(screen.html).toContain(">спросить RIM</button>");
+      expect(screen.html).not.toContain("спросить у RIM");
       if (entry.role === "RECEIVER") {
         expect(screen.html).toContain('data-event="NOTIFICATIONS.PRESS_REPLY_BAN"');
         expect(screen.html).not.toContain('data-event="NOTIFICATIONS.PRESS_BAN_MORE"');
@@ -1472,6 +1476,8 @@ describe("Stage 9 TEST UI Timer Check Status screens", () => {
     expect(screen.html).toContain('data-event="NOTIFICATIONS.CHECK_ANSWER.FULFILLED"');
     expect(screen.html).toContain('data-event="NOTIFICATIONS.CHECK_ANSWER.NOT_FULFILLED"');
     expect(screen.html).not.toContain("CHECK_ANSWER_CONFIRMED");
+    expect(screen.html).not.toContain("NOTIFICATIONS.PRESS_ASK_RIM");
+    expect(screen.html).not.toContain("спросить RIM");
     expect(screen.html).toContain("BAN_B_TEXT");
   });
 

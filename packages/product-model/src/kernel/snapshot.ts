@@ -1,4 +1,5 @@
 import type {
+  AskRimOrigin,
   NotificationItem,
   StatusNotificationItem,
   TimerNotificationItem,
@@ -131,6 +132,54 @@ export function ttlExpired(snapshot: ProductSnapshot, now: Instant): boolean {
 
 export function statusControlState(status: BanStatus, role: Role): ProductControlState {
   return `NOTIFICATIONS.STATUS.${status}.${role}`;
+}
+
+/**
+ * A stored askRimOrigin is действительный only while it still points at the
+ * current user's unprocessed source Status Item, the related Ban, and the
+ * selectedContact who is the other Ban participant.
+ */
+export function validAskRimOrigin(
+  snapshot: ProductSnapshot,
+  currentUserId: UserId,
+): AskRimOrigin | null {
+  const chat = snapshot.extended.rimChat;
+  const origin = chat?.askRimOrigin ?? null;
+  if (!origin || !chat?.selectedContactId) {
+    return null;
+  }
+  const item = snapshot.extended.entities.notificationItems[origin.sourceStatusItemId];
+  if (!item || item.kind !== "STATUS") {
+    return null;
+  }
+  if (item.ownerId !== currentUserId || item.lifecycle.status !== "UNPROCESSED") {
+    return null;
+  }
+  if (
+    item.banId !== origin.banId ||
+    item.status !== origin.status ||
+    item.role !== origin.sourceRole
+  ) {
+    return null;
+  }
+  const ban = snapshot.extended.entities.bans[origin.banId];
+  if (!ban || ban.status !== origin.status) {
+    return null;
+  }
+  const role =
+    ban.senderId === currentUserId
+      ? "SENDER"
+      : ban.receiverId === currentUserId
+        ? "RECEIVER"
+        : null;
+  if (role !== origin.sourceRole) {
+    return null;
+  }
+  const counterpart = role === "SENDER" ? ban.receiverId : ban.senderId;
+  if (!counterpart || chat.selectedContactId !== counterpart) {
+    return null;
+  }
+  return origin;
 }
 
 export function isStatusItem(item: NotificationItem): item is StatusNotificationItem {
