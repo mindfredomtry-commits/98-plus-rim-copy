@@ -1292,9 +1292,10 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "CB-10 CREATE_BAN.SUCCESS",
     nextState: "CREATE_BAN.SUCCESS",
     effectsText:
-      "Ban фиксируется как успешно отправленный и сохраняет sourceProposalId; pending operation прекращается; RIM-origin draft завершается; saved frozen RIM Chat и live RIM Chat удаляются и больше не могут быть восстановлены",
+      "Ban фиксируется как успешно отправленный и сохраняет sourceProposalId; для receiver создаётся exactly one связанная INCOMING_BAN Notification Item как часть той же authoritative business operation; повторный result того же operation не создаёт дубликат Ban или Item; receiver Product Control State не изменяется только вследствие создания Item; pending operation прекращается; RIM-origin draft завершается; saved frozen RIM Chat и live RIM Chat удаляются и больше не могут быть восстановлены",
     effects: [
       { type: "UPSERT_BAN" },
+      { type: "UPSERT_NOTIFICATION_ITEM" },
       { type: "CLEAR_OPERATION" },
       { type: "SET_CREATE_BAN_DRAFT" },
       { type: "SET_FROZEN_RIM_CHAT" },

@@ -261,6 +261,43 @@ describe("Stage 6 TEST UI product screens", () => {
     expect(screen.html).not.toContain("no further implemented user action");
   });
 
+  it("MULTIPLE-BANS SUCCESS PROJECTION resolves the Ban identified by successfulBanId", () => {
+    const oldBan = {
+      id: "ban-old",
+      senderId: USER_A,
+      receiverId: "user-old-receiver",
+      banText: "не срать и ссать",
+      durationMinutes: 15,
+      acceptance: "PENDING",
+      status: null,
+    };
+    const newBan = {
+      id: "ban-db033565-83ca-458d-bc34-5bc5fe85f01e",
+      senderId: USER_A,
+      receiverId: "7239e147-09d7-42c7-bc62-e8c6308f7f77",
+      banText: "не опаздывать",
+      durationMinutes: 3,
+      acceptance: "PENDING",
+      status: null,
+    };
+    const screen = renderProductScreen(
+      diagnostics("CREATE_BAN.SUCCESS", {
+        createBanDraft: null,
+        successfulBanId: newBan.id,
+        bans: [oldBan, newBan],
+      }),
+    );
+    expect(screen.screenId).toBe("CreateBanSuccessTestScreen");
+    expect(screen.title).toBe("SUCCESS");
+    expect(screen.html).toContain('data-success-receiver="7239e147-09d7-42c7-bc62-e8c6308f7f77"');
+    expect(screen.html).toContain('data-success-text="не опаздывать"');
+    expect(screen.html).toContain('data-success-duration="3"');
+    expect(screen.html).toContain(JSON.stringify("не опаздывать"));
+    expect(screen.html).not.toContain("не срать и ссать");
+    expect(screen.html).not.toContain("user-old-receiver");
+    expect(screen.html).not.toContain('data-success-duration="15"');
+  });
+
   it("J. changing backend controlState changes the Product Screen representation", () => {
     expect(productScreenIdFor("RIM.LOBBY")).toBe("LobbyTestScreen");
     expect(productScreenIdFor("CREATE_BAN.WHO")).toBe("CreateBanWhoTestScreen");

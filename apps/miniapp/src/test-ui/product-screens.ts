@@ -597,24 +597,67 @@ function confirmContactScreen(
 }
 
 function successScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRender {
-  const draft = diagnostics.createBanDraft ?? {};
-  const ban = diagnostics.bans?.[0];
-  const receiver =
-    draft.selectedContactId ?? diagnostics.selectedContactId ?? ban?.receiverId ?? "(none)";
-  const banText = draft.banText ?? ban?.banText ?? "";
-  const duration = draft.durationMinutes ?? ban?.durationMinutes ?? "(none)";
+  const projected = projectSuccessfulBan(diagnostics);
+  if (!projected.ok) {
+    return wrap(
+      "CreateBanSuccessTestScreen",
+      "SUCCESS",
+      [
+        `<p class="warn" data-binding-error="${escapeAttr(projected.reason)}">${escapeHtml(projected.reason)}</p>`,
+        actionButton("FORBID AGAIN", "CREATE_BAN.PRESS_FORBID_MORE"),
+        "<p>Incoming remains owner-scoped to the receiver snapshot. Switch user in DEV / AUTH to inspect it.</p>",
+      ].join(""),
+    );
+  }
+  const { receiver, banText, duration } = projected;
   return wrap(
     "CreateBanSuccessTestScreen",
     "SUCCESS",
     [
       "<p>Ban sent.</p>",
-      `<p>Receiver: <code>${escapeHtml(String(receiver))}</code></p>`,
-      `<p>Ban: ${escapeHtml(JSON.stringify(banText))}</p>`,
-      `<p>Duration: ${escapeHtml(String(duration))}</p>`,
+      `<p>Receiver: <code data-success-receiver="${escapeAttr(receiver)}">${escapeHtml(receiver)}</code></p>`,
+      `<p>Ban: <span data-success-text="${escapeAttr(banText)}">${escapeHtml(JSON.stringify(banText))}</span></p>`,
+      `<p>Duration: <span data-success-duration="${escapeAttr(String(duration))}">${escapeHtml(String(duration))}</span></p>`,
       actionButton("FORBID AGAIN", "CREATE_BAN.PRESS_FORBID_MORE"),
       "<p>Incoming remains owner-scoped to the receiver snapshot. Switch user in DEV / AUTH to inspect it.</p>",
     ].join(""),
   );
+}
+
+/**
+ * CREATE_BAN.SUCCESS identifies the Ban by successfulBanId.
+ * bans[0] is only a fallback when that id is absent (draft-only and older fixtures).
+ */
+function projectSuccessfulBan(
+  diagnostics: TestUiScreenDiagnostics,
+):
+  | { ok: true; receiver: string; banText: string; duration: number | string }
+  | { ok: false; reason: string } {
+  if (diagnostics.successfulBanId) {
+    const successfulBan = diagnostics.bans?.find((ban) => ban.id === diagnostics.successfulBanId);
+    if (!successfulBan) {
+      return {
+        ok: false,
+        reason: `TEST UI INVARIANT: successfulBanId ${diagnostics.successfulBanId} is not in bans.`,
+      };
+    }
+    return {
+      ok: true,
+      receiver: String(successfulBan.receiverId ?? "(none)"),
+      banText: successfulBan.banText ?? "",
+      duration: successfulBan.durationMinutes ?? "(none)",
+    };
+  }
+  const draft = diagnostics.createBanDraft ?? {};
+  const ban = diagnostics.bans?.[0];
+  return {
+    ok: true,
+    receiver: String(
+      draft.selectedContactId ?? diagnostics.selectedContactId ?? ban?.receiverId ?? "(none)",
+    ),
+    banText: draft.banText ?? ban?.banText ?? "",
+    duration: draft.durationMinutes ?? ban?.durationMinutes ?? "(none)",
+  };
 }
 
 function incomingBanScreen(

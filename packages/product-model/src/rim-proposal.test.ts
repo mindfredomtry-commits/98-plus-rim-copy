@@ -494,6 +494,29 @@ describe("MVP14 Pass 3 canonical proposal attribution", () => {
     expect(created.snapshot.extended.savedFrozenRimChat).toBeNull();
     expect(created.snapshot.extended.rimChat).toBeNull();
     expect(created.snapshot.extended.createBanDraft).toBeNull();
+    expect(created.snapshot.extended.successfulBanId).toBe(BAN_ID);
+    const incoming = Object.values(created.snapshot.extended.entities.notificationItems).filter(
+      (item) => item.kind === "INCOMING_BAN",
+    );
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0]?.ownerId).toBe(CONTACT_A);
+    expect(incoming[0]?.banId).toBe(BAN_ID);
+    expect(incoming[0]?.lifecycle).toEqual({ status: "UNPROCESSED", display: "WAITING" });
+    expect(created.snapshot.extended.activeNotificationItemId).not.toBe(incoming[0]?.id);
+    expect(created.controlState).toBe("CREATE_BAN.SUCCESS");
+
+    const replay = run(
+      created.snapshot,
+      eventOf("CREATE_BAN.SEND_CONFIRMED", {
+        operationId: retry!.operationId,
+        createdBanId: BAN_ID,
+      }),
+    );
+    const replayIncoming = Object.values(
+      replay.snapshot.extended.entities.notificationItems,
+    ).filter((item) => item.kind === "INCOMING_BAN" && item.banId === BAN_ID);
+    expect(replayIncoming).toHaveLength(1);
+    expect(replayIncoming[0]?.id).toBe(incoming[0]?.id);
 
     const restored = run(created.snapshot, defaultEvent("CREATE_BAN.PRESS_BACK"));
     expect(restored.snapshot.extended.rimChat).toBeNull();

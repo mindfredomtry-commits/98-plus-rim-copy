@@ -97,6 +97,39 @@ function contactId(app: Started, telegramUserId: string): string {
   return userId!;
 }
 
+type BanView = {
+  id: string;
+  senderId: string;
+  receiverId: string | null;
+  banText: string;
+  durationMinutes: number;
+  sourceProposalId: string | null;
+};
+
+type IncomingView = {
+  id: string;
+  ownerId: string;
+  banId: string;
+  kind: string;
+};
+
+async function snapshot(url: string, telegramUserId: string): Promise<TestUiDiagnostics> {
+  const response = await fetch(`${url}/api/snapshot`, { headers: authHeaders(telegramUserId) });
+  const body = (await response.json()) as { diagnostics: TestUiDiagnostics };
+  expect(response.status).toBe(200);
+  return body.diagnostics;
+}
+
+function bansOf(diagnostics: TestUiDiagnostics): BanView[] {
+  return diagnostics.bans as BanView[];
+}
+
+function incomingOf(diagnostics: TestUiDiagnostics): IncomingView[] {
+  return (diagnostics.incomingItems as IncomingView[]).filter(
+    (item) => item.kind === "INCOMING_BAN",
+  );
+}
+
 describe("Feature 8 RIM vertical", () => {
   it("keeps the frozen engine counts", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
@@ -336,5 +369,172 @@ describe("Feature 8 RIM vertical", () => {
     });
     expect(staleAi.result).toBe("IGNORE_NOT_ALLOWED");
     expect(staleAi.snapshot.extended.rimChat?.messages.at(-1)).toEqual({ kind: "RIM", text: "ok" });
+  });
+
+  it("REAL TWO-USER RIM DELIVERY creates one receiver INCOMING_BAN for the selected proposal", async () => {
+    const rimE10 = MATRIX_CONTRACT_ROWS.filter(
+      (row) => row.state === "CREATE_BAN.CONFIRM.RIM" && row.eventId === "E-10",
+    );
+    expect(rimE10).toHaveLength(1);
+    expect(rimE10[0]?.effects.map((effect) => effect.type)).toEqual([
+      "UPSERT_BAN",
+      "UPSERT_NOTIFICATION_ITEM",
+      "CLEAR_OPERATION",
+      "SET_CREATE_BAN_DRAFT",
+      "SET_FROZEN_RIM_CHAT",
+      "SET_RIM_CHAT",
+      "SET_CONTROL_STATE",
+    ]);
+    const contactE10 = MATRIX_CONTRACT_ROWS.find(
+      (row) => row.state === "CREATE_BAN.CONFIRM.CONTACT" && row.eventId === "E-10",
+    );
+    expect(contactE10?.effects.map((effect) => effect.type)).toEqual([
+      "UPSERT_BAN",
+      "UPSERT_NOTIFICATION_ITEM",
+      "CLEAR_OPERATION",
+      "MARK_OPERATION_RESULT_APPLIED",
+      "SET_CONTROL_STATE",
+    ]);
+
+    const selectedText = "не опаздывать";
+    const app = await start([
+      {
+        kind: "BAN_PROPOSALS",
+        message: "вот три",
+        proposals: [
+          { banText: "не срать и ссать", executionProbability: 0.1 as ExecutionProbability },
+          { banText: selectedText, executionProbability: 0.4 as ExecutionProbability },
+          { banText: "запрет три", executionProbability: 0.9 as ExecutionProbability },
+        ],
+      },
+    ]);
+    const userA = contactId(app, USER_A_TG);
+    const userB = contactId(app, USER_B_TG);
+    const beforeB = await snapshot(app.url, USER_B_TG);
+    expect(beforeB.currentUserId).toBe(userB);
+    expect(beforeB.currentUserId).not.toBe(userA);
+    expect(incomingOf(beforeB)).toEqual([]);
+
+    const opened = await session(app.url, USER_A_TG);
+    expect(opened.controlState).toBe("RIM.LOBBY");
+    expect(opened.currentUserId).toBe(userA);
+    await dispatch(app.url, USER_A_TG, "RIM.PRESS_START_CHAT");
+    await dispatch(app.url, USER_A_TG, "RIM.PRESS_SELECT_CONTACT");
+    const ready = await dispatch(app.url, USER_A_TG, "RIM.SELECT_CONTACT", { contactId: userB });
+    expect(ready.rimChat?.selectedContactId).toBe(userB);
+
+    await dispatch(app.url, USER_A_TG, "RIM.CHANGE_INPUT_DRAFT", { inputDraft: "предложи" });
+    const proposed = await dispatch(app.url, USER_A_TG, "RIM.PRESS_SEND");
+    const proposals = proposed.rimChat?.messages.at(-1);
+    expect(proposals?.kind).toBe("BAN_PROPOSALS");
+    if (proposals?.kind !== "BAN_PROPOSALS") return;
+    const selected = proposals.proposals.find((item) => item.banText === selectedText);
+    expect(selected?.proposalId).toBeTruthy();
+    const proposalId = selected!.proposalId;
+
+    const what = await dispatch(app.url, USER_A_TG, "RIM.PRESS_SUGGESTION_FORBID", {
+      rimChatId: proposed.rimChat?.id,
+      proposalId,
+    });
+    expect(what.controlState).toBe("CREATE_BAN.WHAT.RIM");
+    expect(what.createBanDraft?.proposalId).toBe(proposalId);
+    expect(what.createBanDraft?.banText).toBe(selectedText);
+    expect(what.createBanDraft?.selectedContactId).toBe(userB);
+    await dispatch(app.url, USER_A_TG, "CREATE_BAN.CHANGE_DURATION", { durationMinutes: 3 });
+    const confirm = await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_NEXT");
+    expect(confirm.controlState).toBe("CREATE_BAN.CONFIRM.RIM");
+
+    const forbidResponse = await fetch(`${app.url}/api/events`, {
+      method: "POST",
+      headers: authHeaders(USER_A_TG),
+      body: JSON.stringify({ name: "CREATE_BAN.PRESS_FORBID", payload: {} }),
+    });
+    const forbidBody = (await forbidResponse.json()) as {
+      diagnostics?: TestUiDiagnostics;
+      orchestration?: {
+        userEvent: { pendingOperationId: string | null; eventName: string };
+        serverEvent: { eventName: string };
+      };
+    };
+    expect(forbidResponse.status, JSON.stringify(forbidBody)).toBe(200);
+    const success = forbidBody.diagnostics!;
+    expect(forbidBody.orchestration?.userEvent.eventName).toBe("CREATE_BAN.PRESS_FORBID");
+    expect(forbidBody.orchestration?.serverEvent.eventName).toBe("CREATE_BAN.SEND_CONFIRMED");
+    expect(success.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(success.currentUserId).toBe(userA);
+    expect(success.createBanDraft).toBeNull();
+    expect(success.rimChat).toBeNull();
+    expect(success.savedFrozenRimChatPresent).toBe(false);
+    expect(success.effects).toEqual(
+      expect.arrayContaining([
+        "UPSERT_BAN",
+        "UPSERT_NOTIFICATION_ITEM",
+        "CLEAR_OPERATION",
+        "SET_CREATE_BAN_DRAFT",
+        "SET_FROZEN_RIM_CHAT",
+        "SET_RIM_CHAT",
+        "SET_CONTROL_STATE",
+      ]),
+    );
+    const created = bansOf(success).find((ban) => ban.sourceProposalId === proposalId);
+    expect(created).toBeTruthy();
+    expect(created?.receiverId).toBe(userB);
+    expect(created?.senderId).toBe(userA);
+    expect(created?.banText).toBe(selectedText);
+    expect(created?.sourceProposalId).toBe(proposalId);
+    expect(success.successfulBanId).toBe(created?.id);
+    expect(bansOf(success).filter((ban) => ban.banText === selectedText)).toHaveLength(1);
+
+    const reloadedA = await snapshot(app.url, USER_A_TG);
+    expect(reloadedA.currentUserId).toBe(userA);
+    expect(reloadedA.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(reloadedA.rimChat).toBeNull();
+    expect(reloadedA.savedFrozenRimChatPresent).toBe(false);
+    expect(reloadedA.successfulBanId).toBe(created?.id);
+    expect(bansOf(reloadedA).find((ban) => ban.id === created?.id)?.sourceProposalId).toBe(
+      proposalId,
+    );
+    const back = await dispatch(app.url, USER_A_TG, "RIM.PRESS_BACK");
+    expect(back.rimChat).toBeNull();
+    expect(back.savedFrozenRimChatPresent).toBe(false);
+    expect(back.controlState).not.toBe("RIM.CHAT");
+
+    const openedB = await session(app.url, USER_B_TG);
+    expect(openedB.currentUserId).toBe(userB);
+    expect(openedB.currentUserId).not.toBe(userA);
+    const delivered = incomingOf(openedB).filter((item) => item.banId === created?.id);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.ownerId).toBe(userB);
+    expect(incomingOf(openedB).filter((item) => item.kind === "INCOMING_BAN")).toHaveLength(1);
+    const banForB = bansOf(openedB).find((ban) => ban.id === created?.id);
+    expect(banForB?.banText).toBe(selectedText);
+    expect(banForB?.senderId).toBe(userA);
+    expect(banForB?.receiverId).toBe(userB);
+    expect(banForB?.sourceProposalId).toBe(proposalId);
+
+    const reloadedB = await snapshot(app.url, USER_B_TG);
+    expect(reloadedB.currentUserId).toBe(userB);
+    const persisted = incomingOf(reloadedB).filter((item) => item.banId === created?.id);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.id).toBe(delivered[0]?.id);
+    expect(persisted[0]?.ownerId).toBe(userB);
+    expect(bansOf(reloadedB).find((ban) => ban.id === created?.id)?.banText).toBe(selectedText);
+
+    const operationId = forbidBody.orchestration?.userEvent.pendingOperationId;
+    expect(operationId).toBeTruthy();
+    const context = await authenticateRuntime(app.runtime, {
+      method: "development",
+      secret: DEV_SECRET,
+      telegramUserId: USER_A_TG,
+    });
+    const duplicate = await executeAuthenticatedEvent(app.runtime, context, {
+      name: "CREATE_BAN.SEND_CONFIRMED",
+      payload: { operationId, createdBanId: created?.id },
+    });
+    expect(duplicate.outcome).not.toBe("APPLIED");
+    const afterReplay = await snapshot(app.url, USER_B_TG);
+    const replayed = incomingOf(afterReplay).filter((item) => item.banId === created?.id);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.id).toBe(delivered[0]?.id);
   });
 });
