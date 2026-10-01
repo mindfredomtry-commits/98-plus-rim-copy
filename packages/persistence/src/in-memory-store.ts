@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Ban, ProductSnapshot, TransitionResult, UserId } from "@98plus/product-model";
 import type { BanId } from "@98plus/product-model";
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
-import { sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
+import { cloneJson, sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
 import { ProductTables } from "./tables.ts";
 import type {
@@ -48,6 +48,42 @@ export class InMemoryProductStore implements ProductStore {
   async persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot> {
     const snapshot = requireApplied(input.result);
     return this.write(input.currentUserId, input.expectedRevision, snapshot, false);
+  }
+
+  async saveRimProviderRuntime(
+    currentUserId: UserId,
+    expectedRevision: number,
+    runtime: unknown | null,
+  ): Promise<LoadedSnapshot> {
+    return this.withUserLock(currentUserId, () =>
+      this.tables.transaction(() => {
+        if (!this.tables.hasUser(currentUserId)) {
+          throw new PersistenceError(
+            "IDENTITY_REQUIRED",
+            "Persistence operations require an authenticated identity_users.user_id",
+          );
+        }
+        const current = this.tables.lockSession(currentUserId);
+        if (!current) {
+          throw new PersistenceError(
+            "INVARIANT",
+            "rim provider runtime requires an existing product_user_sessions row",
+          );
+        }
+        if (current.revision !== expectedRevision) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        this.tables.writeSession({
+          ...current,
+          revision: current.revision + 1,
+          rimProviderRuntime: runtime === null ? null : cloneJson(runtime),
+        });
+        return this.read(currentUserId);
+      }),
+    );
   }
 
   async markTelegramPersistentReentryBootstrapSent(currentUserId: UserId, claimToken: string) {
@@ -228,6 +264,7 @@ export class InMemoryProductStore implements ProductStore {
         session?.telegramPersistentReentryBootstrapClaimedUntilMs ?? null,
       telegramPersistentReentryBootstrapClaimToken:
         session?.telegramPersistentReentryBootstrapClaimToken ?? null,
+      rimProviderRuntime: session?.rimProviderRuntime ?? null,
       snapshot: snapshotFromRecords({
         session,
         bans,
@@ -300,6 +337,7 @@ export class InMemoryProductStore implements ProductStore {
           current?.telegramPersistentReentryBootstrapClaimedUntilMs ?? null,
         telegramPersistentReentryBootstrapClaimToken:
           current?.telegramPersistentReentryBootstrapClaimToken ?? null,
+        rimProviderRuntime: current?.rimProviderRuntime ?? null,
       }),
     );
     return this.read(currentUserId);

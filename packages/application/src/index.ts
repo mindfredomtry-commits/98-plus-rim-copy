@@ -24,3 +24,18 @@ export type { RimContextFailures } from "./rim/continue-rim.ts";
 export type { RimAiPort, RimAiRequest } from "./rim/rim-ai-port.ts";
 export { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./rim/validate-rim-ai-output.ts";
 export type { RimAiOutputRejection, RimAiOutputValidation } from "./rim/validate-rim-ai-output.ts";
+export {
+  applicableRimProviderRuntime,
+  parseRimProviderRuntime,
+} from "./rim/rim-provider-runtime.ts";
+export type {
+  ProviderConversationId,
+  ProviderResponseId,
+  RetrievedProviderStatus,
+  RimProviderAttempt,
+  RimProviderAttemptId,
+  RimProviderInitialization,
+  RimProviderRuntime,
+  RimProviderRuntimeParse,
+  RimProviderRuntimeRejection,
+} from "./rim/rim-provider-runtime.ts";

@@ -27,6 +27,11 @@ export type LoadedSnapshot = Readonly<{
   telegramPersistentReentryBootstrapClaimedUntilMs: number | null;
   /** Persistence-only fencing token for the active claim; null if unclaimed. */
   telegramPersistentReentryBootstrapClaimToken: string | null;
+  /**
+   * Persistence-only provider runtime JSON.
+   * Absent is null. Applicability is decided by the Application parser, not by this field's presence.
+   */
+  rimProviderRuntime: unknown | null;
 }>;
 
 export type PersistTransitionInput = Readonly<{
@@ -164,6 +169,15 @@ export type ProductStore = {
   findShareByToken(token: string): Promise<StoredShareLookup | null>;
   getBanById(banId: BanId): Promise<Ban | null>;
   bindBanReceiver(banId: BanId, receiverId: UserId): Promise<BanReceiverBindResult>;
+  /**
+   * Replace the persistence-only provider runtime for this user session.
+   * Does not change Product snapshot fields. Requires the current session revision.
+   */
+  saveRimProviderRuntime(
+    currentUserId: UserId,
+    expectedRevision: number,
+    runtime: unknown | null,
+  ): Promise<LoadedSnapshot>;
 };
 
 export type BanRow = Ban & Readonly<{ createdSeq: number }>;

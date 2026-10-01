@@ -59,6 +59,7 @@ function sessionToRow(session: SessionRecord) {
       session.telegramPersistentReentryCtaSurfaceGeneration,
     telegram_persistent_reentry_cta_consumed_surface_generation:
       session.telegramPersistentReentryCtaConsumedSurfaceGeneration,
+    rim_provider_runtime: session.rimProviderRuntime,
   };
 }
 
@@ -170,8 +171,21 @@ export class MemorySqlClient implements PersistenceSqlClient {
             params[22] === null || params[22] === undefined ? 0 : Number(params[22]),
           telegramPersistentReentryCtaConsumedSurfaceGeneration:
             params[23] === null || params[23] === undefined ? null : Number(params[23]),
+          rimProviderRuntime: parseMaybeJson(params[24] ?? null),
         });
         return rows([]);
+      }
+      case SQL.updateRimProviderRuntime: {
+        const session = this.tables.lockSession(String(params[0]));
+        if (!session || session.revision !== Number(params[1])) {
+          return rows([]);
+        }
+        this.tables.writeSession({
+          ...session,
+          revision: session.revision + 1,
+          rimProviderRuntime: parseMaybeJson(params[2] ?? null),
+        });
+        return rows([{ user_id: session.userId }]);
       }
       case SQL.claimTelegramPersistentReentryBootstrapDelivery: {
         const session = this.tables.lockSession(String(params[0]));

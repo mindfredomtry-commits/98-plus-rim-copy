@@ -46,6 +46,11 @@ export const MIGRATION_CHAIN = [
     file: "packages/persistence/schema/007_ban_source_proposal.sql",
     path: join(PERSISTENCE_SCHEMA_DIR, "007_ban_source_proposal.sql"),
   },
+  {
+    authority: "persistence",
+    file: "packages/persistence/schema/008_rim_provider_runtime.sql",
+    path: join(PERSISTENCE_SCHEMA_DIR, "008_rim_provider_runtime.sql"),
+  },
 ] as const;
 
 export function identitySchemaSql(): string {
@@ -85,6 +90,10 @@ export function banSourceProposalSql(): string {
   return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "007_ban_source_proposal.sql"), "utf8");
 }
 
+export function rimProviderRuntimeSql(): string {
+  return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "008_rim_provider_runtime.sql"), "utf8");
+}
+
 export function allMigrationSql(): readonly string[] {
   return [
     identitySchemaSql(),
@@ -94,5 +103,6 @@ export function allMigrationSql(): readonly string[] {
     telegramPersistentReentryBootstrapClaimTokenSql(),
     telegramPersistentReentryCtaOpportunitySql(),
     banSourceProposalSql(),
+    rimProviderRuntimeSql(),
   ];
 }

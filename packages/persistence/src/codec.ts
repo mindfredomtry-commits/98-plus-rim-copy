@@ -192,6 +192,8 @@ export function sessionFromSnapshot(
     telegramPersistentReentryBootstrapSent?: boolean;
     telegramPersistentReentryBootstrapClaimedUntilMs?: number | null;
     telegramPersistentReentryBootstrapClaimToken?: string | null;
+    /** Previous persistence-only provider runtime. Product writes must pass it through. */
+    rimProviderRuntime?: unknown | null;
   }>,
 ): SessionRecord {
   const previousBootstrapSent = options?.telegramPersistentReentryBootstrapSent ?? false;
@@ -234,6 +236,8 @@ export function sessionFromSnapshot(
     telegramPersistentReentryBootstrapClaimedUntilMs: previousClaimedUntilMs,
     // Persistence-only fencing token — preserved across Product transitions.
     telegramPersistentReentryBootstrapClaimToken: previousClaimToken,
+    rimProviderRuntime:
+      options?.rimProviderRuntime === undefined ? null : cloneJson(options.rimProviderRuntime),
   };
 }
 
@@ -332,4 +336,9 @@ export type SessionRecord = Readonly<{
   telegramPersistentReentryBootstrapClaimedUntilMs: number | null;
   /** Persistence-only fencing token for the active claim; null if unclaimed. */
   telegramPersistentReentryBootstrapClaimToken: string | null;
+  /**
+   * Persistence-only provider runtime for one RimChatId.
+   * Not loaded into ProductSnapshot and not stored inside rim_chat.
+   */
+  rimProviderRuntime: unknown | null;
 }>;

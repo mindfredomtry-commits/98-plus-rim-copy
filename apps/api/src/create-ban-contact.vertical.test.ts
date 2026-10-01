@@ -523,6 +523,8 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
+      saveRimProviderRuntime: (userId, expectedRevision, runtime) =>
+        inner.saveRimProviderRuntime(userId, expectedRevision, runtime),
       persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
       markTelegramPersistentReentryBootstrapSent: (userId, claimToken) =>
         inner.markTelegramPersistentReentryBootstrapSent(userId, claimToken),

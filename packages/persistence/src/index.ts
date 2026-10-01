@@ -13,6 +13,7 @@ export {
   productPersistenceSql,
   telegramPersistentReentryBootstrapClaimSql,
   telegramPersistentReentryBootstrapClaimTokenSql,
+  rimProviderRuntimeSql,
   telegramPersistentReentryCtaOpportunitySql,
   telegramPersistentReentrySql,
 } from "./migrations.ts";

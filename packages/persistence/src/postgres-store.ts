@@ -67,6 +67,7 @@ type SessionRow = {
   telegram_persistent_reentry_bootstrap_claim_token?: string | null;
   telegram_persistent_reentry_cta_surface_generation?: number | string | null;
   telegram_persistent_reentry_cta_consumed_surface_generation?: number | string | null;
+  rim_provider_runtime?: unknown | null;
 };
 
 type RelationshipContextSourceSqlRow = {
@@ -253,6 +254,53 @@ export class PostgresProductStore implements ProductStore {
       );
     }
     return this.write(input.currentUserId, input.expectedRevision, input.result.snapshot, false);
+  }
+
+  async saveRimProviderRuntime(
+    currentUserId: UserId,
+    expectedRevision: number,
+    runtime: unknown | null,
+  ): Promise<LoadedSnapshot> {
+    try {
+      return await this.client.transaction(async (tx) => {
+        const sessionResult = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [
+          currentUserId,
+        ]);
+        const row = sessionResult.rows[0];
+        if (!row) {
+          throw new PersistenceError(
+            "INVARIANT",
+            "rim provider runtime requires an existing product_user_sessions row",
+          );
+        }
+        if (Number(row.revision) !== expectedRevision) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        const updated = await tx.query<{ user_id: string }>(SQL.updateRimProviderRuntime, [
+          currentUserId,
+          expectedRevision,
+          jsonParam(runtime),
+        ]);
+        if (!updated.rows[0]) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        return this.read(tx, currentUserId);
+      });
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "product persistence transaction failed",
+      );
+    }
   }
 
   async withCheckPairLock<T>(
@@ -685,6 +733,7 @@ export class PostgresProductStore implements ProductStore {
         ? previousClaimedUntilMs
         : null,
       telegramPersistentReentryBootstrapClaimToken: previousClaimToken,
+      rimProviderRuntime: parseJson(sessionResult.rows[0]?.rim_provider_runtime ?? null),
     });
     await tx.query(SQL.upsertSession, [
       session.userId,
@@ -711,6 +760,7 @@ export class PostgresProductStore implements ProductStore {
       session.telegramPersistentReentryBootstrapClaimToken,
       session.telegramPersistentReentryCtaSurfaceGeneration,
       session.telegramPersistentReentryCtaConsumedSurfaceGeneration,
+      jsonParam(session.rimProviderRuntime),
     ]);
     return this.read(tx, currentUserId);
   }
@@ -787,6 +837,7 @@ export class PostgresProductStore implements ProductStore {
             const value = Number(raw);
             return Number.isFinite(value) ? value : null;
           })(),
+          rimProviderRuntime: parseJson(sessionRow.rim_provider_runtime ?? null),
         }
       : undefined;
     return {
@@ -797,6 +848,7 @@ export class PostgresProductStore implements ProductStore {
         session?.telegramPersistentReentryBootstrapClaimedUntilMs ?? null,
       telegramPersistentReentryBootstrapClaimToken:
         session?.telegramPersistentReentryBootstrapClaimToken ?? null,
+      rimProviderRuntime: session?.rimProviderRuntime ?? null,
       snapshot: snapshotFromRecords({
         session,
         bans,
