@@ -242,7 +242,8 @@ export type AiOperation =
 
 export type RimChat = Readonly<{
   id: RimChatId;
-  selectedContactId: UserId | null;
+  /** A domain RimChat is one USER↔RIM session about one CONTACT, from birth. */
+  selectedContactId: UserId;
   relationshipContext: RelationshipContext | null;
   messages: readonly RimMessage[];
   inputDraft: string;

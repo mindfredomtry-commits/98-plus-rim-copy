@@ -30,12 +30,14 @@ import {
   incomingItem,
   kernelContext,
   makeBan,
+  makeChat,
   makeTimer,
   pendingOp,
   shareOp,
   statusItem,
   timerItem,
   validCreateDraft,
+  withChat,
   withControlState,
   withEntities,
   withItems,
@@ -1016,5 +1018,92 @@ describe("Stage 13A corrective — durable bootstrap delivery facts", () => {
       60_000,
     );
     expect(reclaim.status).toBe("CLAIMED");
+  });
+
+  it("drops a legacy null-contact rim chat and keeps the visible RIM state", async () => {
+    const { kit, store, memory } = await setup();
+    for (const controlState of ["RIM.CHAT", "RIM.SELECT_CONTACT"] as const) {
+      const seeded = await kit.installFixtureSnapshot(
+        USER_ID,
+        withChat(withControlState(emptySnapshot(), controlState), makeChat()),
+      );
+      const session = memory.inspect().lockSession(USER_ID);
+      if (!session?.rimChat) {
+        throw new Error("expected a stored session");
+      }
+      memory.inspect().writeSession({
+        ...session,
+        controlState,
+        rimChat: {
+          ...session.rimChat,
+          selectedContactId: null,
+          messages: [{ kind: "RIM", text: "выбери человека и я предложу новые запреты" }],
+          inputDraft: "not a domain draft",
+        } as never,
+        rimProviderRuntime: {
+          rimChatId: session.rimChat.id,
+          selectedContactId: null,
+        },
+      });
+      const loaded = await store.loadProductSnapshot(USER_ID);
+      expect(loaded.revision).toBe(seeded.revision);
+      expect(loaded.snapshot.controlState).toBe(controlState);
+      expect(loaded.snapshot.extended.rimChat).toBeNull();
+      expect(loaded.rimProviderRuntime).toEqual({
+        rimChatId: session.rimChat.id,
+        selectedContactId: null,
+      });
+      expect(JSON.stringify(loaded.snapshot)).not.toContain(session.rimChat.id);
+    }
+  });
+
+  it("round-trips a domain RimChat whose contact is present", async () => {
+    const { kit, store } = await setup();
+    const chat = makeChat({
+      selectedContactId: CONTACT_A,
+      messages: [{ kind: "USER", text: "kept" }],
+      inputDraft: "kept",
+    });
+    await kit.installFixtureSnapshot(
+      USER_ID,
+      withChat(withControlState(emptySnapshot(), "RIM.CHAT"), chat),
+    );
+    const loaded = await store.loadProductSnapshot(USER_ID);
+    expect(loaded.snapshot.extended.rimChat).toEqual(chat);
+  });
+
+  it("does not hydrate a null-contact frozen RimChat", async () => {
+    const { kit, store, memory } = await setup();
+    const live = makeChat({
+      selectedContactId: CONTACT_A,
+      messages: [{ kind: "USER", text: "live" }],
+    });
+    const world = withChat(withControlState(emptySnapshot(), "CREATE_BAN.WHAT.RIM"), live);
+    await kit.installFixtureSnapshot(USER_ID, {
+      ...world,
+      extended: {
+        ...world.extended,
+        createBanDraft: validCreateDraft("RIM"),
+        savedFrozenRimChat: makeChat({ selectedContactId: CONTACT_A, inputDraft: "frozen" }),
+      },
+    });
+    const session = memory.inspect().lockSession(USER_ID);
+    if (!session?.savedFrozenRimChat) {
+      throw new Error("expected a frozen chat");
+    }
+    memory.inspect().writeSession({
+      ...session,
+      savedFrozenRimChat: {
+        ...session.savedFrozenRimChat,
+        selectedContactId: null,
+        id: "rim-chat-frozen-legacy",
+      } as never,
+    });
+    const loaded = await store.loadProductSnapshot(USER_ID);
+    expect(loaded.snapshot.controlState).toBe("CREATE_BAN.WHAT.RIM");
+    expect(loaded.snapshot.extended.savedFrozenRimChat).toBeNull();
+    expect(loaded.snapshot.extended.rimChat).toEqual(live);
+    expect(loaded.snapshot.extended.createBanDraft).toEqual(validCreateDraft("RIM"));
+    expect(JSON.stringify(loaded.snapshot)).not.toContain("rim-chat-frozen-legacy");
   });
 });

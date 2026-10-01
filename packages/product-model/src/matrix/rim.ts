@@ -41,9 +41,8 @@ export const RIM_MATRIX_ROWS: readonly MatrixContractRow[] = [
     guardsText: "—",
     nextStateText: "RIM-02 RIM.CHAT",
     nextState: "RIM.CHAT",
-    effectsText:
-      "Создаётся новый session-temporary RIM Chat context; selectedContact первоначально отсутствует",
-    effects: [{ type: "SET_RIM_CHAT" }, { type: "SET_CONTROL_STATE" }],
+    effectsText: "Product Control State переходит в RIM.CHAT; domain RimChat не создаётся",
+    effects: [{ type: "SET_CONTROL_STATE" }],
     result: "TRANSITION",
     source: { section: "RIM-01 — RIM.LOBBY", locator: "line 94", extractedLines: "94" },
   }),
@@ -169,10 +168,12 @@ export const RIM_MATRIX_ROWS: readonly MatrixContractRow[] = [
     eventId: "E-48",
     eventName: "RIM.PRESS_SELECT_CONTACT",
     branch: "current-chat-exists",
-    guardsText: "current RIM Chat exists",
+    guardsText:
+      "видимый RIM.CHAT открывает Select Contact; domain RimChat может отсутствовать, а существующий сохраняется",
     nextStateText: "RIM-03 RIM.SELECT_CONTACT",
     nextState: "RIM.SELECT_CONTACT",
-    effectsText: "Текущий RIM Chat context сохраняется; открывается Select Contact",
+    effectsText:
+      "Product Control State переходит в RIM.SELECT_CONTACT; domain RimChat не создаётся; существующий RimChat сохраняется",
     effects: [{ type: "SET_CONTROL_STATE" }],
     result: "TRANSITION",
     source: { section: "RIM-02 — RIM.CHAT", locator: "line 114", extractedLines: "114" },
@@ -612,12 +613,12 @@ export const RIM_MATRIX_ROWS: readonly MatrixContractRow[] = [
     eventId: "E-49",
     eventName: "RIM.SELECT_CONTACT",
     branch: "initial-selected-contact",
-    guardsText: "selectedContact = null; пользователь выбирает contact",
+    guardsText: "domain RimChat отсутствует; пользователь выбирает contact",
     guards: { type: "SELECTED_CONTACT_ABSENT" },
     nextStateText: "RIM-02 RIM.CHAT",
     nextState: "RIM.CHAT",
     effectsText:
-      "выбранный contact становится selectedContact; начинается формирование relationship context; relationshipContext.status = loading; существующий input draft сохраняется; Chat отображается сразу; отправка сообщения недоступна до E-56 CONTEXT_READY",
+      "создаётся новый RimChatId с выбранным CONTACT; messages пусты; input draft пуст; начинается формирование relationship context; relationshipContext.status = loading; Chat отображается сразу; отправка сообщения недоступна до E-56 CONTEXT_READY",
     effects: [
       { type: "SET_RIM_CHAT" },
       { type: "REQUEST_RELATIONSHIP_CONTEXT" },

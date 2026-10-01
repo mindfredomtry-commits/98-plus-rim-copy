@@ -361,6 +361,35 @@ describe("Stage 6 TEST UI product screens", () => {
     expect(screen.html).toContain('data-event="RIM.PRESS_SEND"');
   });
 
+  it("renders the pre-contact RIM screen without a domain chat or a send control", () => {
+    const screen = renderProductScreen(diagnostics("RIM.CHAT", { rimChat: null }));
+    expect(screen.screenId).toBe("RimChatTestScreen");
+    expect(screen.html).toContain("выбери человека и я предложу новые запреты");
+    expect(screen.html).toContain('data-rim-pre-contact="true"');
+    expect(screen.html).toContain('data-event="RIM.PRESS_SELECT_CONTACT"');
+    expect(screen.html).toContain('data-event="RIM.PRESS_BACK"');
+    expect(screen.html).not.toContain("data-rim-chat-id");
+    expect(screen.html).not.toContain("data-rim-message");
+    expect(screen.html).not.toContain("rimInputDraft");
+    expect(screen.html).not.toContain('data-event="RIM.PRESS_SEND"');
+    expect(screen.html).not.toContain("data-selected-contact");
+  });
+
+  it("renders Select Contact without a domain chat and keeps Back", () => {
+    const screen = renderProductScreen(
+      diagnostics("RIM.SELECT_CONTACT", {
+        rimChat: null,
+        contacts: [{ userId: USER_B, telegramUserId: "1002" }],
+      }),
+    );
+    expect(screen.screenId).toBe("RimSelectContactTestScreen");
+    expect(screen.html).toContain('data-contact-user-id="user-b-internal"');
+    expect(screen.html).toContain('data-event="RIM.SELECT_CONTACT"');
+    expect(screen.html).toContain('data-event="RIM.PRESS_BACK"');
+    expect(screen.html).not.toContain("data-rim-chat-id");
+    expect(screen.html).not.toContain("выбери человека и я предложу новые запреты");
+  });
+
   it("L. diagnostics remain visible and show canonical machine fields", () => {
     const text = formatMachineDiagnostics({
       controlState: "CREATE_BAN.SUCCESS",

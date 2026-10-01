@@ -30,10 +30,6 @@ function introMessage(): RimMessage {
   return { kind: "RIM", text: "я могу предложить 3 запрета, написать?" };
 }
 
-function lobbyPrompt(): RimMessage {
-  return { kind: "RIM", text: "выбери человека и я предложу новые запреты" };
-}
-
 function askRimPrompt(): RimMessage {
   return { kind: "RIM", text: "что хочешь спросить?" };
 }
@@ -69,6 +65,25 @@ function canonicalProposals(
   ];
 }
 
+function bornChat(contactId: UserId, context: ResolveInput["context"]): RimChat {
+  const requestId = context.allocateId("context") as ContextRequestId;
+  return {
+    id: context.allocateId("rim-chat") as RimChatId,
+    selectedContactId: contactId,
+    relationshipContext: {
+      selectedContactId: contactId,
+      status: "loading",
+      requestId,
+      data: null,
+      failure: null,
+    },
+    messages: [],
+    inputDraft: "",
+    aiOperation: { status: "IDLE" },
+    askRimOrigin: null,
+  };
+}
+
 function emptyDraft(origin: BanDraft["origin"], contactId: UserId | null = null): BanDraft {
   return {
     origin,
@@ -86,17 +101,6 @@ export function nextRimChat(
   context: ResolveInput["context"],
 ): RimChat | null {
   const current = snapshot.extended.rimChat;
-  if (row.eventId === "E-47") {
-    return {
-      id: context.allocateId("rim-chat") as RimChatId,
-      selectedContactId: null,
-      relationshipContext: null,
-      messages: [lobbyPrompt()],
-      inputDraft: "",
-      aiOperation: { status: "IDLE" },
-      askRimOrigin: null,
-    };
-  }
   if (row.eventId === "E-63") {
     const item = activeItem(snapshot);
     const ban = item ? snapshot.extended.entities.bans[item.banId] : undefined;
@@ -159,49 +163,25 @@ export function nextRimChat(
   if (row.eventId === "E-07" && snapshot.extended.savedFrozenRimChat) {
     return snapshot.extended.savedFrozenRimChat;
   }
-  if (!current) {
-    return current;
-  }
   if (row.eventId === "E-49" && row.branch === "initial-selected-contact") {
-    const contactId = eventField<UserId>(event, "contactId");
-    if (!contactId) {
+    if (current) {
       return current;
     }
-    const requestId = context.allocateId("context") as ContextRequestId;
-    const relationshipContext: RelationshipContext = {
-      selectedContactId: contactId,
-      status: "loading",
-      requestId,
-      data: null,
-      failure: null,
-    };
-    return {
-      ...current,
-      selectedContactId: contactId,
-      relationshipContext,
-    };
+    const contactId = eventField<UserId>(event, "contactId");
+    if (!contactId) {
+      return null;
+    }
+    return bornChat(contactId, context);
+  }
+  if (!current) {
+    return current;
   }
   if (row.eventId === "E-49" && row.branch === "change-selected-contact") {
     const contactId = eventField<UserId>(event, "contactId");
     if (!contactId) {
       return current;
     }
-    const requestId = context.allocateId("context") as ContextRequestId;
-    return {
-      id: context.allocateId("rim-chat") as RimChatId,
-      selectedContactId: contactId,
-      relationshipContext: {
-        selectedContactId: contactId,
-        status: "loading",
-        requestId,
-        data: null,
-        failure: null,
-      },
-      messages: [],
-      inputDraft: "",
-      aiOperation: { status: "IDLE" },
-      askRimOrigin: null,
-    };
+    return bornChat(contactId, context);
   }
   if (row.eventId === "E-49" && row.branch === "same-current-selected-contact") {
     return current;
@@ -231,9 +211,6 @@ export function nextRimChat(
   }
   if (row.eventId === "E-53") {
     const contactId = current.selectedContactId;
-    if (!contactId) {
-      return current;
-    }
     const requestId = context.allocateId("context") as ContextRequestId;
     return {
       ...current,
@@ -407,7 +384,7 @@ export function nextCreateDraft(
     const chat = snapshot.extended.rimChat;
     const proposalId = eventField<ProposalId>(event, "proposalId");
     const proposal = chat && proposalId ? findChatProposal(chat, proposalId) : null;
-    if (!chat?.selectedContactId || !proposal) {
+    if (!chat || !proposal) {
       return current;
     }
     return {
@@ -824,7 +801,7 @@ export function applyEffects(
               ...next.extended,
               rimChat: {
                 ...chat,
-                selectedContactId: chat.selectedContactId ?? effect.contactId,
+                selectedContactId: chat.selectedContactId,
                 relationshipContext: {
                   selectedContactId: effect.contactId,
                   status: "loading",

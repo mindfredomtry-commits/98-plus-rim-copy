@@ -25,9 +25,7 @@ export type BanReceiverIsUserIdOrNull = Assert<
 export type SelectedContactIsUserId = Assert<
   BanDraft["selectedContactId"] extends UserId | null ? true : false
 >;
-export type RimSelectedContactIsUserId = Assert<
-  RimChat["selectedContactId"] extends UserId | null ? true : false
->;
+export type RimSelectedContactIsUserId = Assert<Equals<RimChat["selectedContactId"], UserId>>;
 export type E02ContactPayloadIsUserId = Assert<
   EventPayloadMap["CREATE_BAN.SELECT_CONTACT"]["contactId"] extends UserId ? true : false
 >;
@@ -45,6 +43,12 @@ export function rejectOverboardAcceptance(): BanAcceptance {
   // @ts-expect-error OVERBOARD is Ban.status, not Ban.acceptance.
   const acceptance: BanAcceptance = "OVERBOARD";
   return acceptance;
+}
+
+export function rejectNullRimSelectedContact(): RimChat["selectedContactId"] {
+  // @ts-expect-error a domain RimChat requires a CONTACT from birth.
+  const selectedContactId: RimChat["selectedContactId"] = null;
+  return selectedContactId;
 }
 
 export function rejectRemovedContactIdBrand(): void {

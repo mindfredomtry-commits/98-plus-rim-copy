@@ -270,7 +270,7 @@ export function failedAi(
 export function makeChat(overrides: Partial<RimChat> = {}): RimChat {
   return {
     id: CHAT_ID,
-    selectedContactId: null,
+    selectedContactId: CONTACT_A,
     relationshipContext: null,
     messages: [],
     inputDraft: "",
@@ -647,7 +647,7 @@ function withDefaultChat(snapshot: ProductSnapshot, row: MatrixContractRow): Pro
     return snapshot;
   }
   if (row.state === "RIM.SELECT_CONTACT" && row.branch === "initial-selected-contact") {
-    return withChat(snapshot, makeChat({ inputDraft: "keep me" }));
+    return snapshot;
   }
   if (row.state === "RIM.CHAT" || row.state === "RIM.SELECT_CONTACT") {
     return withChat(

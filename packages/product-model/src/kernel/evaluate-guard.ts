@@ -1,6 +1,6 @@
 import { findChatProposal } from "../entities.ts";
 import type { Guard } from "../guards.ts";
-import type { ProposalId } from "../ids.ts";
+import type { ProposalId, UserId } from "../ids.ts";
 import type { MatrixContractRow } from "../matrix.ts";
 import { isValidBanText, isValidDurationMinutes } from "../primitives.ts";
 import type { ResolveInput } from "./types.ts";
@@ -136,8 +136,9 @@ function matchingShare(input: ResolveInput) {
   return input.snapshot.extended.entities.shareOperations[attemptId] ?? null;
 }
 
-function currentContactId(input: ResolveInput) {
-  return input.snapshot.extended.rimChat?.selectedContactId ?? null;
+function currentContactId(input: ResolveInput): UserId | null {
+  const chat = input.snapshot.extended.rimChat;
+  return chat ? chat.selectedContactId : null;
 }
 
 function eventContactId(input: ResolveInput) {
@@ -271,7 +272,7 @@ function currentAiRequest(input: ResolveInput): boolean {
 function canonicalProposalSelectable(input: ResolveInput): boolean {
   const chat = input.snapshot.extended.rimChat;
   const proposalId = (input.event.payload as { proposalId?: ProposalId }).proposalId;
-  if (!chat?.selectedContactId || !proposalId || chat.id !== eventRimChatId(input)) {
+  if (!chat || !proposalId || chat.id !== eventRimChatId(input)) {
     return false;
   }
   if (!findChatProposal(chat, proposalId)) {
@@ -529,7 +530,7 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
     case "E-55:invalid-proposal":
       return !canonicalProposalSelectable(input);
     case "E-48:current-chat-exists":
-      return chat !== null;
+      return true;
     case "E-02:real-contact":
       return eventContactId(input) !== null;
     case "E-10:matching-unapplied":

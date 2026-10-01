@@ -153,26 +153,21 @@ describe("Feature 8 RIM vertical", () => {
 
     const chat = await dispatch(app.url, USER_A_TG, "RIM.PRESS_START_CHAT");
     expect(chat.controlState).toBe("RIM.CHAT");
-    expect(chat.rimChat?.selectedContactId).toBeNull();
-    expect(chat.rimChat?.askRimOrigin).toBeNull();
-    expect(chat.rimChat?.messages[0]).toEqual({
-      kind: "RIM",
-      text: "выбери человека и я предложу новые запреты",
-    });
-    const chatId = chat.rimChat?.id;
+    expect(chat.rimChat).toBeNull();
 
     const selecting = await dispatch(app.url, USER_A_TG, "RIM.PRESS_SELECT_CONTACT");
     expect(selecting.controlState).toBe("RIM.SELECT_CONTACT");
+    expect(selecting.rimChat).toBeNull();
     const ready = await dispatch(app.url, USER_A_TG, "RIM.SELECT_CONTACT", { contactId: other });
     expect(ready.controlState).toBe("RIM.CHAT");
-    expect(ready.rimChat?.id).toBe(chatId);
+    const chatId = ready.rimChat?.id;
+    expect(chatId).toBeTruthy();
     expect(ready.rimChat?.selectedContactId).toBe(other);
+    expect(ready.rimChat?.askRimOrigin).toBeNull();
     expect(ready.rimChat?.relationshipContext?.status).toBe("ready");
-    expect(
-      ready.rimChat?.messages.some(
-        (message) => message.kind === "RIM" && message.text.includes("я могу предложить 3 запрета"),
-      ),
-    ).toBe(true);
+    expect(ready.rimChat?.messages).toEqual([
+      { kind: "RIM", text: "я могу предложить 3 запрета, написать?" },
+    ]);
     const contextRequestId = ready.rimChat?.relationshipContext?.requestId;
 
     await dispatch(app.url, USER_A_TG, "RIM.CHANGE_INPUT_DRAFT", { inputDraft: "привет" });

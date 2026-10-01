@@ -23,6 +23,21 @@ export function cloneJson<T>(value: T): T {
   return value === undefined ? value : structuredClone(value);
 }
 
+/**
+ * Load-time compatibility for sessions written before a domain RimChat required a CONTACT.
+ * A stored chat with selectedContactId null is not a domain chat and is not cast into one.
+ */
+export function hydrateStoredRimChat(value: RimChat | null): RimChat | null {
+  if (value === null) {
+    return null;
+  }
+  const contact = (value as { selectedContactId?: UserId | null }).selectedContactId;
+  if (contact === null) {
+    return null;
+  }
+  return cloneJson(value);
+}
+
 export function assertCanonicalControlState(value: string | null): ProductControlState | null {
   if (value === null) {
     return null;
@@ -254,8 +269,8 @@ export function snapshotFromRecords(input: {
   return {
     controlState: input.session?.controlState ?? null,
     extended: {
-      rimChat: cloneJson(input.session?.rimChat ?? null),
-      savedFrozenRimChat: cloneJson(input.session?.savedFrozenRimChat ?? null),
+      rimChat: hydrateStoredRimChat(input.session?.rimChat ?? null),
+      savedFrozenRimChat: hydrateStoredRimChat(input.session?.savedFrozenRimChat ?? null),
       createBanDraft: cloneJson(input.session?.createBanDraft ?? null),
       replyBanDraft: cloneJson(input.session?.replyBanDraft ?? null),
       replySource: cloneJson(input.session?.replySource ?? null),

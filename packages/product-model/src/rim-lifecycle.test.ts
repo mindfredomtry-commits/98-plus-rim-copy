@@ -70,25 +70,78 @@ function run(
 }
 
 describe("MVP14 Pass 2 RIM chat lifecycle and logical request identity", () => {
-  it("keeps RimChatId and Origin when the first CONTACT is selected", () => {
-    const chat = makeChat({
-      inputDraft: "keep me",
-      messages: [{ kind: "RIM", text: "lobby" }],
-      askRimOrigin: ORIGIN,
-    });
+  it("keeps the visible pre-contact chat without a domain RimChat", () => {
+    const started = run(
+      withControlState(emptySnapshot(), "RIM.LOBBY"),
+      defaultEvent("RIM.PRESS_START_CHAT"),
+    );
+    expect(started.outcome).toBe("APPLIED");
+    expect(started.traces[0]?.eventId).toBe("E-47");
+    expect(started.controlState).toBe("RIM.CHAT");
+    expect(started.snapshot.extended.rimChat).toBeNull();
+    expect(started.effects.some((effect) => effect.type === "SET_RIM_CHAT")).toBe(false);
+    expect(started.effects.some((effect) => effect.type === "REQUEST_RELATIONSHIP_CONTEXT")).toBe(
+      false,
+    );
+    expect(started.effects.some((effect) => effect.type === "REQUEST_RIM_AI")).toBe(false);
+
+    const selecting = run(started.snapshot, defaultEvent("RIM.PRESS_SELECT_CONTACT"));
+    expect(selecting.traces[0]?.eventId).toBe("E-48");
+    expect(selecting.controlState).toBe("RIM.SELECT_CONTACT");
+    expect(selecting.snapshot.extended.rimChat).toBeNull();
+    expect(selecting.effects.some((effect) => effect.type === "SET_RIM_CHAT")).toBe(false);
+
+    const backToChat = run(selecting.snapshot, defaultEvent("RIM.PRESS_BACK"));
+    expect(backToChat.traces[0]?.branch).toBe("no-new-selection");
+    expect(backToChat.controlState).toBe("RIM.CHAT");
+    expect(backToChat.snapshot.extended.rimChat).toBeNull();
+
+    const backToLobby = run(backToChat.snapshot, defaultEvent("RIM.PRESS_BACK"));
+    expect(backToLobby.traces[0]?.branch).toBe("no-ask-rim-origin");
+    expect(backToLobby.controlState).toBe("RIM.LOBBY");
+    expect(backToLobby.snapshot.extended.rimChat).toBeNull();
+  });
+
+  it("allocates the RimChat when the first CONTACT is selected", () => {
     const result = run(
-      withChat(withControlState(emptySnapshot(), "RIM.SELECT_CONTACT"), chat),
+      withControlState(emptySnapshot(), "RIM.SELECT_CONTACT"),
       eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_A }),
     );
     const next = result.snapshot.extended.rimChat;
     expect(result.traces[0]?.branch).toBe("initial-selected-contact");
-    expect(next?.id).toBe(CHAT_ID);
-    expect(next?.askRimOrigin).toEqual(ORIGIN);
-    expect(next?.messages).toEqual(chat.messages);
-    expect(next?.inputDraft).toBe("keep me");
+    expect(result.controlState).toBe("RIM.CHAT");
+    expect(next?.id.startsWith("rim-chat-")).toBe(true);
+    expect(next?.id).not.toBe(CHAT_ID);
     expect(next?.selectedContactId).toBe(CONTACT_A);
-    expect(next?.relationshipContext?.status).toBe("loading");
+    expect(next?.askRimOrigin).toBeNull();
+    expect(next?.messages).toEqual([]);
+    expect(next?.inputDraft).toBe("");
+    expect(next?.relationshipContext).toMatchObject({
+      selectedContactId: CONTACT_A,
+      status: "loading",
+      data: null,
+      failure: null,
+    });
     expect(next?.aiOperation).toEqual({ status: "IDLE" });
+    expect(result.effects.some((effect) => effect.type === "REQUEST_RELATIONSHIP_CONTEXT")).toBe(
+      true,
+    );
+  });
+
+  it("does not allocate a RimChat from a pre-contact input draft", () => {
+    const started = run(
+      withControlState(emptySnapshot(), "RIM.LOBBY"),
+      defaultEvent("RIM.PRESS_START_CHAT"),
+    );
+    const drafted = run(
+      started.snapshot,
+      eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "ещё нет чата" }),
+    );
+    expect(drafted.outcome).toBe("APPLIED");
+    expect(drafted.traces[0]?.eventId).toBe("E-51");
+    expect(drafted.controlState).toBe("RIM.CHAT");
+    expect(drafted.snapshot.extended.rimChat).toBeNull();
+    expect(drafted.effects).toEqual([{ type: "SET_RIM_CHAT", chat: null }]);
   });
 
   it("preserves the entire Chat, including a non-null Origin, for the same CONTACT", () => {

@@ -1289,10 +1289,20 @@ function rimMessages(chat: TestUiRimChat): string {
     .join("");
 }
 
+const PRE_CONTACT_RIM_TEXT = "выбери человека и я предложу новые запреты";
+
 function rimChatScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRender {
   const chat = diagnostics.rimChat;
   if (!chat) {
-    return wrap("RimChatTestScreen", "RIM CHAT", "<p>Canonical RIM Chat is absent.</p>");
+    return wrap(
+      "RimChatTestScreen",
+      "RIM CHAT",
+      [
+        `<p data-rim-pre-contact="true">${PRE_CONTACT_RIM_TEXT}</p>`,
+        actionButton("Выбрать человека", "RIM.PRESS_SELECT_CONTACT"),
+        actionButton("BACK", "RIM.PRESS_BACK"),
+      ].join(""),
+    );
   }
   const context = chat.relationshipContext;
   const ai = chat.aiOperation.status;
@@ -1327,13 +1337,11 @@ function rimChatScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRende
       }),
     );
   }
-  if (canSend || !chat.selectedContactId) {
+  if (canSend) {
     parts.push(
       `<div class="row"><label for="rimInputDraft">Message</label> <input id="rimInputDraft" data-change-event="RIM.CHANGE_INPUT_DRAFT" data-change-field="inputDraft" value="${escapeAttr(chat.inputDraft)}" /></div>`,
     );
-    if (canSend) {
-      parts.push(actionButton("SEND", "RIM.PRESS_SEND"));
-    }
+    parts.push(actionButton("SEND", "RIM.PRESS_SEND"));
   }
   parts.push(actionButton("BACK", "RIM.PRESS_BACK"));
   return wrap("RimChatTestScreen", "RIM CHAT", parts.join(""));

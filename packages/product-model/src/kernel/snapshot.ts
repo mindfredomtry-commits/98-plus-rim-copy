@@ -145,7 +145,7 @@ export function validAskRimOrigin(
 ): AskRimOrigin | null {
   const chat = snapshot.extended.rimChat;
   const origin = chat?.askRimOrigin ?? null;
-  if (!origin || !chat?.selectedContactId) {
+  if (!origin || !chat) {
     return null;
   }
   const item = snapshot.extended.entities.notificationItems[origin.sourceStatusItemId];

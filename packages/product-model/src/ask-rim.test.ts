@@ -166,29 +166,23 @@ describe("MVP14 Ask RIM E-63", () => {
     },
   );
 
-  it("keeps an ordinary RIM introduction when askRimOrigin is absent", () => {
+  it("starts an ordinary transcript at context ready, without a pre-contact domain message", () => {
     const started = reduce(
       withControlState(emptySnapshot(), "RIM.LOBBY"),
       defaultEvent("RIM.PRESS_START_CHAT"),
       kernelContext(),
     );
-    expect(started.snapshot.extended.rimChat?.askRimOrigin).toBeNull();
-    expect(started.snapshot.extended.rimChat?.messages).toEqual([
-      { kind: "RIM", text: "выбери человека и я предложу новые запреты" },
-    ]);
+    expect(started.snapshot.extended.rimChat).toBeNull();
     const selected = reduce(
       withControlState(started.snapshot, "RIM.SELECT_CONTACT"),
       eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_A }),
       kernelContext(),
     );
+    expect(selected.snapshot.extended.rimChat?.messages).toEqual([]);
+    expect(selected.snapshot.extended.rimChat?.askRimOrigin).toBeNull();
     const ready = reduce(selected.snapshot, contextReady(selected.snapshot), kernelContext());
-    expect(
-      ready.snapshot.extended.rimChat?.messages.flatMap((message) =>
-        message.kind === "BAN_PROPOSALS" ? [] : [message.text],
-      ),
-    ).toEqual([
-      "выбери человека и я предложу новые запреты",
-      "я могу предложить 3 запрета, написать?",
+    expect(ready.snapshot.extended.rimChat?.messages).toEqual([
+      { kind: "RIM", text: "я могу предложить 3 запрета, написать?" },
     ]);
     const lobbyBack = reduce(ready.snapshot, defaultEvent("RIM.PRESS_BACK"), kernelContext());
     expect(lobbyBack.traces[0]?.branch).toBe("no-ask-rim-origin");

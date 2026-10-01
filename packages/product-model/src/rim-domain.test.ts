@@ -94,13 +94,15 @@ describe("MVP14 Pass 1 canonical RIM domain", () => {
 
   it("initializes a normal RimChat with askRimOrigin null", () => {
     expect(makeChat().askRimOrigin).toBeNull();
+    expect(makeChat().selectedContactId).toBe(CONTACT_A);
     const started = reduce(
       withControlState(emptySnapshot(), "RIM.LOBBY"),
       eventOf("RIM.PRESS_START_CHAT", {}),
       kernelContext(),
     );
     expect(started.outcome).toBe("APPLIED");
-    expect(started.snapshot.extended.rimChat?.askRimOrigin).toBeNull();
+    expect(started.controlState).toBe("RIM.CHAT");
+    expect(started.snapshot.extended.rimChat).toBeNull();
   });
 
   it("mints proposalIds only inside the canonical BAN_PROPOSALS message", () => {

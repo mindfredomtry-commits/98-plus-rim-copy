@@ -256,17 +256,15 @@ describe("Stage 2 Product Kernel", () => {
   });
 
   it("implements RIM E-49 initial contact", () => {
-    const snapshot = withChat(
-      withControlState(emptySnapshot(), "RIM.SELECT_CONTACT"),
-      makeChat({ inputDraft: "keep me" }),
-    );
+    const snapshot = withControlState(emptySnapshot(), "RIM.SELECT_CONTACT");
     const result = applied(snapshot, eventOf("RIM.SELECT_CONTACT", { contactId: CONTACT_A }));
     expect(result.controlState).toBe("RIM.CHAT");
     expect(result.traces[0]?.branch).toBe("initial-selected-contact");
-    expect(result.snapshot.extended.rimChat?.id).toBe(CHAT_ID);
+    expect(result.snapshot.extended.rimChat?.id.startsWith("rim-chat-")).toBe(true);
     expect(result.snapshot.extended.rimChat?.selectedContactId).toBe(CONTACT_A);
+    expect(result.snapshot.extended.rimChat?.messages).toEqual([]);
+    expect(result.snapshot.extended.rimChat?.inputDraft).toBe("");
     expect(result.snapshot.extended.rimChat?.relationshipContext?.status).toBe("loading");
-    expect(result.snapshot.extended.rimChat?.inputDraft).toBe("keep me");
     expect(result.effects.some((effect) => effect.type === "REQUEST_RELATIONSHIP_CONTEXT")).toBe(
       true,
     );
@@ -644,7 +642,7 @@ describe("Stage 2 Product Kernel", () => {
     const snapshot = withControlState(emptySnapshot(), "RIM.LOBBY");
     const result = applied(snapshot, defaultEvent("RIM.PRESS_START_CHAT"));
     expect(result.controlState).toBe("RIM.CHAT");
-    expect(result.snapshot.extended.rimChat?.askRimOrigin).toBeNull();
+    expect(result.snapshot.extended.rimChat).toBeNull();
     expect(isProductControlState(result.controlState!)).toBe(true);
   });
 
