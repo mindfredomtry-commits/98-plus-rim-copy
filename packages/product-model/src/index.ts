@@ -185,6 +185,7 @@ export {
   counterAllocator,
   emptySnapshot,
   evaluateRowGuard,
+  validAskRimOrigin,
 } from "./kernel/index.ts";
 export type {
   AppliedRuleTrace,

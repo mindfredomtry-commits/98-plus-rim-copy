@@ -280,7 +280,7 @@ describe("Feature 8 RIM vertical", () => {
     });
   });
 
-  it("retries a failed context build and a failed AI call on the same logical request", async () => {
+  it("retries a failed context build and leaves a failed AI call pending after E-54", async () => {
     const app = await start(
       [
         { kind: "FAILURE", failure: { code: "RIM_AI_FAILED" } as never },
@@ -315,15 +315,14 @@ describe("Feature 8 RIM vertical", () => {
     const recovered = await dispatch(app.url, USER_A_TG, "RIM.PRESS_RETRY_AI", {
       failedRequestId: requestId,
     });
-    expect(recovered.rimChat?.aiOperation.status).toBe("IDLE");
-    expect(recovered.rimChat?.messages.filter((message) => message.kind === "USER")).toHaveLength(
-      1,
-    );
-    expect(recovered.rimChat?.messages.at(-1)).toEqual({ kind: "RIM", text: "повтор" });
+    expect(recovered.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(recovered.rimChat?.messages.filter((message) => message.kind === "USER")).toEqual([
+      { kind: "USER", text: "спроси" },
+    ]);
+    expect(recovered.rimChat?.messages.at(-1)).toEqual({ kind: "USER", text: "спроси" });
     expect(
-      recovered.rimChat?.aiOperation.status === "IDLE" ||
-        recovered.rimChat?.aiOperation.status === "FAILED"
-        ? requestId
+      recovered.rimChat?.aiOperation.status === "PENDING"
+        ? recovered.rimChat.aiOperation.requestId
         : null,
     ).toBe(requestId);
   });

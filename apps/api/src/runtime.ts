@@ -7,8 +7,10 @@ import {
   type IdAllocator,
   type ProductEventInput,
   type ProductExecutorDependencies,
+  recoverPendingRimAi,
   type RimAiPort,
   type RimContextFailures,
+  type RimProviderRetrievalPort,
 } from "@98plus/application";
 import {
   authenticate,
@@ -68,6 +70,8 @@ export type CreateBanContactRuntime = Readonly<{
   /** Mock/live bootstrap send intents for Stage 13A tests and diagnostics. */
   telegramPersistentReentryBootstrapIntents: TelegramPersistentReentryBootstrapIntent[];
   rimAi: RimAiPort;
+  /** Known-response retrieval. Null until a provider adapter can retrieve by responseId. */
+  rimProviderRetrieval: RimProviderRetrievalPort | null;
   rimContextFailures: RimContextFailures;
 }>;
 
@@ -90,6 +94,7 @@ export type CreateBanContactRuntimeOptions = Readonly<{
   telegramPersistentReentryBootstrapSend?: TelegramPersistentReentryBootstrapSend;
   telegramPersistentReentryBootstrapAfterClaim?: () => Promise<void>;
   rimAi?: RimAiPort;
+  rimProviderRetrieval?: RimProviderRetrievalPort | null;
   rimContextFailures?: RimContextFailures;
 }>;
 
@@ -134,6 +139,7 @@ export function createCreateBanContactRuntime(
       options.telegramPersistentReentryBootstrapAfterClaim ?? null,
     telegramPersistentReentryBootstrapIntents: [],
     rimAi: options.rimAi ?? new FakeRimAiAdapter(),
+    rimProviderRetrieval: options.rimProviderRetrieval ?? null,
     rimContextFailures: options.rimContextFailures ?? { remainingFailures: 0 },
   };
 }
@@ -226,7 +232,16 @@ export async function openLobbyIfNeeded(
 }> {
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
   if (loaded.snapshot.controlState !== null) {
-    return { ...(await loadDiagnostics(runtime, context)), execution: null };
+    const recovered = await recoverPendingRimAi({
+      context,
+      deps: executorDeps(runtime),
+      rimAi: runtime.rimAi,
+      retrieval: runtime.rimProviderRetrieval,
+    });
+    return {
+      ...(await loadDiagnostics(runtime, context, recovered)),
+      execution: recovered,
+    };
   }
   if (loaded.snapshot.runtime.bootstrap.status === "FIRST_LAUNCH_EXTERNAL_ENTRY") {
     return { ...(await loadDiagnostics(runtime, context)), execution: null };

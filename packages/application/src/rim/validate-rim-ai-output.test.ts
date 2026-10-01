@@ -12,6 +12,7 @@ import {
 import { continueRimEffects, type RimContextFailures } from "./continue-rim.ts";
 import { FakeRimAiAdapter } from "./fake-rim-ai-adapter.ts";
 import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
+import { applicableRimProviderRuntime, parseRimProviderRuntime } from "./rim-provider-runtime.ts";
 import { RIM_AI_OUTPUT_INVALID, type RimAiOutputRejection } from "./validate-rim-ai-output.ts";
 
 const VALID_PROPOSALS = [
@@ -370,20 +371,17 @@ describe("RIM AI output validation gate", () => {
     },
   );
 
-  it("retries the original USER turn after validation failure", async () => {
+  it("does not resubmit the USER turn when E-54 follows a validation failure", async () => {
     const app = await readyChat();
     const seen: RimAiRequest[] = [];
-    const outputs = [
-      { kind: "BAN_PROPOSALS", message: "сломан", proposals: [VALID_PROPOSALS[0]] },
-      { kind: "MESSAGE", text: "повтор" },
-    ];
-    let index = 0;
     const tools = rimTools(app.store, {
       async respond(request) {
         seen.push(request);
-        const output = outputs[index];
-        index += 1;
-        return output as Awaited<ReturnType<RimAiPort["respond"]>>;
+        return {
+          kind: "BAN_PROPOSALS",
+          message: "сломан",
+          proposals: [VALID_PROPOSALS[0]],
+        } as unknown as Awaited<ReturnType<RimAiPort["respond"]>>;
       },
     });
     await app.sender(eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "почему так" }));
@@ -395,29 +393,46 @@ describe("RIM AI output validation gate", () => {
       return;
     }
     const failedRequestId = failedChat.aiOperation.requestId;
+    const before = await app.store.loadProductSnapshot(SENDER_ID);
+    const beforeRuntime = applicableRimProviderRuntime(
+      parseRimProviderRuntime(before.rimProviderRuntime),
+      failedChat.id,
+    );
+    expect(beforeRuntime?.attempt?.submissionState).toBe("acceptance-unknown");
+    expect(beforeRuntime?.attempt?.requestId).toBe(failedRequestId);
+    const attemptId = beforeRuntime?.attempt?.attemptId;
     const retried = await app.sender(
       eventOf("RIM.PRESS_RETRY_AI", { failedRequestId: failedRequestId as AiRequestId }),
     );
     expect(retried.status).toBe("APPLIED");
+    expect(retried.traces.some((trace) => trace.eventId === "E-54")).toBe(true);
     expect(retried.pendingExternalEffects[0]?.effect.type).toBe("REQUEST_RIM_AI");
+    expect(retried.snapshot.extended.rimChat?.aiOperation).toMatchObject({
+      status: "PENDING",
+      requestId: failedRequestId,
+    });
     expect(userMessages(chatOf(retried).messages)).toEqual([{ kind: "USER", text: "почему так" }]);
-    const recovered = await continueRimEffects(retried, tools);
-    expect(recovered.event.name).toBe("RIM.AI_RESULT_RECEIVED");
-    expect(recovered.traces.some((trace) => trace.eventId === "E-58")).toBe(true);
-    const chat = chatOf(recovered);
-    expect(chat.aiOperation.status).toBe("IDLE");
-    expect(userMessages(chat.messages)).toEqual([{ kind: "USER", text: "почему так" }]);
-    expect(chat.messages.at(-1)).toEqual({ kind: "RIM", text: "повтор" });
-    expect(proposalIds(chat.messages)).toEqual([]);
-    expect(seen).toHaveLength(2);
+    const followed = await continueRimEffects(retried, tools);
+    expect(seen).toHaveLength(1);
     expect(seen[0]?.requestId).toBe(failedRequestId);
-    expect(seen[1]?.requestId).toBe(failedRequestId);
     expect(seen[0]?.userMessage).toBe("почему так");
-    expect(seen[1]?.userMessage).toBe("почему так");
-    expect(seen[1]?.messages.filter((message) => message.kind === "USER")).toEqual([
-      { kind: "USER", text: "почему так" },
-    ]);
-    expect(JSON.stringify(seen[1]?.messages)).not.toContain(RIM_AI_OUTPUT_INVALID);
+    expect(followed.event.name).toBe("RIM.PRESS_RETRY_AI");
+    expect(followed.traces.some((trace) => trace.eventId === "E-58")).toBe(false);
+    const chat = chatOf(followed);
+    expect(chat.aiOperation).toMatchObject({ status: "PENDING", requestId: failedRequestId });
+    expect(userMessages(chat.messages)).toEqual([{ kind: "USER", text: "почему так" }]);
+    expect(chat.messages.at(-1)).toEqual({ kind: "USER", text: "почему так" });
+    const after = await app.store.loadProductSnapshot(SENDER_ID);
+    const afterRuntime = applicableRimProviderRuntime(
+      parseRimProviderRuntime(after.rimProviderRuntime),
+      chat.id,
+    );
+    expect(afterRuntime?.attempt).toMatchObject({
+      submissionState: "acceptance-unknown",
+      attemptId,
+      requestId: failedRequestId,
+    });
+    expect(afterRuntime?.attempt).not.toHaveProperty("responseId");
   });
 
   it("keeps FakeRimAiAdapter on the ordinary RIM Chat path", async () => {

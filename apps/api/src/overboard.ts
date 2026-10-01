@@ -1,5 +1,7 @@
 import {
   continueRimEffects,
+  inFlightRimAiRequestIds,
+  recoverPendingRimAi,
   type ApplicationExecutionResult,
   type ProductEventInput,
 } from "@98plus/application";
@@ -176,16 +178,26 @@ async function finishWithElapsedTimers(
     ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
     deps: executorDeps(runtime),
     rimAi: runtime.rimAi,
+    retrieval: runtime.rimProviderRetrieval,
     contextFailures: runtime.rimContextFailures,
     loadSources: (currentUserId, contactId) =>
       runtime.productStore.listRelationshipContextSources(currentUserId, contactId),
   });
+  const recovered = await recoverPendingRimAi({
+    context,
+    ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
+    deps: executorDeps(runtime),
+    rimAi: runtime.rimAi,
+    retrieval: runtime.rimProviderRetrieval,
+    inFlightRequestIds: inFlightRimAiRequestIds(settled),
+  });
+  const completed = recovered ?? settled;
   await applyElapsedDomainTimers(runtime, context);
   const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
   return {
     ...execution,
     last: {
-      ...settled,
+      ...completed,
       snapshot: loaded.snapshot,
       controlState: loaded.snapshot.controlState,
     },

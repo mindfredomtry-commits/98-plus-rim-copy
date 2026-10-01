@@ -4,10 +4,10 @@ import type { Failure } from "@98plus/product-model";
 import type { ApplicationExecutionResult, ProductExecutorDependencies } from "../execute.ts";
 import { executeProductEvent } from "../execute.ts";
 import type { ProductEventInput } from "../event.ts";
-import { FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
 import { buildRelationshipContextData } from "./relationship-context.ts";
+import { continuePendingRimAi } from "./recover-pending-rim-ai.ts";
 import type { RimAiPort } from "./rim-ai-port.ts";
-import { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./validate-rim-ai-output.ts";
+import type { RimProviderRetrievalPort } from "./rim-provider-retrieval.ts";
 
 export type RimContextFailures = { remainingFailures: number };
 
@@ -36,6 +36,7 @@ export async function continueRimEffects(
     clientClaimedUserId?: string;
     deps: ProductExecutorDependencies;
     rimAi: RimAiPort;
+    retrieval?: RimProviderRetrievalPort | null;
     contextFailures: RimContextFailures;
     loadSources: (
       currentUserId: ApplicationExecutionResult["currentUserId"],
@@ -52,6 +53,19 @@ export async function continueRimEffects(
     const chat = current.snapshot.extended.rimChat;
     if (!chat) {
       return current;
+    }
+    if (effect.type === "REQUEST_RIM_AI") {
+      const settled = await continuePendingRimAi({
+        context: tools.context,
+        ...(tools.clientClaimedUserId === undefined
+          ? {}
+          : { clientClaimedUserId: tools.clientClaimedUserId }),
+        deps: tools.deps,
+        rimAi: tools.rimAi,
+        retrieval: tools.retrieval ?? null,
+        origin: effect.conversationalOrigin,
+      });
+      return settled ?? current;
     }
     const event = await followUpEvent(current, effect, chat.id, tools);
     const next = await executeProductEvent(
@@ -75,7 +89,6 @@ async function followUpEvent(
   rimChatId: NonNullable<ApplicationExecutionResult["snapshot"]["extended"]["rimChat"]>["id"],
   tools: Parameters<typeof continueRimEffects>[1],
 ): Promise<ProductEventInput> {
-  const chat = execution.snapshot.extended.rimChat;
   if (effect.type === "REQUEST_RELATIONSHIP_CONTEXT") {
     if (tools.contextFailures.remainingFailures > 0) {
       tools.contextFailures.remainingFailures -= 1;
@@ -120,66 +133,5 @@ async function followUpEvent(
       };
     }
   }
-  if (effect.type !== "REQUEST_RIM_AI") {
-    throw new Error(`Unsupported RIM external effect: ${effect.type}`);
-  }
-  const snapshot = effect.snapshot;
-  const data = chat?.relationshipContext?.status === "ready" ? chat.relationshipContext.data : null;
-  try {
-    const result = await tools.rimAi.respond({
-      requestId: snapshot.requestId,
-      rimChatId: snapshot.rimChatId,
-      userMessage: snapshot.userMessage,
-      contextRequestId: snapshot.contextRequestId,
-      relationshipContext: data ?? {
-        aggregates: {
-          userToContact: {
-            bansSentCount: 0,
-            statusCounts: { bantastic: 0, banflict: 0, fairEnough: 0, overboard: 0 },
-          },
-          contactToUser: {
-            bansSentCount: 0,
-            statusCounts: { bantastic: 0, banflict: 0, fairEnough: 0, overboard: 0 },
-          },
-        },
-        recentBans: [],
-      },
-      messages: chat?.messages ?? [],
-      conversationalOrigin: effect.conversationalOrigin,
-    });
-    const validated = validateRimAiOutput(result);
-    if (!validated.ok) {
-      return {
-        name: "RIM.AI_REQUEST_FAILED",
-        payload: {
-          rimChatId: snapshot.rimChatId,
-          requestId: snapshot.requestId,
-          failure: {
-            code: RIM_AI_OUTPUT_INVALID,
-            message: validated.reason,
-          } as unknown as Failure,
-        },
-      };
-    }
-    return {
-      name: "RIM.AI_RESULT_RECEIVED",
-      payload: {
-        rimChatId: snapshot.rimChatId,
-        requestId: snapshot.requestId,
-        result: validated.result,
-      },
-    };
-  } catch (error) {
-    const failure =
-      error instanceof FakeRimAiFailure
-        ? error.failure
-        : ({
-            code: "RIM_AI_FAILED",
-            message: error instanceof Error ? error.message : "rim ai failed",
-          } as unknown as Failure);
-    return {
-      name: "RIM.AI_REQUEST_FAILED",
-      payload: { rimChatId: snapshot.rimChatId, requestId: snapshot.requestId, failure },
-    };
-  }
+  throw new Error(`Unsupported RIM external effect: ${effect.type}`);
 }

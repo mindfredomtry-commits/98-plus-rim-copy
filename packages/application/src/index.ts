@@ -21,6 +21,11 @@ export { FakeRimAiAdapter, FakeRimAiFailure } from "./rim/fake-rim-ai-adapter.ts
 export type { FakeRimAiStep } from "./rim/fake-rim-ai-adapter.ts";
 export { continueRimEffects } from "./rim/continue-rim.ts";
 export type { RimContextFailures } from "./rim/continue-rim.ts";
+export { inFlightRimAiRequestIds, recoverPendingRimAi } from "./rim/recover-pending-rim-ai.ts";
+export type {
+  RimProviderRetrieval,
+  RimProviderRetrievalPort,
+} from "./rim/rim-provider-retrieval.ts";
 export type { RimAiPort, RimAiRequest } from "./rim/rim-ai-port.ts";
 export { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./rim/validate-rim-ai-output.ts";
 export type { RimAiOutputRejection, RimAiOutputValidation } from "./rim/validate-rim-ai-output.ts";
