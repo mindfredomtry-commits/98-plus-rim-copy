@@ -18,7 +18,9 @@ export type {
 export { APPLICATION_STAGE, STAGE_5_EXCLUDES } from "./stage.ts";
 export { buildRelationshipContextData } from "./rim/relationship-context.ts";
 export { FakeRimAiAdapter, FakeRimAiFailure } from "./rim/fake-rim-ai-adapter.ts";
-export type { FakeRimAiStep } from "./rim/fake-rim-ai-adapter.ts";
+export type { FakeConversationInitStep, FakeRimAiStep } from "./rim/fake-rim-ai-adapter.ts";
+export { reconcileRimInitialization } from "./rim/initialize-rim-conversation.ts";
+export type { RimInitializationObservation } from "./rim/initialize-rim-conversation.ts";
 export { continueRimEffects } from "./rim/continue-rim.ts";
 export type { RimContextFailures } from "./rim/continue-rim.ts";
 export { inFlightRimAiRequestIds, recoverPendingRimAi } from "./rim/recover-pending-rim-ai.ts";
@@ -27,6 +29,21 @@ export type {
   RimProviderRetrievalPort,
 } from "./rim/rim-provider-retrieval.ts";
 export type { RimAiPort, RimAiRequest } from "./rim/rim-ai-port.ts";
+export {
+  assertProviderReadyInitialization,
+  PRODUCT_SEMANTICS_UNAVAILABLE,
+  RIM_PROMPT_UNAVAILABLE,
+} from "./rim/rim-conversation-port.ts";
+export type {
+  ProductSemanticsInput,
+  ProviderReadyRimConversationInitializationRequest,
+  ProviderReadySemanticArtifact,
+  RimConversationInitializationPort,
+  RimConversationInitializationRequest,
+  RimConversationInitializationResult,
+  RimPromptInput,
+  UnavailableSemanticArtifact,
+} from "./rim/rim-conversation-port.ts";
 export { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./rim/validate-rim-ai-output.ts";
 export type { RimAiOutputRejection, RimAiOutputValidation } from "./rim/validate-rim-ai-output.ts";
 export {

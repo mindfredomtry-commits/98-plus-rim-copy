@@ -134,6 +134,11 @@ export type EventPayloadMap = {
   };
   "RIM.AI_RESULT_RECEIVED": { rimChatId: RimChatId; requestId: AiRequestId; result: RimAiResult };
   "RIM.AI_REQUEST_FAILED": { rimChatId: RimChatId; requestId: AiRequestId; failure: Failure };
+  "RIM.INITIALIZATION_UNRECOVERABLE": {
+    rimChatId: RimChatId;
+    selectedContactId: UserId;
+    contextRequestId: ContextRequestId;
+  };
   "RIM.PRESS_NOTIFICATIONS": Record<string, never>;
   "TELEGRAM_PERSISTENT_REENTRY.GRANTED": { requestId: string };
   "TELEGRAM_PERSISTENT_REENTRY.DECLINED": { requestId: string };
@@ -206,7 +211,8 @@ export type CanonicalEventId =
   | "E-60"
   | "E-61"
   | "E-62"
-  | "E-63";
+  | "E-63"
+  | "E-64";
 
 export const ABSENT_EVENT_IDS = ["E-36", "E-37", "E-38", "E-39", "E-40"] as const;
 export type AbsentEventId = (typeof ABSENT_EVENT_IDS)[number];
@@ -557,9 +563,15 @@ export const CANONICAL_EVENT_DEFINITIONS = [
     source: "UI",
     references: refs("E-63 NOTIFICATIONS.PRESS_ASK_RIM"),
   },
+  {
+    id: "E-64",
+    name: "RIM.INITIALIZATION_UNRECOVERABLE",
+    source: "SERVER",
+    references: refs("E-64 RIM.INITIALIZATION_UNRECOVERABLE"),
+  },
 ] as const satisfies readonly CanonicalEventDefinition[];
 
-export const CANONICAL_EVENT_COUNT = 58;
+export const CANONICAL_EVENT_COUNT = 59;
 
 export function isCanonicalEventId(value: string): value is CanonicalEventId {
   return CANONICAL_EVENT_DEFINITIONS.some((definition) => definition.id === value);

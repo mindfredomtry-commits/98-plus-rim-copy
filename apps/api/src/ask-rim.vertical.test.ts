@@ -206,10 +206,10 @@ async function reachSenderOverboard(app: Started): Promise<{
 }
 
 describe("Feature 9 Ask RIM vertical", () => {
-  it("keeps 30 Product Control States, 58 events, and 351 Matrix rules", () => {
+  it("keeps 30 Product Control States, 59 events, and 359 Matrix rules", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(351);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
   });
 
   it("opens Ask RIM from the receiver Status, sends with origin, and returns to that item", async () => {

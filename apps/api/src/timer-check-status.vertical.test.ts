@@ -297,10 +297,10 @@ async function expireNow(now: { value: number }, app: Started): Promise<TestUiDi
 }
 
 describe("Stage 9 Timer expiration → Check → Status vertical", () => {
-  it("keeps frozen 30 / 58 / 351 and TIMER_CHECK_STATUS_STAGE = 9", () => {
+  it("keeps frozen 30 / 59 / 359 and TIMER_CHECK_STATUS_STAGE = 9", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(351);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PERSISTENCE_STAGE).toBe(4);

@@ -147,7 +147,8 @@ function eventContactId(input: ResolveInput) {
 }
 
 function eventRequestId(input: ResolveInput) {
-  return (input.event.payload as { requestId?: string }).requestId ?? null;
+  const body = input.event.payload as { requestId?: string; contextRequestId?: string };
+  return body.requestId ?? body.contextRequestId ?? null;
 }
 
 function eventRimChatId(input: ResolveInput) {
@@ -703,6 +704,21 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
       return validAskRimOrigin(input.snapshot, input.context.currentUserId) !== null;
     case "E-63:active-status-unprocessed":
       return askRimEntryApplicable(input);
+    case "E-64:ordinary-current":
+      return currentContextRequest(input) && !chat?.askRimOrigin;
+    case "E-64:ask-rim-current":
+      return (
+        currentContextRequest(input) &&
+        validAskRimOrigin(input.snapshot, input.context.currentUserId) !== null
+      );
+    case "E-64:ask-rim-origin-invalid":
+      return (
+        currentContextRequest(input) &&
+        !!chat?.askRimOrigin &&
+        validAskRimOrigin(input.snapshot, input.context.currentUserId) === null
+      );
+    case "E-64:stale":
+      return !currentContextRequest(input);
     case "E-47:default":
     case "E-01:default":
     case "E-51:default":

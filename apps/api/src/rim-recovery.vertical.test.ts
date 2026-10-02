@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { RimAiRequest, RimProviderAttemptId, RimProviderRuntime } from "@98plus/application";
+import type {
+  ProviderConversationId,
+  RimAiRequest,
+  RimProviderAttemptId,
+  RimProviderRuntime,
+} from "@98plus/application";
 import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 import { executeIncomingOverboardVertical } from "./overboard.ts";
 import {
@@ -75,8 +80,9 @@ function notSubmittedRuntime(
     selectedContactId: chat.selectedContactId,
     contextRequestId: chat.aiOperation.snapshot.contextRequestId,
     initialization: {
-      submissionState: "not-submitted",
+      submissionState: "stored",
       attemptId: "init-hook" as RimProviderAttemptId,
+      conversationId: "conv-hook" as ProviderConversationId,
       clientRequestId: null,
     },
     attempt: {

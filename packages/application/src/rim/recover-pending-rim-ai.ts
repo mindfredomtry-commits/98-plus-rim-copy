@@ -14,11 +14,17 @@ import type { ApplicationExecutionResult, ProductExecutorDependencies } from "..
 import { executeProductEvent } from "../execute.ts";
 import type { ProductEventInput } from "../event.ts";
 import { FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
+import {
+  reconcileRimInitialization,
+  type RimInitializationObservation,
+} from "./initialize-rim-conversation.ts";
 import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
+import type { RimConversationInitializationPort } from "./rim-conversation-port.ts";
 import type { RimProviderRetrievalPort } from "./rim-provider-retrieval.ts";
 import {
   applicableRimProviderRuntime,
   parseRimProviderRuntime,
+  type ProviderConversationId,
   type ProviderResponseId,
   type RetrievedProviderStatus,
   type RimProviderAttempt,
@@ -56,6 +62,8 @@ type ReconcileTools = Readonly<{
   clientClaimedUserId?: string;
   deps: ProductExecutorDependencies;
   rimAi: RimAiPort;
+  conversation?: RimConversationInitializationPort;
+  initializationLog?: RimInitializationObservation[];
   retrieval: RimProviderRetrievalPort | null;
   mode: "live" | "recover";
   origin: OriginSource;
@@ -67,13 +75,15 @@ export type PendingRimAiTools = Readonly<{
   clientClaimedUserId?: string;
   deps: ProductExecutorDependencies;
   rimAi: RimAiPort;
+  conversation?: RimConversationInitializationPort;
+  initializationLog?: RimInitializationObservation[];
   retrieval: RimProviderRetrievalPort | null;
 }>;
 
 /**
  * Completes one live REQUEST_RIM_AI effect.
- * A missing attempt is stored as not-submitted, then claimed, before respond.
- * Recovery of an absent runtime does not use this entry.
+ * Conversation initialization is reconciled first. respond runs only after it is stored.
+ * A missing USER attempt is then stored as not-submitted and claimed before respond.
  */
 export async function continuePendingRimAi(
   tools: PendingRimAiTools &
@@ -81,6 +91,10 @@ export async function continuePendingRimAi(
       origin: AskRimOrigin | null;
     }>,
 ): Promise<ApplicationExecutionResult | null> {
+  const initialized = await ensureInitialization(tools);
+  if (initialized) {
+    return initialized;
+  }
   return reconcile(
     {
       ...tools,
@@ -93,8 +107,9 @@ export async function continuePendingRimAi(
 }
 
 /**
- * Recovers a durable PENDING logical request whose transient executor is gone.
+ * Recovers Conversation initialization, then a durable PENDING logical request.
  * Does not create a Product request, append a USER message, or dispatch E-52 or E-54.
+ * Recovery does not create a missing USER attempt.
  */
 export async function recoverPendingRimAi(
   tools: PendingRimAiTools &
@@ -102,6 +117,10 @@ export async function recoverPendingRimAi(
       inFlightRequestIds?: readonly string[];
     }>,
 ): Promise<ApplicationExecutionResult | null> {
+  const initialized = await ensureInitialization(tools);
+  if (initialized) {
+    return initialized;
+  }
   return reconcile(
     {
       context: tools.context,
@@ -110,6 +129,10 @@ export async function recoverPendingRimAi(
         : { clientClaimedUserId: tools.clientClaimedUserId }),
       deps: tools.deps,
       rimAi: tools.rimAi,
+      ...(tools.conversation === undefined ? {} : { conversation: tools.conversation }),
+      ...(tools.initializationLog === undefined
+        ? {}
+        : { initializationLog: tools.initializationLog }),
       retrieval: tools.retrieval,
       mode: "recover",
       origin: { kind: "current" },
@@ -117,6 +140,23 @@ export async function recoverPendingRimAi(
     },
     0,
   );
+}
+
+async function ensureInitialization(
+  tools: PendingRimAiTools,
+): Promise<ApplicationExecutionResult | null> {
+  return reconcileRimInitialization({
+    context: tools.context,
+    ...(tools.clientClaimedUserId === undefined
+      ? {}
+      : { clientClaimedUserId: tools.clientClaimedUserId }),
+    deps: tools.deps,
+    rimAi: tools.rimAi,
+    ...(tools.conversation === undefined ? {} : { conversation: tools.conversation }),
+    ...(tools.initializationLog === undefined
+      ? {}
+      : { initializationLog: tools.initializationLog }),
+  });
 }
 
 async function reconcile(
@@ -145,12 +185,18 @@ async function reconcile(
     if (tools.mode !== "live") {
       return null;
     }
-    const created = freshRuntime(pending, tools.deps.allocateId, applicable);
+    const created = attemptOnStoredInitialization(pending, tools.deps.allocateId, applicable);
+    if (!created) {
+      return null;
+    }
     const saved = await trySave(tools, loaded.revision, created);
     if (!saved.ok) {
       return reentry >= MAX_CLAIM_REENTRY ? null : reconcile(tools, reentry + 1);
     }
     return claimThenSubmit(tools, saved.loaded, created, reentry);
+  }
+  if (applicable.initialization.submissionState !== "stored") {
+    return null;
   }
   if (applicable.attempt.submissionState === "not-submitted") {
     return claimThenSubmit(tools, loaded, applicable, reentry);
@@ -186,14 +232,18 @@ async function claimThenSubmit(
   if (!pending || pending.snapshot.requestId !== claimed.attempt?.requestId) {
     return null;
   }
-  return submitClaimed(tools, pending, saved.loaded.snapshot);
+  return submitClaimed(tools, pending, saved.loaded.snapshot, claimed);
 }
 
 async function submitClaimed(
   tools: ReconcileTools,
   pending: PendingChat,
   snapshot: ProductSnapshot,
-): Promise<ApplicationExecutionResult> {
+  runtime: RimProviderRuntime,
+): Promise<ApplicationExecutionResult | null> {
+  if (runtime.initialization.submissionState !== "stored") {
+    return null;
+  }
   const data =
     pending.chat.relationshipContext?.status === "ready"
       ? pending.chat.relationshipContext.data
@@ -205,7 +255,12 @@ async function submitClaimed(
   let event: ProductEventInput;
   try {
     const result = await tools.rimAi.respond(
-      providerRequest(pending, data ?? EMPTY_CONTEXT, origin),
+      providerRequest(
+        pending,
+        data ?? EMPTY_CONTEXT,
+        origin,
+        runtime.initialization.conversationId,
+      ),
     );
     event = completionEvent(pending.snapshot, result);
   } catch (error) {
@@ -338,41 +393,27 @@ function pendingChat(snapshot: ProductSnapshot): PendingChat | null {
   return { chat, snapshot: chat.aiOperation.snapshot };
 }
 
-function freshRuntime(
+function attemptOnStoredInitialization(
   pending: PendingChat,
   allocateId: ProductExecutorDependencies["allocateId"],
   existing: RimProviderRuntime | null,
-): RimProviderRuntime {
-  const attempt: RimProviderAttempt = {
+): RimProviderRuntime | null {
+  if (!existing || existing.initialization.submissionState !== "stored") {
+    return null;
+  }
+  if (
+    existing.rimChatId !== pending.chat.id ||
+    existing.selectedContactId !== pending.chat.selectedContactId ||
+    existing.contextRequestId !== pending.snapshot.contextRequestId
+  ) {
+    return null;
+  }
+  return withAttempt(existing, {
     requestId: pending.snapshot.requestId,
     attemptId: allocateId("rim-provider-attempt") as RimProviderAttemptId,
     submissionState: "not-submitted",
     clientRequestId: null,
-  };
-  if (existing && existing.rimChatId === pending.chat.id) {
-    return {
-      rimChatId: existing.rimChatId,
-      selectedContactId: existing.selectedContactId,
-      contextRequestId: pending.snapshot.contextRequestId,
-      initialization: existing.initialization,
-      attempt,
-    };
-  }
-  const contactId = pending.chat.selectedContactId;
-  if (!contactId) {
-    throw new Error("PENDING RIM recovery requires a selected contact");
-  }
-  return {
-    rimChatId: pending.chat.id,
-    selectedContactId: contactId,
-    contextRequestId: pending.snapshot.contextRequestId,
-    initialization: {
-      submissionState: "not-submitted",
-      attemptId: allocateId("rim-provider-attempt") as RimProviderAttemptId,
-      clientRequestId: null,
-    },
-    attempt,
-  };
+  });
 }
 
 function withAttempt(runtime: RimProviderRuntime, attempt: RimProviderAttempt): RimProviderRuntime {
@@ -389,10 +430,12 @@ function providerRequest(
   pending: PendingChat,
   relationshipContext: RelationshipContextData,
   conversationalOrigin: AskRimOrigin | null,
+  conversationId: ProviderConversationId,
 ): RimAiRequest {
   return {
     requestId: pending.snapshot.requestId,
     rimChatId: pending.snapshot.rimChatId,
+    conversationId,
     userMessage: pending.snapshot.userMessage,
     contextRequestId: pending.snapshot.contextRequestId,
     relationshipContext,

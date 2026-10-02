@@ -235,6 +235,12 @@ export function defaultEvent(name: CanonicalEventName): CanonicalEvent {
         requestId: AI_REQUEST_ID,
         failure: {} as Failure,
       });
+    case "RIM.INITIALIZATION_UNRECOVERABLE":
+      return eventOf(name, {
+        rimChatId: CHAT_ID,
+        selectedContactId: CONTACT_A,
+        contextRequestId: REQUEST_ID,
+      });
     default: {
       const _never: never = name;
       return _never;
@@ -833,6 +839,7 @@ function prepareBranchSnapshot(
     case "E-58:stale-request":
     case "E-58:stale-replaced-contact":
     case "E-59:stale-request":
+    case "E-64:stale":
       next = withChat(
         next,
         makeChat({
@@ -871,6 +878,7 @@ function prepareBranchSnapshot(
     case "E-48:current-chat-exists":
       next = withChat(next, makeChat({ selectedContactId: CONTACT_A }));
       break;
+    case "E-64:ask-rim-current":
     case "E-50:valid-ask-rim-origin": {
       const item = statusItem({
         role: "RECEIVER",
@@ -908,6 +916,21 @@ function prepareBranchSnapshot(
       };
       break;
     }
+    case "E-64:ask-rim-origin-invalid":
+      next = withChat(
+        next,
+        makeChat({
+          selectedContactId: CONTACT_A,
+          relationshipContext: readyContext(CONTACT_A),
+          askRimOrigin: {
+            sourceStatusItemId: STATUS_ITEM_ID,
+            banId: BAN_ID,
+            status: "BANTASTIC",
+            sourceRole: "RECEIVER",
+          },
+        }),
+      );
+      break;
     case "E-63:active-status-unprocessed": {
       const role = row.state.endsWith("SENDER") ? "SENDER" : "RECEIVER";
       const status = row.state.includes("OVERBOARD")

@@ -4,9 +4,14 @@ import type { Failure } from "@98plus/product-model";
 import type { ApplicationExecutionResult, ProductExecutorDependencies } from "../execute.ts";
 import { executeProductEvent } from "../execute.ts";
 import type { ProductEventInput } from "../event.ts";
+import {
+  reconcileRimInitialization,
+  type RimInitializationObservation,
+} from "./initialize-rim-conversation.ts";
 import { buildRelationshipContextData } from "./relationship-context.ts";
 import { continuePendingRimAi } from "./recover-pending-rim-ai.ts";
 import type { RimAiPort } from "./rim-ai-port.ts";
+import type { RimConversationInitializationPort } from "./rim-conversation-port.ts";
 import type { RimProviderRetrievalPort } from "./rim-provider-retrieval.ts";
 
 export type RimContextFailures = { remainingFailures: number };
@@ -36,6 +41,8 @@ export async function continueRimEffects(
     clientClaimedUserId?: string;
     deps: ProductExecutorDependencies;
     rimAi: RimAiPort;
+    conversation?: RimConversationInitializationPort;
+    initializationLog?: RimInitializationObservation[];
     retrieval?: RimProviderRetrievalPort | null;
     contextFailures: RimContextFailures;
     loadSources: (
@@ -62,6 +69,10 @@ export async function continueRimEffects(
           : { clientClaimedUserId: tools.clientClaimedUserId }),
         deps: tools.deps,
         rimAi: tools.rimAi,
+        ...(tools.conversation === undefined ? {} : { conversation: tools.conversation }),
+        ...(tools.initializationLog === undefined
+          ? {}
+          : { initializationLog: tools.initializationLog }),
         retrieval: tools.retrieval ?? null,
         origin: effect.conversationalOrigin,
       });
@@ -79,6 +90,23 @@ export async function continueRimEffects(
       tools.deps,
     );
     current = next;
+    if (event.name === "RIM.CONTEXT_READY" && next.status === "APPLIED") {
+      const initialized = await reconcileRimInitialization({
+        context: tools.context,
+        ...(tools.clientClaimedUserId === undefined
+          ? {}
+          : { clientClaimedUserId: tools.clientClaimedUserId }),
+        deps: tools.deps,
+        rimAi: tools.rimAi,
+        ...(tools.conversation === undefined ? {} : { conversation: tools.conversation }),
+        ...(tools.initializationLog === undefined
+          ? {}
+          : { initializationLog: tools.initializationLog }),
+      });
+      if (initialized) {
+        current = initialized;
+      }
+    }
   }
   return current;
 }

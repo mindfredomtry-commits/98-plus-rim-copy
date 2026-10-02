@@ -148,6 +148,14 @@ export function nextRimChat(
   if (row.eventId === "E-50" && row.state === "RIM.CHAT") {
     return null;
   }
+  if (
+    row.eventId === "E-64" &&
+    (row.branch === "ordinary-current" ||
+      row.branch === "ask-rim-current" ||
+      row.branch === "ask-rim-origin-invalid")
+  ) {
+    return null;
+  }
   if (row.eventId === "E-45" && row.branch === "guard-a") {
     return null;
   }

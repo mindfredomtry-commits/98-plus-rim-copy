@@ -42,6 +42,7 @@ import {
   parseRimProviderRuntime,
   type ProviderResponseId,
   type RetrievedProviderStatus,
+  type ProviderConversationId,
   type RimProviderAttempt,
   type RimProviderAttemptId,
   type RimProviderInitialization,
@@ -76,8 +77,9 @@ function runtimeFor(
   extras: Partial<RimProviderAttempt> = {},
 ): RimProviderRuntime {
   const initialization: RimProviderInitialization = {
-    submissionState: "not-submitted",
+    submissionState: "stored",
     attemptId: attempt("init-1"),
+    conversationId: "conv-stored-1" as ProviderConversationId,
     clientRequestId: null,
   };
   const requestId =

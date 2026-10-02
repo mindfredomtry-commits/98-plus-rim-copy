@@ -788,7 +788,10 @@ export function instantiateEffects(
         if (suppressImmediateUi) {
           break;
         }
-        if (row.eventId === "E-50" && row.branch === "valid-ask-rim-origin") {
+        if (
+          (row.eventId === "E-50" && row.branch === "valid-ask-rim-origin") ||
+          (row.eventId === "E-64" && row.branch === "ask-rim-current")
+        ) {
           effects.push({
             type: "SET_ACTIVE_NOTIFICATION",
             itemId: snapshot.extended.rimChat?.askRimOrigin?.sourceStatusItemId ?? null,

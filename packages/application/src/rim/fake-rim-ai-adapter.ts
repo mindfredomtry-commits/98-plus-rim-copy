@@ -4,6 +4,12 @@ import type {
   RimAiResult,
   ThreeSuggestions,
 } from "@98plus/product-model";
+import type {
+  RimConversationInitializationPort,
+  RimConversationInitializationRequest,
+  RimConversationInitializationResult,
+} from "./rim-conversation-port.ts";
+import type { ProviderConversationId } from "./rim-provider-runtime.ts";
 import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
 
 export class FakeRimAiFailure extends Error {
@@ -25,6 +31,22 @@ export type FakeRimAiStep =
     }
   | { readonly kind: "FAILURE"; readonly failure: Failure };
 
+/**
+ * One Conversation create. There is no hidden retry.
+ * SUCCESS and LOST are terminal for that call. HOLD waits, then succeeds or loses.
+ */
+export type FakeConversationInitStep =
+  | { readonly kind: "SUCCESS"; readonly conversationId?: string }
+  | { readonly kind: "LOST"; readonly message?: string }
+  | {
+      readonly kind: "HOLD";
+      readonly gate: Promise<void>;
+      readonly onEntered?: () => void;
+      readonly then?: "SUCCESS" | "LOST";
+      readonly conversationId?: string;
+      readonly message?: string;
+    };
+
 const DEFAULT_PROPOSALS: ThreeSuggestions = [
   { banText: "не обсуждать работу", executionProbability: 0.2 as ExecutionProbability },
   { banText: "не опаздывать", executionProbability: 0.5 as ExecutionProbability },
@@ -42,13 +64,46 @@ function stepToResult(step: FakeRimAiStep): RimAiResult {
 }
 
 /**
- * Deterministic provider stand-in. It sees only RimAiRequest and returns RimAiResult.
- * A scripted step is one technical call. It does not mint proposalId or touch Product state.
+ * Deterministic provider stand-in.
+ * `respond` is a USER turn. `initialize` is a separate Conversation create.
+ * A scripted step is one technical call. It does not retry, mint proposalId, or touch Product state.
  */
-export class FakeRimAiAdapter implements RimAiPort {
+export class FakeRimAiAdapter implements RimAiPort, RimConversationInitializationPort {
   private index = 0;
+  private conversationIndex = 0;
+  readonly initializationRequests: RimConversationInitializationRequest[] = [];
 
-  constructor(private readonly steps: readonly FakeRimAiStep[] = []) {}
+  constructor(
+    private readonly steps: readonly FakeRimAiStep[] = [],
+    private readonly conversationSteps: readonly FakeConversationInitStep[] = [],
+  ) {}
+
+  async initialize(
+    request: RimConversationInitializationRequest,
+  ): Promise<RimConversationInitializationResult> {
+    this.initializationRequests.push(request);
+    const step = this.conversationSteps[this.conversationIndex];
+    if (step) {
+      this.conversationIndex += 1;
+    }
+    if (!step || step.kind === "SUCCESS") {
+      return {
+        conversationId: conversationIdOf(
+          request,
+          step?.kind === "SUCCESS" ? step.conversationId : undefined,
+        ),
+      };
+    }
+    if (step.kind === "LOST") {
+      throw new Error(step.message ?? "conversation create acceptance unknown");
+    }
+    step.onEntered?.();
+    await step.gate;
+    if (step.then === "LOST") {
+      throw new Error(step.message ?? "conversation create acceptance unknown");
+    }
+    return { conversationId: conversationIdOf(request, step.conversationId) };
+  }
 
   async respond(request: RimAiRequest): Promise<RimAiResult> {
     const scripted = this.steps[this.index];
@@ -65,4 +120,11 @@ export class FakeRimAiAdapter implements RimAiPort {
     }
     return { kind: "MESSAGE", text: request.userMessage };
   }
+}
+
+function conversationIdOf(
+  request: RimConversationInitializationRequest,
+  explicit: string | undefined,
+): ProviderConversationId {
+  return (explicit ?? `fake-conversation-${request.attemptId}`) as ProviderConversationId;
 }
