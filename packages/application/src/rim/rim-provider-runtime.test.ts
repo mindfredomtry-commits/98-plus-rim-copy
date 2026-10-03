@@ -439,9 +439,15 @@ describe.each(["sql", "memory"] as const)("RimProviderRuntime storage (%s)", (ki
       providerStatus: "completed",
       clientRequestId: "client-turn-1",
     };
+    const observed: RimProviderAttempt = {
+      requestId: AI_REQUEST_ID,
+      attemptId: attemptId("attempt-1"),
+      submissionState: "returned-body-observed",
+      clientRequestId: "client-turn-1",
+    };
 
     let revision = seeded.revision;
-    for (const attempt of [notSubmitted, unknown, known, retrieved]) {
+    for (const attempt of [notSubmitted, unknown, observed, known, retrieved]) {
       const saved = await harness.store.saveRimProviderRuntime(
         USER_ID,
         revision,
@@ -572,6 +578,7 @@ describe("DC-02 continuity runtime", () => {
   it.each([
     "not-submitted",
     "acceptance-unknown",
+    "returned-body-observed",
     "response-id-known",
     "completed-retrieved",
   ] as const)("parses DC-01 USER attempt %s without continuity fields", (submissionState) => {
@@ -584,6 +591,35 @@ describe("DC-02 continuity runtime", () => {
     expect(parsed.runtime.continuityMode).toBe("provider-conversation");
     expect(parsed.runtime.retiredAttemptId).toBeNull();
     expect(parsed.runtime.attempt).toEqual(userAttempt);
+  });
+
+  it("rejects a returned-body-observed attempt that also carries a responseId", () => {
+    const chat = readyChat();
+    expect(
+      parseRimProviderRuntime({
+        ...runtimeFor(chat),
+        attempt: {
+          requestId: AI_REQUEST_ID,
+          attemptId: "attempt-1",
+          submissionState: "returned-body-observed",
+          responseId: RESPONSE_ID,
+          clientRequestId: null,
+        },
+      }).status,
+    ).toBe("INVALID");
+    const historical = parseRimProviderRuntime({
+      ...runtimeFor(chat),
+      attempt: {
+        requestId: AI_REQUEST_ID,
+        attemptId: "attempt-1",
+        submissionState: "acceptance-unknown",
+        clientRequestId: null,
+      },
+    });
+    expect(historical.status).toBe("PRESENT");
+    if (historical.status === "PRESENT") {
+      expect(historical.runtime.attempt?.submissionState).toBe("acceptance-unknown");
+    }
   });
 
   it("rejects an unknown continuity mode and a blank retired attempt id", () => {

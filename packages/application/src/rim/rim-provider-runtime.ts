@@ -47,6 +47,9 @@ export type RimProviderInitialization =
  * Technical provider attempt for the current logical Product request.
  * `acceptance-unknown` records that acceptance was not observed.
  * It is not a claim that the attempt may be replayed.
+ * `returned-body-observed` records that Application received a provider body
+ * for this technical attempt. It is not Product success, it does not carry a
+ * responseId, and it is not unknown acceptance.
  */
 export type RimProviderAttempt =
   | {
@@ -59,6 +62,12 @@ export type RimProviderAttempt =
       readonly requestId: AiRequestId;
       readonly attemptId: RimProviderAttemptId;
       readonly submissionState: "acceptance-unknown";
+      readonly clientRequestId: string | null;
+    }
+  | {
+      readonly requestId: AiRequestId;
+      readonly attemptId: RimProviderAttemptId;
+      readonly submissionState: "returned-body-observed";
       readonly clientRequestId: string | null;
     }
   | {
@@ -189,7 +198,11 @@ function parseAttempt(value: unknown): RimProviderAttempt | null {
   }
   const requestId = value.requestId as AiRequestId;
   const attemptId = value.attemptId as RimProviderAttemptId;
-  if (value.submissionState === "not-submitted" || value.submissionState === "acceptance-unknown") {
+  if (
+    value.submissionState === "not-submitted" ||
+    value.submissionState === "acceptance-unknown" ||
+    value.submissionState === "returned-body-observed"
+  ) {
     if (!hasOnlyKeys(value, ["requestId", "attemptId", "submissionState", "clientRequestId"])) {
       return null;
     }

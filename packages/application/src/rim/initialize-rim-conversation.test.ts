@@ -718,7 +718,7 @@ describe("DC-01 conversation initialization", () => {
     expect(settled.event.name).toBe("RIM.AI_RESULT_RECEIVED");
     const after = await presentRuntime(readyApp.app.store, SENDER_ID);
     expect(after.runtime.initialization).toEqual(stored.runtime.initialization);
-    expect(after.runtime.attempt?.submissionState).toBe("acceptance-unknown");
+    expect(after.runtime.attempt?.submissionState).toBe("returned-body-observed");
   });
 
   it("refuses unavailable semantic artifacts as provider-ready initialization input", async () => {

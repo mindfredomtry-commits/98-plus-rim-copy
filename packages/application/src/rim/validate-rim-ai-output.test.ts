@@ -400,7 +400,7 @@ describe("RIM AI output validation gate", () => {
     );
     expect(beforeRuntime?.continuityMode).toBe("provider-conversation");
     expect(beforeRuntime?.retiredAttemptId).toBeNull();
-    expect(beforeRuntime?.attempt?.submissionState).toBe("acceptance-unknown");
+    expect(beforeRuntime?.attempt?.submissionState).toBe("returned-body-observed");
     expect(beforeRuntime?.attempt?.requestId).toBe(failedRequestId);
     const attemptId = beforeRuntime?.attempt?.attemptId;
     const retried = await app.sender(
@@ -434,7 +434,7 @@ describe("RIM AI output validation gate", () => {
     expect(afterRuntime?.continuityMode).toBe("provider-conversation");
     expect(afterRuntime?.retiredAttemptId).toBeNull();
     expect(afterRuntime?.attempt).toMatchObject({
-      submissionState: "acceptance-unknown",
+      submissionState: "returned-body-observed",
       attemptId,
       requestId: failedRequestId,
     });

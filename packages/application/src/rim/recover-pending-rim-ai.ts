@@ -44,15 +44,8 @@ const MAX_CLAIM_REENTRY = 1;
  */
 const inFlightUserAttempts = new Map<string, Promise<void>>();
 
-/**
- * Returned provider bodies observed by this process, keyed by the store that
- * saw them. A returned body is completed output, including output that fails
- * validation. It is not a thrown call whose acceptance is unknown.
- * The mark is not durable. Pass 2 stores no responseId, and a restart drops it.
- */
-const returnedBodiesByStore = new WeakMap<object, Set<string>>();
-
 const AMBIGUOUS_PROVIDER_ATTEMPT = "ambiguous-provider-attempt";
+const RETURNED_BODY_SAVE_CONFLICT = "returned-body-save-conflict";
 
 const EMPTY_CONTEXT: RelationshipContextData = {
   aggregates: {
@@ -132,6 +125,7 @@ export async function continuePendingRimAi(
  * An ambiguous provider USER attempt with no in-process flight is switched once
  * to local-canonical-history and left not-submitted. A live provider throw with
  * no durable responseId takes that same path and does not dispatch E-59.
+ * A durably observed returned body is not that ambiguity, including after restart.
  */
 export async function recoverPendingRimAi(
   tools: PendingRimAiTools &
@@ -227,12 +221,12 @@ async function reconcile(
     return claimThenSubmit(tools, loaded, applicable, reentry);
   }
   if (applicable.attempt.submissionState === "acceptance-unknown") {
-    if (returnedBodyWasObserved(tools, applicable.attempt.attemptId)) {
-      return null;
-    }
     if (ambiguousProviderUserAttempt(tools, pending, applicable)) {
       return transitionAmbiguousUserAttempt(tools, loaded, applicable, reentry);
     }
+    return null;
+  }
+  if (applicable.attempt.submissionState === "returned-body-observed") {
     return null;
   }
   return retrieveThenComplete(tools, loaded, applicable, applicable.attempt.responseId);
@@ -328,6 +322,7 @@ async function claimThenSubmit(
   inFlightUserAttempts.set(key, flight);
   let retry = false;
   let ambiguousFailure = false;
+  let returnedBodyConflict = false;
   let result: ApplicationExecutionResult | null = null;
   try {
     const claimed = withAttempt(runtime, {
@@ -342,9 +337,11 @@ async function claimThenSubmit(
     } else {
       const pending = pendingChat(saved.loaded.snapshot);
       if (pending && pending.snapshot.requestId === claimed.attempt?.requestId) {
-        const submitted = await submitClaimed(tools, pending, saved.loaded.snapshot, claimed);
+        const submitted = await submitClaimed(tools, pending, saved.loaded, claimed);
         if (submitted === AMBIGUOUS_PROVIDER_ATTEMPT) {
           ambiguousFailure = true;
+        } else if (submitted === RETURNED_BODY_SAVE_CONFLICT) {
+          returnedBodyConflict = true;
         } else {
           result = submitted;
         }
@@ -361,7 +358,7 @@ async function claimThenSubmit(
       ? null
       : reconcile({ ...tools, mode: "recover" }, reentry + 1);
   }
-  if (ambiguousFailure) {
+  if (ambiguousFailure || returnedBodyConflict) {
     return reconcile(tools, reentry);
   }
   return result;
@@ -374,9 +371,14 @@ function userFlightKey(userId: string, attemptId: string): string {
 async function submitClaimed(
   tools: ReconcileTools,
   pending: PendingChat,
-  snapshot: ProductSnapshot,
+  loaded: LoadedSnapshot,
   runtime: RimProviderRuntime,
-): Promise<ApplicationExecutionResult | typeof AMBIGUOUS_PROVIDER_ATTEMPT | null> {
+): Promise<
+  | ApplicationExecutionResult
+  | typeof AMBIGUOUS_PROVIDER_ATTEMPT
+  | typeof RETURNED_BODY_SAVE_CONFLICT
+  | null
+> {
   if (runtime.initialization.submissionState !== "stored") {
     return null;
   }
@@ -387,10 +389,10 @@ async function submitClaimed(
   const origin =
     tools.origin.kind === "effect"
       ? tools.origin.value
-      : validAskRimOrigin(snapshot, tools.context.currentUserId);
-  let event: ProductEventInput;
+      : validAskRimOrigin(loaded.snapshot, tools.context.currentUserId);
+  let body: unknown;
   try {
-    const result = await tools.rimAi.respond(
+    body = await tools.rimAi.respond(
       providerRequest(
         pending,
         data ?? EMPTY_CONTEXT,
@@ -398,8 +400,6 @@ async function submitClaimed(
         runtime.initialization.conversationId,
       ),
     );
-    rememberReturnedBody(tools, runtime);
-    event = completionEvent(pending.snapshot, result);
   } catch (error) {
     if (ambiguousClaim(runtime)) {
       return AMBIGUOUS_PROVIDER_ATTEMPT;
@@ -411,9 +411,39 @@ async function submitClaimed(
             code: "RIM_AI_FAILED",
             message: error instanceof Error ? error.message : "rim ai failed",
           } as unknown as Failure);
-    event = failureEvent(pending.snapshot, failure);
+    return dispatch(tools, failureEvent(pending.snapshot, failure));
   }
-  return dispatch(tools, event);
+  const observed = await persistReturnedBody(tools, loaded, runtime);
+  if (!observed.ok) {
+    return RETURNED_BODY_SAVE_CONFLICT;
+  }
+  const current = pendingChat(observed.loaded.snapshot);
+  const attempt = runtime.attempt;
+  if (!current || !attempt || current.snapshot.requestId !== attempt.requestId) {
+    return null;
+  }
+  return dispatch(tools, completionEvent(current.snapshot, body));
+}
+
+async function persistReturnedBody(
+  tools: ReconcileTools,
+  loaded: LoadedSnapshot,
+  runtime: RimProviderRuntime,
+): Promise<{ ok: true; loaded: LoadedSnapshot } | { ok: false }> {
+  const attempt = runtime.attempt;
+  if (!attempt || attempt.submissionState !== "acceptance-unknown") {
+    return { ok: false };
+  }
+  return trySave(
+    tools,
+    loaded.revision,
+    withAttempt(runtime, {
+      requestId: attempt.requestId,
+      attemptId: attempt.attemptId,
+      submissionState: "returned-body-observed",
+      clientRequestId: attempt.clientRequestId,
+    }),
+  );
 }
 
 function ambiguousClaim(runtime: RimProviderRuntime): boolean {
@@ -421,28 +451,6 @@ function ambiguousClaim(runtime: RimProviderRuntime): boolean {
     runtime.continuityMode === "provider-conversation" &&
     runtime.initialization.submissionState === "stored" &&
     runtime.attempt?.submissionState === "acceptance-unknown"
-  );
-}
-
-function rememberReturnedBody(tools: ReconcileTools, runtime: RimProviderRuntime): void {
-  const attempt = runtime.attempt;
-  if (!attempt) {
-    return;
-  }
-  const store = tools.deps.store;
-  let keys = returnedBodiesByStore.get(store);
-  if (!keys) {
-    keys = new Set();
-    returnedBodiesByStore.set(store, keys);
-  }
-  keys.add(userFlightKey(tools.context.currentUserId, attempt.attemptId));
-}
-
-function returnedBodyWasObserved(tools: ReconcileTools, attemptId: string): boolean {
-  return (
-    returnedBodiesByStore
-      .get(tools.deps.store)
-      ?.has(userFlightKey(tools.context.currentUserId, attemptId)) ?? false
   );
 }
 
