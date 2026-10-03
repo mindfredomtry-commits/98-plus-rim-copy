@@ -275,7 +275,7 @@ describe("Feature 8 RIM vertical", () => {
     });
   });
 
-  it("retries a failed context build and leaves a failed AI call pending after E-54", async () => {
+  it("retries a failed context build and keeps an ambiguous AI call pending without Retry", async () => {
     const app = await start(
       [
         { kind: "FAILURE", failure: { code: "RIM_AI_FAILED" } as never },
@@ -300,26 +300,21 @@ describe("Feature 8 RIM vertical", () => {
 
     await dispatch(app.url, USER_A_TG, "RIM.CHANGE_INPUT_DRAFT", { inputDraft: "спроси" });
     const aiFailed = await dispatch(app.url, USER_A_TG, "RIM.PRESS_SEND");
-    expect(aiFailed.rimChat?.aiOperation.status).toBe("FAILED");
+    expect(aiFailed.rimChat?.aiOperation.status).toBe("PENDING");
     const requestId =
-      aiFailed.rimChat?.aiOperation.status === "FAILED"
+      aiFailed.rimChat?.aiOperation.status === "PENDING"
         ? aiFailed.rimChat.aiOperation.requestId
         : null;
-    const userMessages = aiFailed.rimChat?.messages.filter((message) => message.kind === "USER");
-    expect(userMessages).toHaveLength(1);
-    const recovered = await dispatch(app.url, USER_A_TG, "RIM.PRESS_RETRY_AI", {
-      failedRequestId: requestId,
-    });
-    expect(recovered.rimChat?.aiOperation.status).toBe("PENDING");
-    expect(recovered.rimChat?.messages.filter((message) => message.kind === "USER")).toEqual([
+    expect(aiFailed.rimChat?.messages.filter((message) => message.kind === "USER")).toEqual([
       { kind: "USER", text: "спроси" },
     ]);
-    expect(recovered.rimChat?.messages.at(-1)).toEqual({ kind: "USER", text: "спроси" });
+    expect(aiFailed.rimChat?.messages.at(-1)).toEqual({ kind: "USER", text: "спроси" });
     expect(
-      recovered.rimChat?.aiOperation.status === "PENDING"
-        ? recovered.rimChat.aiOperation.requestId
-        : null,
-    ).toBe(requestId);
+      aiFailed.rimChat?.messages.some(
+        (message) => message.kind === "RIM" && message.text === "повтор",
+      ),
+    ).toBe(false);
+    expect(requestId).toBeTruthy();
   });
 
   it("ignores a stale context result and a stale AI result", async () => {

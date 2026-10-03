@@ -399,6 +399,7 @@ describe("RIM AI output validation gate", () => {
       failedChat.id,
     );
     expect(beforeRuntime?.continuityMode).toBe("provider-conversation");
+    expect(beforeRuntime?.retiredAttemptId).toBeNull();
     expect(beforeRuntime?.attempt?.submissionState).toBe("acceptance-unknown");
     expect(beforeRuntime?.attempt?.requestId).toBe(failedRequestId);
     const attemptId = beforeRuntime?.attempt?.attemptId;
@@ -420,6 +421,7 @@ describe("RIM AI output validation gate", () => {
     expect(followed.event.name).toBe("RIM.PRESS_RETRY_AI");
     expect(followed.traces.some((trace) => trace.eventId === "E-58")).toBe(false);
     expect(followed.traces.some((trace) => trace.eventId === "E-64")).toBe(false);
+    expect(followed.traces.some((trace) => trace.eventId === "E-59")).toBe(false);
     const chat = chatOf(followed);
     expect(chat.aiOperation).toMatchObject({ status: "PENDING", requestId: failedRequestId });
     expect(userMessages(chat.messages)).toEqual([{ kind: "USER", text: "почему так" }]);
@@ -429,15 +431,14 @@ describe("RIM AI output validation gate", () => {
       parseRimProviderRuntime(after.rimProviderRuntime),
       chat.id,
     );
-    expect(afterRuntime?.continuityMode).toBe("local-canonical-history");
-    expect(afterRuntime?.retiredAttemptId).toBe(attemptId);
-    expect(afterRuntime?.attempt?.attemptId).not.toBe(attemptId);
+    expect(afterRuntime?.continuityMode).toBe("provider-conversation");
+    expect(afterRuntime?.retiredAttemptId).toBeNull();
     expect(afterRuntime?.attempt).toMatchObject({
-      submissionState: "not-submitted",
+      submissionState: "acceptance-unknown",
+      attemptId,
       requestId: failedRequestId,
     });
     expect(afterRuntime?.attempt).not.toHaveProperty("responseId");
-    expect(afterRuntime?.initialization).toMatchObject({ submissionState: "stored" });
   });
 
   it("keeps FakeRimAiAdapter on the ordinary RIM Chat path", async () => {
@@ -472,7 +473,7 @@ describe("RIM AI output validation gate", () => {
     ]);
   });
 
-  it("keeps a thrown Fake AI failure on the existing E-59 path", async () => {
+  it("does not terminally fail a thrown provider call when no response id is known", async () => {
     const app = await readyChat();
     const fake = new FakeRimAiAdapter([
       {
@@ -483,16 +484,22 @@ describe("RIM AI output validation gate", () => {
     await app.sender(eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "привет" }));
     const sent = await app.sender(eventOf("RIM.PRESS_SEND"));
     const failed = await continueRimEffects(sent, rimTools(app.store, fake));
-    expect(failed.event.name).toBe("RIM.AI_REQUEST_FAILED");
+    expect(failed.event.name).toBe("RIM.PRESS_SEND");
     expect(failed.traces.some((trace) => trace.eventId === "E-58")).toBe(false);
-    expect(failed.traces.some((trace) => trace.eventId === "E-59")).toBe(true);
+    expect(failed.traces.some((trace) => trace.eventId === "E-59")).toBe(false);
+    expect(failed.traces.some((trace) => trace.eventId === "E-54")).toBe(false);
     const chat = chatOf(failed);
-    expect(chat.aiOperation.status).toBe("FAILED");
-    if (chat.aiOperation.status === "FAILED") {
-      expect(chat.aiOperation.failure).toMatchObject({ code: "RIM_AI_FAILED" });
-      expect(chat.aiOperation.failure).not.toMatchObject({ code: RIM_AI_OUTPUT_INVALID });
-    }
+    expect(chat.aiOperation.status).toBe("PENDING");
     expect(proposalIds(chat.messages)).toEqual([]);
     expect(userMessages(chat.messages)).toHaveLength(1);
+    const runtime = applicableRimProviderRuntime(
+      parseRimProviderRuntime((await app.store.loadProductSnapshot(SENDER_ID)).rimProviderRuntime),
+      chat.id,
+    );
+    expect(runtime?.continuityMode).toBe("local-canonical-history");
+    expect(runtime?.attempt?.submissionState).toBe("not-submitted");
+    expect(runtime?.attempt?.requestId).toBe(
+      chat.aiOperation.status === "PENDING" ? chat.aiOperation.requestId : undefined,
+    );
   });
 });
