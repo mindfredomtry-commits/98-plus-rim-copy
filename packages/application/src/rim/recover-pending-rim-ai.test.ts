@@ -225,6 +225,29 @@ function retrieval(
   };
 }
 
+function refuseRetrievedObservation(store: ProductStore): ProductStore {
+  return new Proxy(store, {
+    get(target, prop, receiver) {
+      if (prop === "saveRimProviderRuntime") {
+        return async (userId: UserId, expectedRevision: number, runtime: unknown) => {
+          const parsed = parseRimProviderRuntime(runtime);
+          if (
+            parsed.status === "PRESENT" &&
+            parsed.runtime.attempt?.submissionState === "completed-retrieved"
+          ) {
+            throw new PersistenceError("REVISION_CONFLICT", "lost retrieval observation");
+          }
+          return target.saveRimProviderRuntime(userId, expectedRevision, runtime);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function"
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+}
+
 function interruptAfterReturnedBody(inner: ProductStore): ProductStore {
   let interrupt = false;
   return new Proxy(inner, {
@@ -2909,4 +2932,721 @@ describe("DC-02 ambiguity transition", () => {
       }
     },
   );
+
+  it("retrieves a live-observed response id on restart without responding again", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "not-submitted"),
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: {
+          async respond(request, observer) {
+            seen.push(request);
+            expect((await observer.onResponseCreated(CREATED_RESPONSE_ID)).accepted).toBe(true);
+            throw new Error("stream lost");
+          },
+        },
+        retrieval: null,
+      }),
+    ).toBeNull();
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "из ответа" }, retrieved),
+    });
+    expect(seen).toHaveLength(1);
+    expect(retrieved).toEqual([CREATED_RESPONSE_ID]);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(settled?.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
+    expect((await readRuntime(store, USER_ID)).runtime.attempt).toMatchObject({
+      submissionState: "completed-retrieved",
+      responseId: CREATED_RESPONSE_ID,
+      providerStatus: "completed",
+    });
+  });
+
+  it("retrieves a returned body that retained a response id", async () => {
+    const { store, context, deps, chat } = await installPending();
+    const base = runtimeFor(chat, "acceptance-unknown");
+    if (!base.attempt) {
+      throw new Error("expected an attempt");
+    }
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      {
+        ...base,
+        attempt: {
+          requestId: base.attempt.requestId,
+          attemptId: base.attempt.attemptId,
+          submissionState: "returned-body-observed",
+          responseId: CREATED_RESPONSE_ID,
+          clientRequestId: base.attempt.clientRequestId,
+        },
+      },
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "заново" }, retrieved),
+    });
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([CREATED_RESPONSE_ID]);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect((await readRuntime(store, USER_ID)).runtime.continuityMode).toBe(
+      "provider-conversation",
+    );
+  });
+
+  it("does not retrieve a historical returned body that has no response id", async () => {
+    const { store, context, deps, chat } = await installPending();
+    const before = runtimeFor(chat, "returned-body-observed");
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      before,
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: retrieval("completed", { kind: "MESSAGE", text: "нельзя" }, retrieved),
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([]);
+    expect((await readRuntime(store, USER_ID)).runtime).toEqual(before);
+    expect(
+      (await store.loadProductSnapshot(USER_ID)).snapshot.extended.rimChat?.aiOperation.status,
+    ).toBe("PENDING");
+  });
+
+  it("records queued and in-progress observations and retrieves them again", async () => {
+    for (const status of ["queued", "in_progress"] as const) {
+      const { store, context, deps, chat } = await installPending();
+      await store.saveRimProviderRuntime(
+        USER_ID,
+        (await store.loadProductSnapshot(USER_ID)).revision,
+        runtimeFor(chat, "response-id-known"),
+      );
+      const seen: RimAiRequest[] = [];
+      const retrieved: ProviderResponseId[] = [];
+      const steps = [
+        { providerStatus: status },
+        { providerStatus: "completed" as const, output: { kind: "MESSAGE", text: "готово" } },
+      ];
+      let index = 0;
+      const portRetrieval: RimProviderRetrievalPort = {
+        async retrieve(responseId) {
+          retrieved.push(responseId);
+          const step = steps[index] ?? steps[steps.length - 1];
+          index += 1;
+          if (!step) {
+            throw new Error("missing retrieval step");
+          }
+          return {
+            responseId,
+            providerStatus: step.providerStatus,
+            ...(step.output === undefined ? {} : { output: step.output }),
+          };
+        },
+      };
+      expect(
+        await recoverPendingRimAi({
+          context,
+          deps,
+          rimAi: port(seen),
+          retrieval: portRetrieval,
+        }),
+      ).toBeNull();
+      const during = await readRuntime(store, USER_ID);
+      expect(during.runtime.attempt).toMatchObject({
+        submissionState: "completed-retrieved",
+        responseId: RESPONSE_ID,
+        providerStatus: status,
+      });
+      expect(during.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+      const settled = await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: portRetrieval,
+      });
+      expect(seen).toEqual([]);
+      expect(retrieved).toEqual([RESPONSE_ID, RESPONSE_ID]);
+      expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    }
+  });
+
+  it("leaves a completed retrieval with no output pending and retrieves it again", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "response-id-known"),
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    let calls = 0;
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: {
+        async retrieve(responseId) {
+          retrieved.push(responseId);
+          calls += 1;
+          if (calls === 1) {
+            return { responseId, providerStatus: "completed" };
+          }
+          return {
+            responseId,
+            providerStatus: "completed",
+            output: { kind: "MESSAGE", text: "появилось" },
+          };
+        },
+      },
+    });
+    expect(settled).toBeNull();
+    expect((await readRuntime(store, USER_ID)).runtime.attempt).toMatchObject({
+      submissionState: "completed-retrieved",
+      providerStatus: "completed",
+    });
+    expect(
+      (await store.loadProductSnapshot(USER_ID)).snapshot.extended.rimChat?.aiOperation.status,
+    ).toBe("PENDING");
+    const finished = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: {
+        async retrieve(responseId) {
+          retrieved.push(responseId);
+          return {
+            responseId,
+            providerStatus: "completed",
+            output: { kind: "MESSAGE", text: "появилось" },
+          };
+        },
+      },
+    });
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([RESPONSE_ID, RESPONSE_ID]);
+    expect(finished?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+  });
+
+  it.each(["failed", "cancelled", "incomplete"] as const)(
+    "dispatches E-59 for %s only after the retrieval observation commits",
+    async (status) => {
+      const { store, context, deps, chat } = await installPending();
+      await store.saveRimProviderRuntime(
+        USER_ID,
+        (await store.loadProductSnapshot(USER_ID)).revision,
+        runtimeFor(chat, "response-id-known"),
+      );
+      const seen: RimAiRequest[] = [];
+      const settled = await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: retrieval(status),
+      });
+      expect(seen).toEqual([]);
+      expect(settled?.traces.filter((trace) => trace.eventId === "E-59")).toHaveLength(1);
+      expect(settled?.snapshot.extended.rimChat?.aiOperation.status).toBe("FAILED");
+      expect((await readRuntime(store, USER_ID)).runtime.attempt).toMatchObject({
+        submissionState: "completed-retrieved",
+        responseId: RESPONSE_ID,
+        providerStatus: status,
+      });
+    },
+  );
+
+  it("keeps the response id when retrieval transport fails and allows a later retrieve", async () => {
+    const { store, context, deps, chat } = await installPending();
+    const seeded = runtimeFor(chat, "response-id-known");
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      seeded,
+    );
+    const seen: RimAiRequest[] = [];
+    const thrown = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: {
+        async retrieve() {
+          throw new Error("transport down");
+        },
+      },
+    });
+    expect(thrown).toBeNull();
+    expect(seen).toEqual([]);
+    expect((await readRuntime(store, USER_ID)).runtime).toEqual(seeded);
+    expect(
+      (await store.loadProductSnapshot(USER_ID)).snapshot.extended.rimChat?.aiOperation.status,
+    ).toBe("PENDING");
+    const retrieved: ProviderResponseId[] = [];
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "позже" }, retrieved),
+    });
+    expect(retrieved).toEqual([RESPONSE_ID]);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+  });
+
+  it("does not dispatch when the retrieval observation CAS loses", async () => {
+    const opened = await installPending();
+    await opened.store.saveRimProviderRuntime(
+      USER_ID,
+      (await opened.store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(opened.chat, "response-id-known"),
+    );
+    const seen: RimAiRequest[] = [];
+    const settled = await recoverPendingRimAi({
+      context: opened.context,
+      deps: { ...opened.deps, store: refuseRetrievedObservation(opened.store) },
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "частное" }),
+    });
+    expect(settled).toBeNull();
+    expect(seen).toEqual([]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.attempt).toMatchObject({
+      submissionState: "response-id-known",
+      responseId: RESPONSE_ID,
+    });
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(after.loaded.snapshot.extended.rimChat?.messages.at(-1)?.kind).not.toBe("RIM");
+  });
+
+  it("does not dispatch a losing retrieval when the stored status already matches", async () => {
+    const opened = await installPending();
+    await opened.store.saveRimProviderRuntime(
+      USER_ID,
+      (await opened.store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(opened.chat, "completed-retrieved", { providerStatus: "completed" }),
+    );
+    const seen: RimAiRequest[] = [];
+    const settled = await recoverPendingRimAi({
+      context: opened.context,
+      deps: { ...opened.deps, store: refuseRetrievedObservation(opened.store) },
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "частное" }),
+    });
+    expect(settled).toBeNull();
+    expect(seen).toEqual([]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.attempt).toMatchObject({
+      submissionState: "completed-retrieved",
+      providerStatus: "completed",
+      responseId: RESPONSE_ID,
+    });
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+  });
+
+  it("does not dispatch when the saved retrieval snapshot no longer matches the attempt", async () => {
+    const opened = await installPending();
+    const seeded = runtimeFor(opened.chat, "response-id-known");
+    await opened.store.saveRimProviderRuntime(
+      USER_ID,
+      (await opened.store.loadProductSnapshot(USER_ID)).revision,
+      seeded,
+    );
+    const seen: RimAiRequest[] = [];
+    const store = new Proxy(opened.store, {
+      get(target, prop, receiver) {
+        if (prop === "saveRimProviderRuntime") {
+          return async (userId: UserId, _expectedRevision: number, runtime: unknown) => {
+            const current = await target.loadProductSnapshot(userId);
+            const parsed = parseRimProviderRuntime(runtime);
+            if (parsed.status !== "PRESENT" || !parsed.runtime.attempt) {
+              throw new Error("expected a retrieval observation");
+            }
+            const chat = current.snapshot.extended.rimChat;
+            if (!chat || chat.aiOperation.status !== "PENDING") {
+              throw new Error("expected a pending chat");
+            }
+            const replaced = makeChat({
+              ...chat,
+              aiOperation: pendingAi({
+                requestId: "ai-other" as AiRequestId,
+                userMessage: "привет",
+                rimChatId: chat.id,
+              }),
+            });
+            return {
+              ...current,
+              revision: current.revision + 1,
+              snapshot: chatSnapshot(replaced),
+              rimProviderRuntime: runtime,
+            };
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    expect(
+      await recoverPendingRimAi({
+        context: opened.context,
+        deps: { ...opened.deps, store },
+        rimAi: port(seen),
+        retrieval: retrieval("completed", { kind: "MESSAGE", text: "чужой" }),
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime).toEqual(seeded);
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+  });
+
+  it.each(["chat", "attempt", "identity"] as const)(
+    "does not dispatch when the saved retrieval %s no longer matches",
+    async (kind) => {
+      const opened = await installPending();
+      const seeded = runtimeFor(opened.chat, "response-id-known");
+      await opened.store.saveRimProviderRuntime(
+        USER_ID,
+        (await opened.store.loadProductSnapshot(USER_ID)).revision,
+        seeded,
+      );
+      const seen: RimAiRequest[] = [];
+      const store = new Proxy(opened.store, {
+        get(target, prop, receiver) {
+          if (prop === "saveRimProviderRuntime") {
+            return async (userId: UserId, _expectedRevision: number, runtime: unknown) => {
+              const current = await target.loadProductSnapshot(userId);
+              const parsed = parseRimProviderRuntime(runtime);
+              if (
+                parsed.status !== "PRESENT" ||
+                parsed.runtime.attempt?.submissionState !== "completed-retrieved"
+              ) {
+                throw new Error("expected the retrieval observation");
+              }
+              if (kind === "chat") {
+                const moved = makeChat({
+                  ...opened.chat,
+                  id: "chat-other" as RimChatId,
+                });
+                return {
+                  ...current,
+                  revision: current.revision + 1,
+                  snapshot: chatSnapshot(moved),
+                  rimProviderRuntime: runtime,
+                };
+              }
+              const savedAttempt =
+                kind === "attempt"
+                  ? { ...parsed.runtime.attempt, attemptId: attempt("attempt-other") }
+                  : parsed.runtime.attempt;
+              return {
+                ...current,
+                revision: current.revision + 1,
+                rimProviderRuntime: {
+                  ...parsed.runtime,
+                  ...(kind === "identity"
+                    ? { continuityMode: "local-canonical-history" as const }
+                    : {}),
+                  attempt: savedAttempt,
+                },
+              };
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === "function"
+            ? (value as (...args: unknown[]) => unknown).bind(target)
+            : value;
+        },
+      });
+      expect(
+        await recoverPendingRimAi({
+          context: opened.context,
+          deps: { ...opened.deps, store },
+          rimAi: port(seen),
+          retrieval: retrieval("completed", { kind: "MESSAGE", text: "чужой" }),
+        }),
+      ).toBeNull();
+      expect(seen).toEqual([]);
+      expect((await readRuntime(opened.store, USER_ID)).runtime).toEqual(seeded);
+    },
+  );
+
+  it("does not save or dispatch a retrieved response id that does not match", async () => {
+    const { store, context, deps, chat } = await installPending();
+    const seeded = runtimeFor(chat, "response-id-known");
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      seeded,
+    );
+    const seen: RimAiRequest[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: {
+          async retrieve() {
+            return {
+              responseId: OTHER_RESPONSE_ID,
+              providerStatus: "completed",
+              output: { kind: "MESSAGE", text: "чужой" },
+            };
+          },
+        },
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect((await readRuntime(store, USER_ID)).runtime).toEqual(seeded);
+    expect(
+      (await store.loadProductSnapshot(USER_ID)).snapshot.extended.rimChat?.aiOperation.status,
+    ).toBe("PENDING");
+  });
+
+  it("leaves the response id unchanged when retrieve returns null", async () => {
+    const { store, context, deps, chat } = await installPending();
+    const seeded = runtimeFor(chat, "response-id-known");
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      seeded,
+    );
+    const seen: RimAiRequest[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: {
+          async retrieve() {
+            return null;
+          },
+        },
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect((await readRuntime(store, USER_ID)).runtime).toEqual(seeded);
+  });
+
+  it("does not retrieve a known response while Create Ban is frozen, and retrieves it after Back", async () => {
+    const chat = pendingChat();
+    const base = chatSnapshot(chat);
+    const frozen: ProductSnapshot = {
+      ...withControlState(base, "CREATE_BAN.WHAT.RIM"),
+      extended: {
+        ...base.extended,
+        rimChat: chat,
+        savedFrozenRimChat: chat,
+      },
+    };
+    const opened = await harness();
+    const installed = await opened.kit.installFixtureSnapshot(USER_ID, frozen);
+    await opened.store.saveRimProviderRuntime(
+      USER_ID,
+      installed.revision,
+      runtimeFor(chat, "response-id-known"),
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context: opened.context,
+        deps: opened.deps,
+        rimAi: port(seen),
+        retrieval: retrieval("completed", { kind: "MESSAGE", text: "после" }, retrieved),
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([]);
+    const restored = await executeProductEvent(
+      { context: opened.context, event: eventOf("CREATE_BAN.PRESS_BACK") },
+      opened.deps,
+    );
+    expect(restored.snapshot.controlState).toBe("RIM.CHAT");
+    expect(restored.snapshot.extended.savedFrozenRimChat).toBeNull();
+    const settled = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "после" }, retrieved),
+    });
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([RESPONSE_ID]);
+    expect(settled?.event.name).toBe("RIM.AI_RESULT_RECEIVED");
+    expect(userTexts(settled?.snapshot.extended.rimChat)).toEqual(["привет"]);
+    expect((await readRuntime(opened.store, USER_ID)).runtime.continuityMode).toBe(
+      "provider-conversation",
+    );
+  });
+
+  it("retrieves a provider response id without using the conversation id or changing mode", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "response-id-known"),
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "провайдер" }, retrieved),
+    });
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([RESPONSE_ID]);
+    expect(retrieved[0]).not.toBe("conv-stored-1");
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("provider-conversation");
+    expect(after.runtime.retiredAttemptId).toBeNull();
+    expect(storedConversationId(after.runtime.initialization)).toBe("conv-stored-1");
+  });
+
+  it("retrieves a local response id without a conversation id or a mode change", async () => {
+    const { store, context, deps, chat } = await installPending();
+    const local = localRuntime(chat);
+    if (!local.attempt) {
+      throw new Error("expected a local attempt");
+    }
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      {
+        ...local,
+        attempt: {
+          requestId: local.attempt.requestId,
+          attemptId: local.attempt.attemptId,
+          submissionState: "response-id-known",
+          responseId: CREATED_RESPONSE_ID,
+          clientRequestId: null,
+        },
+      },
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "локально" }, retrieved),
+    });
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([CREATED_RESPONSE_ID]);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+    expect(storedConversationId(after.runtime.initialization)).toBe("conv-stored-1");
+    expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
+  });
+
+  it("retrieves the first response id after a conflicting live observation", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "not-submitted"),
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: {
+          async respond(request, observer) {
+            seen.push(request);
+            expect((await observer.onResponseCreated(CREATED_RESPONSE_ID)).accepted).toBe(true);
+            expect((await observer.onResponseCreated(OTHER_RESPONSE_ID)).accepted).toBe(false);
+            return { kind: "MESSAGE", text: "отброшено" };
+          },
+        },
+        retrieval: retrieval("completed", { kind: "MESSAGE", text: "не сейчас" }, retrieved),
+      }),
+    ).toBeNull();
+    expect(retrieved).toEqual([]);
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "из A" }, retrieved),
+    });
+    expect(seen).toHaveLength(1);
+    expect(retrieved).toEqual([CREATED_RESPONSE_ID]);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(settled?.snapshot.extended.rimChat?.messages.at(-1)).toEqual({
+      kind: "RIM",
+      text: "из A",
+    });
+  });
+
+  it("does not respond or fail when a known response has no retrieval port", async () => {
+    const { store, context, deps, chat } = await installPending();
+    const seeded = runtimeFor(chat, "response-id-known");
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      seeded,
+    );
+    const seen: RimAiRequest[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect((await readRuntime(store, USER_ID)).runtime).toEqual(seeded);
+    expect(
+      (await store.loadProductSnapshot(USER_ID)).snapshot.extended.rimChat?.aiOperation.status,
+    ).toBe("PENDING");
+  });
+
+  it("finishes a stored completed observation from a fresh retrieve", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "completed-retrieved", { providerStatus: "completed" }),
+    );
+    const seen: RimAiRequest[] = [];
+    const retrieved: ProviderResponseId[] = [];
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: retrieval("completed", { kind: "MESSAGE", text: "свежее" }, retrieved),
+    });
+    expect(seen).toEqual([]);
+    expect(retrieved).toEqual([RESPONSE_ID]);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(settled?.snapshot.extended.rimChat?.messages.at(-1)).toEqual({
+      kind: "RIM",
+      text: "свежее",
+    });
+  });
 });

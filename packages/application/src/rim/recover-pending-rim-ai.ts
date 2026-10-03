@@ -145,6 +145,10 @@ export async function continuePendingRimAi(
  * live call makes that call's body non-authoritative: resp-A stays
  * response-id-known, and the body is not validated. A durably observed returned
  * body is not acceptance-unknown ambiguity, including after restart.
+ * A durable response id is recovered by retrieve, including a returned body
+ * that retained that id. A historical returned body with no response id is not
+ * retrieved. A retrieval result dispatches only after its observation CAS
+ * commits for this attempt.
  */
 export async function recoverPendingRimAi(
   tools: PendingRimAiTools &
@@ -243,7 +247,10 @@ async function reconcile(
     return null;
   }
   if (applicable.attempt.submissionState === "returned-body-observed") {
-    return null;
+    if (applicable.attempt.responseId === undefined) {
+      return null;
+    }
+    return retrieveThenComplete(tools, loaded, applicable, applicable.attempt.responseId);
   }
   return retrieveThenComplete(tools, loaded, applicable, applicable.attempt.responseId);
 }
@@ -711,12 +718,18 @@ async function retrieveThenComplete(
   if (!tools.retrieval) {
     return null;
   }
-  const retrieved = await tools.retrieval.retrieve(responseId);
+  const retrievalPort = tools.retrieval;
+  let retrieved: Awaited<ReturnType<RimProviderRetrievalPort["retrieve"]>>;
+  try {
+    retrieved = await retrievalPort.retrieve(responseId);
+  } catch {
+    return null;
+  }
   if (!retrieved || retrieved.responseId !== responseId) {
     return null;
   }
   const attempt = runtime.attempt;
-  if (!attempt) {
+  if (!attempt || !("responseId" in attempt) || attempt.responseId !== responseId) {
     return null;
   }
   const observed = withAttempt(runtime, {
@@ -728,12 +741,49 @@ async function retrieveThenComplete(
     clientRequestId: attempt.clientRequestId,
   });
   const saved = await trySave(tools, loaded.revision, observed);
-  const fresh = saved.loaded;
-  const pending = pendingChat(fresh.snapshot);
-  if (!pending || pending.snapshot.requestId !== attempt.requestId) {
+  if (!saved.ok) {
+    return null;
+  }
+  if (!retrievalObservationAccepted(saved.loaded, runtime, responseId, retrieved.providerStatus)) {
+    return null;
+  }
+  const pending = pendingChat(saved.loaded.snapshot);
+  if (!pending) {
     return null;
   }
   return completeRetrieved(tools, pending, retrieved.providerStatus, retrieved.output);
+}
+
+function retrievalObservationAccepted(
+  loaded: LoadedSnapshot,
+  claimed: RimProviderRuntime,
+  responseId: ProviderResponseId,
+  providerStatus: RetrievedProviderStatus,
+): boolean {
+  const pending = pendingChat(loaded.snapshot);
+  const claimedAttempt = claimed.attempt;
+  if (!pending || !claimedAttempt || pending.chat.id !== claimed.rimChatId) {
+    return false;
+  }
+  if (pending.snapshot.requestId !== claimedAttempt.requestId) {
+    return false;
+  }
+  const parsed = parseRimProviderRuntime(loaded.rimProviderRuntime);
+  const applicable =
+    parsed.status === "PRESENT" ? applicableRimProviderRuntime(parsed, pending.chat.id) : null;
+  if (!applicable || !sameRuntimeIdentity(claimed, applicable)) {
+    return false;
+  }
+  const attempt = applicable.attempt;
+  return (
+    !!attempt &&
+    attempt.submissionState === "completed-retrieved" &&
+    attempt.attemptId === claimedAttempt.attemptId &&
+    attempt.requestId === claimedAttempt.requestId &&
+    pending.snapshot.requestId === attempt.requestId &&
+    attempt.responseId === responseId &&
+    attempt.providerStatus === providerStatus
+  );
 }
 
 async function completeRetrieved(
