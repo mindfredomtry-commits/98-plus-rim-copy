@@ -2559,7 +2559,7 @@ describe("DC-02 ambiguity transition", () => {
     expect((await readRuntime(store, USER_ID)).runtime).toEqual(after.runtime);
   });
 
-  it("treats a repeated response id as idempotent and rejects a conflicting id", async () => {
+  it("treats a repeated response id as idempotent and completes that body once", async () => {
     const { store, context, deps, chat } = await installPending();
     await store.saveRimProviderRuntime(
       USER_ID,
@@ -2575,10 +2575,8 @@ describe("DC-02 ambiguity transition", () => {
           const afterFirst = await store.loadProductSnapshot(USER_ID);
           const second = await observer.onResponseCreated(CREATED_RESPONSE_ID);
           const afterSecond = await store.loadProductSnapshot(USER_ID);
-          const conflict = await observer.onResponseCreated(OTHER_RESPONSE_ID);
           expect(first.accepted).toBe(true);
           expect(second.accepted).toBe(true);
-          expect(conflict.accepted).toBe(false);
           expect(afterSecond.revision).toBe(afterFirst.revision);
           const during = parseRimProviderRuntime(afterSecond.rimProviderRuntime);
           expect(during.status === "PRESENT" && during.runtime.attempt).toMatchObject({
@@ -2591,10 +2589,253 @@ describe("DC-02 ambiguity transition", () => {
       retrieval: null,
     });
     expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-59")).toHaveLength(0);
     expect((await readRuntime(store, USER_ID)).runtime.attempt).toMatchObject({
       submissionState: "returned-body-observed",
       responseId: CREATED_RESPONSE_ID,
     });
+  });
+
+  it("discards a provider body after a conflicting response id and keeps the first id", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "not-submitted"),
+    );
+    const seen: RimAiRequest[] = [];
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: {
+        async respond(request, observer) {
+          seen.push(request);
+          expect((await observer.onResponseCreated(CREATED_RESPONSE_ID)).accepted).toBe(true);
+          expect((await observer.onResponseCreated(OTHER_RESPONSE_ID)).accepted).toBe(false);
+          return { kind: "MESSAGE", text: "чужое" };
+        },
+      },
+      retrieval: null,
+    });
+    expect(settled).toBeNull();
+    expect(seen).toHaveLength(1);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("provider-conversation");
+    expect(after.runtime.retiredAttemptId).toBeNull();
+    expect(after.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-1"),
+      submissionState: "response-id-known",
+      responseId: CREATED_RESPONSE_ID,
+    });
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toHaveLength(1);
+    expect((await readRuntime(store, USER_ID)).runtime).toEqual(after.runtime);
+  });
+
+  it("discards a local body after a conflicting response id and does not start another attempt", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      localRuntime(chat),
+    );
+    const seen: RimAiRequest[] = [];
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: {
+        async respond(request, observer) {
+          seen.push(request);
+          expect(request.continuityMode).toBe("local-canonical-history");
+          expect((await observer.onResponseCreated(CREATED_RESPONSE_ID)).accepted).toBe(true);
+          expect((await observer.onResponseCreated(OTHER_RESPONSE_ID)).accepted).toBe(false);
+          return { kind: "MESSAGE", text: "чужое" };
+        },
+      },
+      retrieval: null,
+    });
+    expect(settled).toBeNull();
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+    expect(after.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-local"),
+      submissionState: "response-id-known",
+      responseId: CREATED_RESPONSE_ID,
+    });
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("discards an invalid body after a conflicting response id", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "not-submitted"),
+    );
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: {
+        async respond(_request, observer) {
+          expect((await observer.onResponseCreated(CREATED_RESPONSE_ID)).accepted).toBe(true);
+          expect((await observer.onResponseCreated(OTHER_RESPONSE_ID)).accepted).toBe(false);
+          return {
+            kind: "BAN_PROPOSALS",
+            message: "сломан",
+            proposals: [],
+          } as unknown as Awaited<ReturnType<RimAiPort["respond"]>>;
+        },
+      },
+      retrieval: null,
+    });
+    expect(settled).toBeNull();
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.attempt).toMatchObject({
+      submissionState: "response-id-known",
+      responseId: CREATED_RESPONSE_ID,
+    });
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+  });
+
+  it("does not fall back when a conflicting response id is followed by a throw", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "not-submitted"),
+    );
+    const seen: RimAiRequest[] = [];
+    const thrown = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: {
+        async respond(request, observer) {
+          seen.push(request);
+          expect((await observer.onResponseCreated(CREATED_RESPONSE_ID)).accepted).toBe(true);
+          expect((await observer.onResponseCreated(OTHER_RESPONSE_ID)).accepted).toBe(false);
+          throw new Error("stream lost");
+        },
+      },
+      retrieval: null,
+    });
+    expect(thrown).toBeNull();
+    expect(seen).toHaveLength(1);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("provider-conversation");
+    expect(after.runtime.retiredAttemptId).toBeNull();
+    expect(after.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-1"),
+      submissionState: "response-id-known",
+      responseId: CREATED_RESPONSE_ID,
+    });
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("discards the body when the response-id CAS cannot be reconciled", async () => {
+    const opened = await installPending();
+    await opened.store.saveRimProviderRuntime(
+      USER_ID,
+      (await opened.store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(opened.chat, "not-submitted"),
+    );
+    let responseIdSaves = 0;
+    const store = new Proxy(opened.store, {
+      get(target, prop, receiver) {
+        if (prop === "saveRimProviderRuntime") {
+          return async (userId: UserId, expectedRevision: number, runtime: unknown) => {
+            const parsed = parseRimProviderRuntime(runtime);
+            if (
+              parsed.status === "PRESENT" &&
+              parsed.runtime.attempt?.submissionState === "response-id-known"
+            ) {
+              responseIdSaves += 1;
+              throw new PersistenceError("REVISION_CONFLICT", "unreconciled response id");
+            }
+            return target.saveRimProviderRuntime(userId, expectedRevision, runtime);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const settled = await recoverPendingRimAi({
+      context: opened.context,
+      deps: { ...opened.deps, store },
+      rimAi: {
+        async respond(_request, observer) {
+          expect((await observer.onResponseCreated(CREATED_RESPONSE_ID)).accepted).toBe(false);
+          return { kind: "MESSAGE", text: "нельзя" };
+        },
+      },
+      retrieval: null,
+    });
+    expect(responseIdSaves).toBe(2);
+    expect(settled).toBeNull();
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-1"),
+      submissionState: "acceptance-unknown",
+    });
+    expect(after.runtime.attempt).not.toHaveProperty("responseId");
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+  });
+
+  it("keeps a legacy body authoritative when no response id is observed", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      runtimeFor(chat, "not-submitted"),
+    );
+    let observed = false;
+    const settled = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: {
+        async respond(_request, _observer) {
+          observed = true;
+          return { kind: "MESSAGE", text: "без идентификатора" };
+        },
+      },
+      retrieval: null,
+    });
+    expect(observed).toBe(true);
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.attempt).toMatchObject({
+      submissionState: "returned-body-observed",
+    });
+    expect(after.runtime.attempt).not.toHaveProperty("responseId");
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
   });
 
   it.each(["request", "chat", "attempt"] as const)(

@@ -141,8 +141,10 @@ export async function continuePendingRimAi(
  * PENDING. That unresolved local ambiguity is not a logical terminal failure.
  * A Response id observed before semantic completion is CAS-written as
  * response-id-known and is never erased. A throw after that id does not fall
- * back and does not dispatch E-59. A durably observed returned body is not
- * acceptance-unknown ambiguity, including after restart.
+ * back and does not dispatch E-59. A second, different Response id in the same
+ * live call makes that call's body non-authoritative: resp-A stays
+ * response-id-known, and the body is not validated. A durably observed returned
+ * body is not acceptance-unknown ambiguity, including after restart.
  */
 export async function recoverPendingRimAi(
   tools: PendingRimAiTools &
@@ -405,20 +407,20 @@ async function submitClaimed(
     return null;
   }
   let body: unknown;
-  let responseObserved = false;
-  let responseAccepted = false;
+  const provenance = createLiveResponseTracker();
   try {
     body = await tools.rimAi.respond(request, {
       onResponseCreated: async (responseId) => {
-        responseObserved = true;
         const observation = await acceptResponseCreated(tools, pending, runtime, responseId);
-        if (observation.accepted) {
-          responseAccepted = true;
-        }
+        provenance.note(responseId, observation.accepted);
         return observation;
       },
     });
   } catch (error) {
+    const observed = provenance.read();
+    if (observed.kind === "conflict" || observed.kind === "accepted") {
+      return null;
+    }
     const identity = await responseIdentityAfterThrow(tools, runtime);
     if (identity !== "unknown") {
       return null;
@@ -438,10 +440,15 @@ async function submitClaimed(
           } as unknown as Failure);
     return dispatch(tools, failureEvent(pending.snapshot, failure));
   }
-  if (responseObserved && !responseAccepted) {
+  const observedProvenance = provenance.read();
+  if (observedProvenance.kind === "conflict" || observedProvenance.kind === "refused") {
     return null;
   }
-  const observed = await persistReturnedBody(tools, runtime);
+  const observed = await persistReturnedBody(
+    tools,
+    runtime,
+    observedProvenance.kind === "accepted" ? observedProvenance.responseId : null,
+  );
   if (!observed.ok) {
     return observed.reason === "conflict" ? RETURNED_BODY_SAVE_CONFLICT : null;
   }
@@ -563,9 +570,55 @@ async function responseIdentityAfterThrow(
   return "unknown";
 }
 
+/**
+ * Process-local identity of one respond() call.
+ * A conflicting second id discards that call's body. It is not a Product state:
+ * the first durable response-id-known row remains the recovery anchor.
+ */
+type LiveResponseProvenance =
+  | { readonly kind: "unobserved" }
+  | { readonly kind: "refused" }
+  | { readonly kind: "accepted"; readonly responseId: ProviderResponseId }
+  | { readonly kind: "conflict"; readonly responseId: ProviderResponseId };
+
+function createLiveResponseTracker(): {
+  note(responseId: ProviderResponseId, accepted: boolean): void;
+  read(): LiveResponseProvenance;
+} {
+  let current: LiveResponseProvenance = { kind: "unobserved" };
+  return {
+    note(responseId, accepted) {
+      current = noteLiveResponse(current, responseId, accepted);
+    },
+    read() {
+      return current;
+    },
+  };
+}
+
+function noteLiveResponse(
+  current: LiveResponseProvenance,
+  responseId: ProviderResponseId,
+  accepted: boolean,
+): LiveResponseProvenance {
+  if (current.kind === "conflict") {
+    return current;
+  }
+  if (current.kind === "accepted") {
+    return responseId === current.responseId
+      ? current
+      : { kind: "conflict", responseId: current.responseId };
+  }
+  if (accepted) {
+    return { kind: "accepted", responseId };
+  }
+  return { kind: "refused" };
+}
+
 async function persistReturnedBody(
   tools: ReconcileTools,
   claimed: RimProviderRuntime,
+  authoritativeResponseId: ProviderResponseId | null,
 ): Promise<{ ok: true; loaded: LoadedSnapshot } | { ok: false; reason: "conflict" | "rejected" }> {
   const claimedAttempt = claimed.attempt;
   if (!claimedAttempt) {
@@ -590,19 +643,22 @@ async function persistReturnedBody(
     return { ok: false, reason: "rejected" };
   }
   const observed =
-    attempt.submissionState === "acceptance-unknown"
-      ? {
-          requestId: attempt.requestId,
-          attemptId: attempt.attemptId,
-          submissionState: "returned-body-observed" as const,
-          clientRequestId: attempt.clientRequestId,
-        }
-      : attempt.submissionState === "response-id-known"
+    authoritativeResponseId === null
+      ? attempt.submissionState === "acceptance-unknown"
         ? {
             requestId: attempt.requestId,
             attemptId: attempt.attemptId,
             submissionState: "returned-body-observed" as const,
-            responseId: attempt.responseId,
+            clientRequestId: attempt.clientRequestId,
+          }
+        : null
+      : attempt.submissionState === "response-id-known" &&
+          attempt.responseId === authoritativeResponseId
+        ? {
+            requestId: attempt.requestId,
+            attemptId: attempt.attemptId,
+            submissionState: "returned-body-observed" as const,
+            responseId: authoritativeResponseId,
             clientRequestId: attempt.clientRequestId,
           }
         : null;
