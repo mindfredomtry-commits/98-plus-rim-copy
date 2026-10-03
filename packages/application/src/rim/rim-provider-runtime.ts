@@ -48,8 +48,9 @@ export type RimProviderInitialization =
  * `acceptance-unknown` records that acceptance was not observed.
  * It is not a claim that the attempt may be replayed.
  * `returned-body-observed` records that Application received a provider body
- * for this technical attempt. It is not Product success, it does not carry a
- * responseId, and it is not unknown acceptance.
+ * for this technical attempt. It is not Product success and it is not unknown
+ * acceptance. A responseId already stored for the attempt is retained. Historical
+ * rows omit responseId.
  */
 export type RimProviderAttempt =
   | {
@@ -68,6 +69,7 @@ export type RimProviderAttempt =
       readonly requestId: AiRequestId;
       readonly attemptId: RimProviderAttemptId;
       readonly submissionState: "returned-body-observed";
+      readonly responseId?: ProviderResponseId;
       readonly clientRequestId: string | null;
     }
   | {
@@ -198,11 +200,7 @@ function parseAttempt(value: unknown): RimProviderAttempt | null {
   }
   const requestId = value.requestId as AiRequestId;
   const attemptId = value.attemptId as RimProviderAttemptId;
-  if (
-    value.submissionState === "not-submitted" ||
-    value.submissionState === "acceptance-unknown" ||
-    value.submissionState === "returned-body-observed"
-  ) {
+  if (value.submissionState === "not-submitted" || value.submissionState === "acceptance-unknown") {
     if (!hasOnlyKeys(value, ["requestId", "attemptId", "submissionState", "clientRequestId"])) {
       return null;
     }
@@ -210,6 +208,30 @@ function parseAttempt(value: unknown): RimProviderAttempt | null {
       requestId,
       attemptId,
       submissionState: value.submissionState,
+      clientRequestId: diagnostic,
+    };
+  }
+  if (value.submissionState === "returned-body-observed") {
+    const allowed = ["requestId", "attemptId", "submissionState", "clientRequestId"];
+    if ("responseId" in value) {
+      if (!hasOnlyKeys(value, [...allowed, "responseId"]) || !nonEmptyString(value.responseId)) {
+        return null;
+      }
+      return {
+        requestId,
+        attemptId,
+        submissionState: "returned-body-observed",
+        responseId: value.responseId as ProviderResponseId,
+        clientRequestId: diagnostic,
+      };
+    }
+    if (!hasOnlyKeys(value, allowed)) {
+      return null;
+    }
+    return {
+      requestId,
+      attemptId,
+      submissionState: "returned-body-observed",
       clientRequestId: diagnostic,
     };
   }

@@ -61,9 +61,9 @@ async function start(
 ) {
   const fake = new FakeRimAiAdapter(steps);
   const recording: RimAiPort & RimConversationInitializationPort = {
-    async respond(request) {
+    async respond(request, observer) {
       observed?.seen.push(request);
-      return fake.respond(request);
+      return fake.respond(request, observer);
     },
     async initialize(request) {
       if (observed) {

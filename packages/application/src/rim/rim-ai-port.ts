@@ -9,7 +9,7 @@ import type {
   RimSuggestion,
 } from "@98plus/product-model";
 import type { ProductSemanticsInput, RimPromptInput } from "./rim-conversation-port.ts";
-import type { ProviderConversationId } from "./rim-provider-runtime.ts";
+import type { ProviderConversationId, ProviderResponseId } from "./rim-provider-runtime.ts";
 
 /**
  * USER-turn continuation of one already stored Conversation.
@@ -100,6 +100,24 @@ export function projectLocalCanonicalHistory(
   });
 }
 
+/**
+ * Result of one durable Response-id observation.
+ * `accepted` means the id is stored on this technical attempt.
+ * A refusal does not erase an id that was already stored.
+ */
+export type RimResponseCreatedObservation =
+  { readonly accepted: true } | { readonly accepted: false };
+
+/**
+ * Provider-neutral lifecycle for one USER attempt.
+ * `onResponseCreated` reports a stable Response id before semantic completion.
+ * The promise settles only after the durable CAS has been decided.
+ * This is not a Conversation id and not an OpenAI SDK type.
+ */
+export type RimAiResponseObserver = Readonly<{
+  onResponseCreated(responseId: ProviderResponseId): Promise<RimResponseCreatedObservation>;
+}>;
+
 export type RimAiPort = {
-  respond(request: RimAiRequest): Promise<RimAiResult>;
+  respond(request: RimAiRequest, observer: RimAiResponseObserver): Promise<RimAiResult>;
 };

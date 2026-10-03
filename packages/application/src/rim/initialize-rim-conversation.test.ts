@@ -51,7 +51,7 @@ import {
   type RimInitializationObservation,
 } from "./initialize-rim-conversation.ts";
 import { recoverPendingRimAi } from "./recover-pending-rim-ai.ts";
-import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
+import type { RimAiPort, RimAiRequest, RimAiResponseObserver } from "./rim-ai-port.ts";
 import {
   assertProviderReadyInitialization,
   PRODUCT_SEMANTICS_UNAVAILABLE,
@@ -73,9 +73,12 @@ const ASK_INTRO = "что хочешь спросить?";
 class RecordingFake extends FakeRimAiAdapter {
   readonly respondRequests: RimAiRequest[] = [];
 
-  override async respond(request: RimAiRequest): Promise<RimAiResult> {
+  override async respond(
+    request: RimAiRequest,
+    observer?: RimAiResponseObserver,
+  ): Promise<RimAiResult> {
     this.respondRequests.push(request);
-    return super.respond(request);
+    return super.respond(request, observer);
   }
 }
 

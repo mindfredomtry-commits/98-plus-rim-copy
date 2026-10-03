@@ -35,6 +35,8 @@ export type {
   ProviderRimAiRequest,
   RimAiPort,
   RimAiRequest,
+  RimAiResponseObserver,
+  RimResponseCreatedObservation,
 } from "./rim/rim-ai-port.ts";
 export {
   assertProviderReadyInitialization,

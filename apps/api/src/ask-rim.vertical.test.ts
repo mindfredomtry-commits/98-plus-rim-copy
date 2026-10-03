@@ -10,6 +10,7 @@ import {
   type FakeRimAiStep,
   type RimAiPort,
   type RimAiRequest,
+  type RimAiResponseObserver,
 } from "@98plus/application";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import { listenCreateBanContactServer } from "./http.ts";
@@ -32,9 +33,9 @@ class RecordingRimAi implements RimAiPort {
 
   constructor(private readonly inner: RimAiPort) {}
 
-  async respond(request: RimAiRequest): Promise<RimAiResult> {
+  async respond(request: RimAiRequest, observer: RimAiResponseObserver): Promise<RimAiResult> {
     this.requests.push(request);
-    return this.inner.respond(request);
+    return this.inner.respond(request, observer);
   }
 }
 

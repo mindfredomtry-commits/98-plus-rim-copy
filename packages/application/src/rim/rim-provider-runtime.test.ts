@@ -593,21 +593,9 @@ describe("DC-02 continuity runtime", () => {
     expect(parsed.runtime.attempt).toEqual(userAttempt);
   });
 
-  it("rejects a returned-body-observed attempt that also carries a responseId", () => {
+  it("parses historical attempt rows and a returned body that retains a responseId", () => {
     const chat = readyChat();
-    expect(
-      parseRimProviderRuntime({
-        ...runtimeFor(chat),
-        attempt: {
-          requestId: AI_REQUEST_ID,
-          attemptId: "attempt-1",
-          submissionState: "returned-body-observed",
-          responseId: RESPONSE_ID,
-          clientRequestId: null,
-        },
-      }).status,
-    ).toBe("INVALID");
-    const historical = parseRimProviderRuntime({
+    const historicalUnknown = parseRimProviderRuntime({
       ...runtimeFor(chat),
       attempt: {
         requestId: AI_REQUEST_ID,
@@ -616,10 +604,70 @@ describe("DC-02 continuity runtime", () => {
         clientRequestId: null,
       },
     });
-    expect(historical.status).toBe("PRESENT");
-    if (historical.status === "PRESENT") {
-      expect(historical.runtime.attempt?.submissionState).toBe("acceptance-unknown");
+    expect(historicalUnknown.status).toBe("PRESENT");
+    if (historicalUnknown.status === "PRESENT") {
+      expect(historicalUnknown.runtime.attempt?.submissionState).toBe("acceptance-unknown");
+      expect(historicalUnknown.runtime.attempt).not.toHaveProperty("responseId");
     }
+    const historicalBody = parseRimProviderRuntime({
+      ...runtimeFor(chat),
+      attempt: {
+        requestId: AI_REQUEST_ID,
+        attemptId: "attempt-1",
+        submissionState: "returned-body-observed",
+        clientRequestId: null,
+      },
+    });
+    expect(historicalBody.status).toBe("PRESENT");
+    if (historicalBody.status === "PRESENT") {
+      expect(historicalBody.runtime.attempt).not.toHaveProperty("responseId");
+    }
+    const historicalKnown = parseRimProviderRuntime({
+      ...runtimeFor(chat),
+      attempt: {
+        requestId: AI_REQUEST_ID,
+        attemptId: "attempt-1",
+        submissionState: "response-id-known",
+        responseId: RESPONSE_ID,
+        clientRequestId: null,
+      },
+    });
+    expect(historicalKnown.status).toBe("PRESENT");
+    if (historicalKnown.status === "PRESENT") {
+      expect(historicalKnown.runtime.attempt).toMatchObject({
+        submissionState: "response-id-known",
+        responseId: RESPONSE_ID,
+      });
+    }
+    const retained = parseRimProviderRuntime({
+      ...runtimeFor(chat),
+      attempt: {
+        requestId: AI_REQUEST_ID,
+        attemptId: "attempt-1",
+        submissionState: "returned-body-observed",
+        responseId: RESPONSE_ID,
+        clientRequestId: null,
+      },
+    });
+    expect(retained.status).toBe("PRESENT");
+    if (retained.status === "PRESENT") {
+      expect(retained.runtime.attempt).toMatchObject({
+        submissionState: "returned-body-observed",
+        responseId: RESPONSE_ID,
+      });
+    }
+    expect(
+      parseRimProviderRuntime({
+        ...runtimeFor(chat),
+        attempt: {
+          requestId: AI_REQUEST_ID,
+          attemptId: "attempt-1",
+          submissionState: "returned-body-observed",
+          responseId: "",
+          clientRequestId: null,
+        },
+      }).status,
+    ).toBe("INVALID");
   });
 
   it("rejects an unknown continuity mode and a blank retired attempt id", () => {

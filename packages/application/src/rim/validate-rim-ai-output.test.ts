@@ -10,8 +10,9 @@ import {
   SENDER_ID,
 } from "../test-harness.ts";
 import { continueRimEffects, type RimContextFailures } from "./continue-rim.ts";
-import { FakeRimAiAdapter } from "./fake-rim-ai-adapter.ts";
-import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
+import { FakeRimAiAdapter, FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
+import type { RimAiPort, RimAiRequest, RimAiResponseObserver } from "./rim-ai-port.ts";
+import type { ProviderResponseId } from "./rim-provider-runtime.ts";
 import { applicableRimProviderRuntime, parseRimProviderRuntime } from "./rim-provider-runtime.ts";
 import { RIM_AI_OUTPUT_INVALID, type RimAiOutputRejection } from "./validate-rim-ai-output.ts";
 
@@ -504,5 +505,34 @@ describe("RIM AI output validation gate", () => {
     expect(runtime?.attempt?.submissionState).toBe("returned-body-observed");
     expect(runtime?.retiredAttemptId).toBeTruthy();
     expect(runtime?.attempt?.attemptId).not.toBe(runtime?.retiredAttemptId);
+  });
+
+  it("scripts a response id before the body or a throw, and omits it when unset", async () => {
+    const observed: string[] = [];
+    const observer: RimAiResponseObserver = {
+      async onResponseCreated(responseId: ProviderResponseId) {
+        observed.push(responseId);
+        return { accepted: true };
+      },
+    };
+    const request = {} as RimAiRequest;
+    const failure = { code: "RIM_AI_FAILED", message: "lost" } as never;
+    const withBody = new FakeRimAiAdapter([
+      { kind: "MESSAGE", text: "готово", responseId: "resp-1" },
+    ]);
+    await expect(withBody.respond(request, observer)).resolves.toEqual({
+      kind: "MESSAGE",
+      text: "готово",
+    });
+    const thenThrow = new FakeRimAiAdapter([{ kind: "FAILURE", failure, responseId: "resp-2" }]);
+    await expect(thenThrow.respond(request, observer)).rejects.toBeInstanceOf(FakeRimAiFailure);
+    const beforeId = new FakeRimAiAdapter([{ kind: "FAILURE", failure }]);
+    await expect(beforeId.respond(request, observer)).rejects.toBeInstanceOf(FakeRimAiFailure);
+    const legacy = new FakeRimAiAdapter([{ kind: "MESSAGE", text: "без" }]);
+    await expect(legacy.respond(request, observer)).resolves.toEqual({
+      kind: "MESSAGE",
+      text: "без",
+    });
+    expect(observed).toEqual(["resp-1", "resp-2"]);
   });
 });

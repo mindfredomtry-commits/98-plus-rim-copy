@@ -23,6 +23,7 @@ import {
   type LocalRimAiRequest,
   type RimAiPort,
   type RimAiRequest,
+  type RimResponseCreatedObservation,
 } from "./rim-ai-port.ts";
 import {
   PRODUCT_SEMANTICS_UNAVAILABLE,
@@ -138,7 +139,10 @@ export async function continuePendingRimAi(
  * not dispatch E-59 for the provider call. A later local throw also does not
  * dispatch E-59: the same attempt stays acceptance-unknown and Product stays
  * PENDING. That unresolved local ambiguity is not a logical terminal failure.
- * A durably observed returned body is not that ambiguity, including after restart.
+ * A Response id observed before semantic completion is CAS-written as
+ * response-id-known and is never erased. A throw after that id does not fall
+ * back and does not dispatch E-59. A durably observed returned body is not
+ * acceptance-unknown ambiguity, including after restart.
  */
 export async function recoverPendingRimAi(
   tools: PendingRimAiTools &
@@ -355,13 +359,7 @@ async function claimThenSubmit(
         pendingAfterClaim &&
         pendingAfterClaim.snapshot.requestId === claimed.attempt?.requestId
       ) {
-        const submitted = await submitClaimed(
-          tools,
-          pendingAfterClaim,
-          saved.loaded,
-          claimed,
-          request,
-        );
+        const submitted = await submitClaimed(tools, pendingAfterClaim, claimed, request);
         if (submitted === AMBIGUOUS_PROVIDER_ATTEMPT) {
           ambiguousFailure = true;
         } else if (submitted === RETURNED_BODY_SAVE_CONFLICT) {
@@ -395,7 +393,6 @@ function userFlightKey(userId: string, attemptId: string): string {
 async function submitClaimed(
   tools: ReconcileTools,
   pending: PendingChat,
-  loaded: LoadedSnapshot,
   runtime: RimProviderRuntime,
   request: RimAiRequest,
 ): Promise<
@@ -408,9 +405,24 @@ async function submitClaimed(
     return null;
   }
   let body: unknown;
+  let responseObserved = false;
+  let responseAccepted = false;
   try {
-    body = await tools.rimAi.respond(request);
+    body = await tools.rimAi.respond(request, {
+      onResponseCreated: async (responseId) => {
+        responseObserved = true;
+        const observation = await acceptResponseCreated(tools, pending, runtime, responseId);
+        if (observation.accepted) {
+          responseAccepted = true;
+        }
+        return observation;
+      },
+    });
   } catch (error) {
+    const identity = await responseIdentityAfterThrow(tools, runtime);
+    if (identity !== "unknown") {
+      return null;
+    }
     if (ambiguousClaim(runtime)) {
       return AMBIGUOUS_PROVIDER_ATTEMPT;
     }
@@ -426,9 +438,12 @@ async function submitClaimed(
           } as unknown as Failure);
     return dispatch(tools, failureEvent(pending.snapshot, failure));
   }
-  const observed = await persistReturnedBody(tools, loaded, runtime);
+  if (responseObserved && !responseAccepted) {
+    return null;
+  }
+  const observed = await persistReturnedBody(tools, runtime);
   if (!observed.ok) {
-    return RETURNED_BODY_SAVE_CONFLICT;
+    return observed.reason === "conflict" ? RETURNED_BODY_SAVE_CONFLICT : null;
   }
   const current = pendingChat(observed.loaded.snapshot);
   const attempt = runtime.attempt;
@@ -438,25 +453,189 @@ async function submitClaimed(
   return dispatch(tools, completionEvent(current.snapshot, body));
 }
 
-async function persistReturnedBody(
+async function acceptResponseCreated(
   tools: ReconcileTools,
-  loaded: LoadedSnapshot,
-  runtime: RimProviderRuntime,
-): Promise<{ ok: true; loaded: LoadedSnapshot } | { ok: false }> {
-  const attempt = runtime.attempt;
-  if (!attempt || attempt.submissionState !== "acceptance-unknown") {
-    return { ok: false };
+  pending: PendingChat,
+  claimed: RimProviderRuntime,
+  responseId: ProviderResponseId,
+): Promise<RimResponseCreatedObservation> {
+  const claimedAttempt = claimed.attempt;
+  if (!claimedAttempt || !nonEmptyResponseId(responseId)) {
+    return { accepted: false };
   }
-  return trySave(
-    tools,
-    loaded.revision,
-    withAttempt(runtime, {
+  const decision = await responseCreatedDecision(tools, pending, claimed, responseId);
+  if (decision.kind !== "save") {
+    return { accepted: decision.kind === "idempotent" };
+  }
+  const saved = await trySave(tools, decision.revision, decision.runtime);
+  if (saved.ok) {
+    return { accepted: true };
+  }
+  const again = await responseCreatedDecision(tools, pending, claimed, responseId);
+  if (again.kind !== "save") {
+    return { accepted: again.kind === "idempotent" };
+  }
+  const retried = await trySave(tools, again.revision, again.runtime);
+  return { accepted: retried.ok };
+}
+
+async function responseCreatedDecision(
+  tools: ReconcileTools,
+  pending: PendingChat,
+  claimed: RimProviderRuntime,
+  responseId: ProviderResponseId,
+): Promise<
+  | { kind: "save"; revision: number; runtime: RimProviderRuntime }
+  | { kind: "idempotent" }
+  | { kind: "reject" }
+> {
+  const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
+  const current = pendingChat(loaded.snapshot);
+  const claimedAttempt = claimed.attempt;
+  if (!current || !claimedAttempt) {
+    return { kind: "reject" };
+  }
+  if (
+    current.chat.id !== pending.chat.id ||
+    current.snapshot.requestId !== pending.snapshot.requestId ||
+    current.snapshot.requestId !== claimedAttempt.requestId
+  ) {
+    return { kind: "reject" };
+  }
+  const parsed = parseRimProviderRuntime(loaded.rimProviderRuntime);
+  const applicable =
+    parsed.status === "PRESENT" ? applicableRimProviderRuntime(parsed, current.chat.id) : null;
+  if (!applicable || !sameRuntimeIdentity(claimed, applicable)) {
+    return { kind: "reject" };
+  }
+  const attempt = applicable.attempt;
+  if (!attempt || attempt.attemptId !== claimedAttempt.attemptId) {
+    return { kind: "reject" };
+  }
+  if (attempt.requestId !== claimedAttempt.requestId) {
+    return { kind: "reject" };
+  }
+  if (attempt.submissionState === "response-id-known") {
+    return attempt.responseId === responseId ? { kind: "idempotent" } : { kind: "reject" };
+  }
+  if (attempt.submissionState !== "acceptance-unknown") {
+    return { kind: "reject" };
+  }
+  return {
+    kind: "save",
+    revision: loaded.revision,
+    runtime: withAttempt(applicable, {
       requestId: attempt.requestId,
       attemptId: attempt.attemptId,
-      submissionState: "returned-body-observed",
+      submissionState: "response-id-known",
+      responseId,
       clientRequestId: attempt.clientRequestId,
     }),
-  );
+  };
+}
+
+async function responseIdentityAfterThrow(
+  tools: ReconcileTools,
+  claimed: RimProviderRuntime,
+): Promise<"known" | "unknown" | "unreadable"> {
+  const claimedAttempt = claimed.attempt;
+  if (!claimedAttempt) {
+    return "unreadable";
+  }
+  const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
+  const parsed = parseRimProviderRuntime(loaded.rimProviderRuntime);
+  if (parsed.status !== "PRESENT") {
+    return parsed.status === "INVALID" ? "unreadable" : "unknown";
+  }
+  const attempt = parsed.runtime.attempt;
+  if (!attempt || attempt.attemptId !== claimedAttempt.attemptId) {
+    return "unknown";
+  }
+  if (attempt.requestId !== claimedAttempt.requestId) {
+    return "unknown";
+  }
+  if (attempt.submissionState === "response-id-known") {
+    return "known";
+  }
+  if (attempt.submissionState === "returned-body-observed" && attempt.responseId !== undefined) {
+    return "known";
+  }
+  return "unknown";
+}
+
+async function persistReturnedBody(
+  tools: ReconcileTools,
+  claimed: RimProviderRuntime,
+): Promise<{ ok: true; loaded: LoadedSnapshot } | { ok: false; reason: "conflict" | "rejected" }> {
+  const claimedAttempt = claimed.attempt;
+  if (!claimedAttempt) {
+    return { ok: false, reason: "rejected" };
+  }
+  const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
+  const current = pendingChat(loaded.snapshot);
+  const parsed = parseRimProviderRuntime(loaded.rimProviderRuntime);
+  const applicable =
+    parsed.status === "PRESENT" && current
+      ? applicableRimProviderRuntime(parsed, current.chat.id)
+      : null;
+  const attempt = applicable?.attempt;
+  if (!current || !applicable || !attempt || !sameRuntimeIdentity(claimed, applicable)) {
+    return { ok: false, reason: "rejected" };
+  }
+  if (
+    attempt.attemptId !== claimedAttempt.attemptId ||
+    attempt.requestId !== claimedAttempt.requestId ||
+    current.snapshot.requestId !== claimedAttempt.requestId
+  ) {
+    return { ok: false, reason: "rejected" };
+  }
+  const observed =
+    attempt.submissionState === "acceptance-unknown"
+      ? {
+          requestId: attempt.requestId,
+          attemptId: attempt.attemptId,
+          submissionState: "returned-body-observed" as const,
+          clientRequestId: attempt.clientRequestId,
+        }
+      : attempt.submissionState === "response-id-known"
+        ? {
+            requestId: attempt.requestId,
+            attemptId: attempt.attemptId,
+            submissionState: "returned-body-observed" as const,
+            responseId: attempt.responseId,
+            clientRequestId: attempt.clientRequestId,
+          }
+        : null;
+  if (!observed) {
+    return { ok: false, reason: "rejected" };
+  }
+  const saved = await trySave(tools, loaded.revision, withAttempt(applicable, observed));
+  return saved.ok ? saved : { ok: false, reason: "conflict" };
+}
+
+function sameRuntimeIdentity(claimed: RimProviderRuntime, loaded: RimProviderRuntime): boolean {
+  if (
+    claimed.rimChatId !== loaded.rimChatId ||
+    claimed.selectedContactId !== loaded.selectedContactId ||
+    claimed.contextRequestId !== loaded.contextRequestId ||
+    claimed.continuityMode !== loaded.continuityMode ||
+    claimed.retiredAttemptId !== loaded.retiredAttemptId
+  ) {
+    return false;
+  }
+  const left = claimed.initialization;
+  const right = loaded.initialization;
+  if (left.submissionState !== right.submissionState || left.attemptId !== right.attemptId) {
+    return false;
+  }
+  if (left.submissionState === "stored" && right.submissionState === "stored") {
+    return left.conversationId === right.conversationId;
+  }
+  return true;
+}
+
+function nonEmptyResponseId(value: ProviderResponseId): boolean {
+  return typeof value === "string" && value.length > 0;
 }
 
 function ambiguousClaim(runtime: RimProviderRuntime): boolean {

@@ -9,8 +9,8 @@ import type {
   RimConversationInitializationRequest,
   RimConversationInitializationResult,
 } from "./rim-conversation-port.ts";
-import type { ProviderConversationId } from "./rim-provider-runtime.ts";
-import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
+import type { ProviderConversationId, ProviderResponseId } from "./rim-provider-runtime.ts";
+import type { RimAiPort, RimAiRequest, RimAiResponseObserver } from "./rim-ai-port.ts";
 
 export class FakeRimAiFailure extends Error {
   readonly failure: Failure;
@@ -23,13 +23,14 @@ export class FakeRimAiFailure extends Error {
 }
 
 export type FakeRimAiStep =
-  | { readonly kind: "MESSAGE"; readonly text: string }
+  | { readonly kind: "MESSAGE"; readonly text: string; readonly responseId?: string }
   | {
       readonly kind: "BAN_PROPOSALS";
       readonly message: string;
       readonly proposals: ThreeSuggestions;
+      readonly responseId?: string;
     }
-  | { readonly kind: "FAILURE"; readonly failure: Failure };
+  | { readonly kind: "FAILURE"; readonly failure: Failure; readonly responseId?: string };
 
 /**
  * One Conversation create. There is no hidden retry.
@@ -105,10 +106,13 @@ export class FakeRimAiAdapter implements RimAiPort, RimConversationInitializatio
     return { conversationId: conversationIdOf(request, step.conversationId) };
   }
 
-  async respond(request: RimAiRequest): Promise<RimAiResult> {
+  async respond(request: RimAiRequest, observer?: RimAiResponseObserver): Promise<RimAiResult> {
     const scripted = this.steps[this.index];
     if (scripted) {
       this.index += 1;
+      if (scripted.responseId && observer) {
+        await observer.onResponseCreated(scripted.responseId as ProviderResponseId);
+      }
       return stepToResult(scripted);
     }
     const userText = scriptedUserText(request);
