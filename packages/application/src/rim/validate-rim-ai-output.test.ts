@@ -417,7 +417,10 @@ describe("RIM AI output validation gate", () => {
     const followed = await continueRimEffects(retried, tools);
     expect(seen).toHaveLength(1);
     expect(seen[0]?.requestId).toBe(failedRequestId);
-    expect(seen[0]?.userMessage).toBe("почему так");
+    if (seen[0]?.continuityMode !== "provider-conversation") {
+      throw new Error("expected provider continuation");
+    }
+    expect(seen[0].userMessage).toBe("почему так");
     expect(followed.event.name).toBe("RIM.PRESS_RETRY_AI");
     expect(followed.traces.some((trace) => trace.eventId === "E-58")).toBe(false);
     expect(followed.traces.some((trace) => trace.eventId === "E-64")).toBe(false);

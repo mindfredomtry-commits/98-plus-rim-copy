@@ -262,7 +262,10 @@ describe("Feature 9 Ask RIM vertical", () => {
     if (proposals?.kind !== "BAN_PROPOSALS") return;
     expect(rimAi.requests).toHaveLength(1);
     expect(rimAi.requests[0]?.conversationalOrigin).toEqual(opened.rimChat?.askRimOrigin);
-    expect(rimAi.requests[0]?.userMessage).toBe("предложи");
+    if (rimAi.requests[0]?.continuityMode !== "provider-conversation") {
+      throw new Error("expected provider continuation");
+    }
+    expect(rimAi.requests[0].userMessage).toBe("предложи");
     const proposalId = proposals.proposals[0]!.proposalId;
     const frozen = requireDiagnostics(
       await dispatch(app.url, USER_B_TG, "RIM.PRESS_SUGGESTION_FORBID", {

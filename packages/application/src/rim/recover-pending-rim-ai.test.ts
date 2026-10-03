@@ -47,7 +47,12 @@ import {
 import { continueRimEffects } from "./continue-rim.ts";
 import { FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
 import { recoverPendingRimAi } from "./recover-pending-rim-ai.ts";
-import { projectLocalCanonicalHistory, type RimAiPort, type RimAiRequest } from "./rim-ai-port.ts";
+import {
+  localModelFacingHistory,
+  projectLocalCanonicalHistory,
+  type RimAiPort,
+  type RimAiRequest,
+} from "./rim-ai-port.ts";
 import {
   assertProviderReadySemantics,
   PRODUCT_SEMANTICS_UNAVAILABLE,
@@ -633,7 +638,7 @@ describe("pending RIM AI recovery", () => {
     expect(local?.continuityMode).toBe("local-canonical-history");
     expect(local && "conversationId" in local).toBe(false);
     expect(local?.requestId).toBe(AI_REQUEST_ID);
-    expect(local?.userMessage).toBe("привет");
+    expect(local && "userMessage" in local).toBe(false);
     const transitioned = await readRuntime(store, USER_ID);
     const nextAttempt = transitioned.runtime.attempt;
     expect(transitioned.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
@@ -1636,6 +1641,7 @@ describe("DC-02 ambiguity transition", () => {
     expect(restored.snapshot.extended.rimChat?.id).toBe(chat.id);
     expect(restored.snapshot.extended.rimChat?.selectedContactId).toBe(CONTACT_A);
     expect(restored.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(seen).toEqual([]);
     const resumed = await recoverPendingRimAi({
       context: opened.context,
       deps: opened.deps,
@@ -1690,6 +1696,67 @@ describe("DC-02 ambiguity transition", () => {
       conversationId: "conv-next",
     });
   });
+
+  it.each(["acceptance-unknown", "returned-body-observed"] as const)(
+    "does not execute a frozen local %s attempt when Back restores the chat",
+    async (submissionState) => {
+      const chat = pendingChat();
+      const opened = await installPending(chat);
+      const seeded: RimProviderRuntime = {
+        ...localRuntime(chat),
+        attempt: {
+          requestId: AI_REQUEST_ID,
+          attemptId: attempt("attempt-local"),
+          submissionState,
+          clientRequestId: null,
+        },
+      };
+      await opened.store.saveRimProviderRuntime(USER_ID, opened.installed.revision, seeded);
+      const base = chatSnapshot(chat);
+      const frozen: ProductSnapshot = {
+        ...withControlState(base, "CREATE_BAN.WHAT.RIM"),
+        extended: {
+          ...base.extended,
+          rimChat: chat,
+          savedFrozenRimChat: chat,
+        },
+      };
+      await opened.kit.installFixtureSnapshot(USER_ID, frozen);
+      const seen: RimAiRequest[] = [];
+      expect(
+        await recoverPendingRimAi({
+          context: opened.context,
+          deps: opened.deps,
+          rimAi: port(seen),
+          retrieval: null,
+        }),
+      ).toBeNull();
+      expect(seen).toEqual([]);
+      const restored = await executeProductEvent(
+        { context: opened.context, event: eventOf("CREATE_BAN.PRESS_BACK") },
+        opened.deps,
+      );
+      expect(restored.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+      expect(
+        await recoverPendingRimAi({
+          context: opened.context,
+          deps: opened.deps,
+          rimAi: port(seen),
+          retrieval: null,
+        }),
+      ).toBeNull();
+      expect(seen).toEqual([]);
+      const kept = await readRuntime(opened.store, USER_ID);
+      expect(kept.runtime).toEqual(seeded);
+      expect(kept.runtime.continuityMode).toBe("local-canonical-history");
+      expect(kept.runtime.attempt?.submissionState).toBe(submissionState);
+      expect(kept.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
+      expect(kept.loaded.snapshot.extended.rimChat?.aiOperation).toMatchObject({
+        status: "PENDING",
+        requestId: AI_REQUEST_ID,
+      });
+    },
+  );
 
   it("executes one seeded local attempt from frozen canonical history", async () => {
     expect(localSeparatesConversationId).toBe(true);
@@ -1763,7 +1830,13 @@ describe("DC-02 ambiguity transition", () => {
     expect(request.productSemantics).toBe(PRODUCT_SEMANTICS_UNAVAILABLE);
     expect(() => assertProviderReadySemantics(request)).toThrow(/not provider-ready/);
     expect(request.canonicalHistory).toEqual(projectLocalCanonicalHistory(chat.messages));
-    expect(request.canonicalHistory.filter((entry) => entry.kind === "USER")).toEqual([
+    expect("userMessage" in request).toBe(false);
+    const facing = localModelFacingHistory(request);
+    expect(facing).toBe(request.canonicalHistory);
+    expect(facing.filter((entry) => entry.kind === "USER" && entry.text === "сейчас")).toHaveLength(
+      1,
+    );
+    expect(facing.filter((entry) => entry.kind === "USER")).toEqual([
       { kind: "USER", text: "раньше" },
       { kind: "USER", text: "сейчас" },
     ]);
@@ -1896,6 +1969,45 @@ describe("DC-02 ambiguity transition", () => {
     expect((await readRuntime(opened.store, USER_ID)).runtime).toEqual(seeded);
   });
 
+  it("fails closed when a local runtime context id differs from the ready context", async () => {
+    const chat = pendingChat();
+    const opened = await installPending(chat);
+    const seeded: RimProviderRuntime = {
+      ...localRuntime(chat),
+      contextRequestId: "context-other" as ContextRequestId,
+    };
+    await opened.store.saveRimProviderRuntime(USER_ID, opened.installed.revision, seeded);
+    const seen: RimAiRequest[] = [];
+    let initialized = false;
+    expect(
+      await recoverPendingRimAi({
+        context: opened.context,
+        deps: opened.deps,
+        rimAi: port(seen),
+        conversation: {
+          async initialize() {
+            initialized = true;
+            throw new Error("initializer called");
+          },
+        },
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect(initialized).toBe(false);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime).toEqual(seeded);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+    expect(storedConversationId(after.runtime.initialization)).toBe("conv-stored-1");
+    expect(after.runtime.contextRequestId).toBe("context-other");
+    expect(after.loaded.snapshot.extended.rimChat?.relationshipContext?.requestId).toBe(REQUEST_ID);
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation).toMatchObject({
+      status: "PENDING",
+      requestId: AI_REQUEST_ID,
+    });
+  });
+
   it("lets exactly one caller execute a local attempt", async () => {
     const { store, context, deps, chat } = await installPending();
     await store.saveRimProviderRuntime(
@@ -1996,7 +2108,7 @@ describe("DC-02 ambiguity transition", () => {
     expect(seen).toHaveLength(1);
   });
 
-  it("does not allocate another attempt when a claimed local call throws", async () => {
+  it("leaves a thrown local call pending on the same acceptance-unknown attempt", async () => {
     const { store, context, deps, chat } = await installPending();
     await store.saveRimProviderRuntime(
       USER_ID,
@@ -2004,7 +2116,8 @@ describe("DC-02 ambiguity transition", () => {
       localRuntime(chat),
     );
     const seen: RimAiRequest[] = [];
-    const failed = await recoverPendingRimAi({
+    let initialized = false;
+    const thrown = await recoverPendingRimAi({
       context,
       deps,
       rimAi: {
@@ -2013,53 +2126,75 @@ describe("DC-02 ambiguity transition", () => {
           throw new Error("local down");
         },
       },
+      conversation: {
+        async initialize() {
+          initialized = true;
+          throw new Error("initializer called");
+        },
+      },
       retrieval: null,
     });
-    expect(failed?.event.name).toBe("RIM.AI_REQUEST_FAILED");
-    expect(failed?.traces.some((trace) => trace.eventId === "E-59")).toBe(true);
-    expect(failed?.traces.some((trace) => trace.eventId === "E-54")).toBe(false);
+    expect(thrown).toBeNull();
+    expect(initialized).toBe(false);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.continuityMode).toBe("local-canonical-history");
+    expect(seen[0] && "conversationId" in seen[0]).toBe(false);
     const after = await readRuntime(store, USER_ID);
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation).toMatchObject({
+      status: "PENDING",
+      requestId: AI_REQUEST_ID,
+    });
     expect(after.runtime.continuityMode).toBe("local-canonical-history");
     expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+    expect(storedConversationId(after.runtime.initialization)).toBe("conv-stored-1");
     expect(after.runtime.attempt).toMatchObject({
       attemptId: attempt("attempt-local"),
       submissionState: "acceptance-unknown",
       requestId: AI_REQUEST_ID,
     });
     expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
-    expect(
-      await recoverPendingRimAi({
-        context,
-        deps: { ...deps, allocateId: counterAllocator(80) },
-        rimAi: port(seen),
-        retrieval: null,
-      }),
-    ).toBeNull();
-    const chatFailed = after.loaded.snapshot.extended.rimChat;
-    if (!chatFailed || chatFailed.aiOperation.status !== "FAILED") {
-      throw new Error("expected a failed local attempt");
-    }
     const retried = await executeProductEvent(
       {
         context,
-        event: eventOf("RIM.PRESS_RETRY_AI", { failedRequestId: chatFailed.aiOperation.requestId }),
+        event: eventOf("RIM.PRESS_RETRY_AI", { failedRequestId: AI_REQUEST_ID }),
       },
       deps,
     );
-    const followed = await continueRimEffects(retried, {
+    expect(retried.status).toBe("KERNEL_INVARIANT");
+    expect(retried.outcome).toBe("KERNEL_INVARIANT");
+    expect(retried.persisted).toBe(false);
+    expect(retried.effects).toEqual([]);
+    expect(retried.traces).toEqual([]);
+    expect(retried.kernelError?.code).toBe("NO_BRANCH_MATCHED");
+    expect(retried.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    const kitRestart = PersistenceTestKit.inMemory();
+    kitRestart.establishIdentity(USER_ID, "tg-user");
+    const source = await store.loadProductSnapshot(USER_ID);
+    const installed = await kitRestart.installFixtureSnapshot(USER_ID, source.snapshot);
+    await kitRestart.store.saveRimProviderRuntime(
+      USER_ID,
+      installed.revision,
+      source.rimProviderRuntime,
+    );
+    const restartSeen: RimAiRequest[] = [];
+    const restarted = await recoverPendingRimAi({
       context,
-      deps: { ...deps, allocateId: counterAllocator(90) },
-      rimAi: port(seen),
-      contextFailures: { remainingFailures: 0 },
-      loadSources: async () => [],
+      deps: {
+        store: kitRestart.store,
+        clock: deps.clock,
+        allocateId: counterAllocator(80),
+      },
+      rimAi: port(restartSeen),
+      retrieval: null,
     });
-    expect(followed.event.name).toBe("RIM.PRESS_RETRY_AI");
-    expect(followed.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
-    expect(seen).toHaveLength(1);
-    const kept = await readRuntime(store, USER_ID);
-    expect(kept.runtime.continuityMode).toBe("local-canonical-history");
-    expect(kept.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
-    expect(kept.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+    expect(restarted).toBeNull();
+    expect(restartSeen).toEqual([]);
+    const kept = await readRuntime(kitRestart.store, USER_ID);
+    expect(kept.loaded.snapshot.extended.rimChat?.aiOperation).toMatchObject({
+      status: "PENDING",
+      requestId: AI_REQUEST_ID,
+    });
+    expect(kept.runtime).toEqual(after.runtime);
   });
 
   it("executes a later USER turn through the same local chat without C1", async () => {
@@ -2119,7 +2254,12 @@ describe("DC-02 ambiguity transition", () => {
       throw new Error("expected later local execution");
     }
     expect(later.requestId).not.toBe(firstLocal.requestId);
-    expect(later.userMessage).toBe("ещё");
+    expect("userMessage" in later).toBe(false);
+    expect(
+      localModelFacingHistory(later).filter(
+        (entry) => entry.kind === "USER" && entry.text === "ещё",
+      ),
+    ).toHaveLength(1);
     expect(later.rimChatId).toBe(chatId);
     expect(later.contextRequestId).toBe(contextRequestId);
     expect(later.relationshipContext).toEqual(firstLocal.relationshipContext);

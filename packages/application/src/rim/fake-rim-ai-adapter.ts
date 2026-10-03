@@ -111,15 +111,33 @@ export class FakeRimAiAdapter implements RimAiPort, RimConversationInitializatio
       this.index += 1;
       return stepToResult(scripted);
     }
-    if (request.userMessage.toLowerCase().includes("предложи")) {
+    const userText = scriptedUserText(request);
+    if (userText.toLowerCase().includes("предложи")) {
       return {
         kind: "BAN_PROPOSALS",
         message: "три запрета",
         proposals: DEFAULT_PROPOSALS,
       };
     }
-    return { kind: "MESSAGE", text: request.userMessage };
+    return { kind: "MESSAGE", text: userText };
   }
+}
+
+/**
+ * Fake echo text. A local request has no separate user message: the current
+ * USER turn is the last USER entry already inside canonical history.
+ */
+function scriptedUserText(request: RimAiRequest): string {
+  if (request.continuityMode === "provider-conversation") {
+    return request.userMessage;
+  }
+  for (let index = request.canonicalHistory.length - 1; index >= 0; index -= 1) {
+    const entry = request.canonicalHistory[index];
+    if (entry?.kind === "USER") {
+      return entry.text;
+    }
+  }
+  return "";
 }
 
 function conversationIdOf(

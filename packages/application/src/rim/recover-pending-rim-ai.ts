@@ -135,8 +135,9 @@ export async function continuePendingRimAi(
  * to local-canonical-history. That new not-submitted attempt is claimed and
  * executed from Application canonical history, without the stored conversation id.
  * A live provider throw with no durable responseId takes that same path and does
- * not dispatch E-59 for the provider call. A later local throw uses the existing
- * terminal failure path and does not allocate another attempt or switch mode.
+ * not dispatch E-59 for the provider call. A later local throw also does not
+ * dispatch E-59: the same attempt stays acceptance-unknown and Product stays
+ * PENDING. That unresolved local ambiguity is not a logical terminal failure.
  * A durably observed returned body is not that ambiguity, including after restart.
  */
 export async function recoverPendingRimAi(
@@ -413,6 +414,9 @@ async function submitClaimed(
     if (ambiguousClaim(runtime)) {
       return AMBIGUOUS_PROVIDER_ATTEMPT;
     }
+    if (runtime.continuityMode === "local-canonical-history") {
+      return null;
+    }
     const failure =
       error instanceof FakeRimAiFailure
         ? error.failure
@@ -679,7 +683,6 @@ function localRequest(
     continuityMode: "local-canonical-history",
     requestId: pending.snapshot.requestId,
     rimChatId: pending.snapshot.rimChatId,
-    userMessage: pending.snapshot.userMessage,
     contextRequestId: pending.snapshot.contextRequestId,
     relationshipContext,
     conversationalOrigin: pending.chat.askRimOrigin,

@@ -48,8 +48,9 @@ export type LocalCanonicalHistoryEntry =
 /**
  * Stateless USER-turn execution from Application-owned canonical facts.
  * There is no conversationId. The retired provider Conversation is not an input.
- * `canonicalHistory` already contains the current USER turn when E-52 appended it.
- * `userMessage` is the same turn at the port boundary and is not a second copy.
+ * `canonicalHistory` is the complete model-facing semantic history. E-52 has
+ * already appended the current USER turn, so that history contains it once.
+ * This request has no second user-message field to serialize.
  * Prompt and semantics may still be unavailable placeholders. A real provider
  * transport must reject those through `assertProviderReadySemantics`.
  */
@@ -57,7 +58,6 @@ export type LocalRimAiRequest = Readonly<{
   continuityMode: "local-canonical-history";
   requestId: AiRequestId;
   rimChatId: RimChatId;
-  userMessage: string;
   contextRequestId: ContextRequestId;
   relationshipContext: RelationshipContextData;
   conversationalOrigin: AskRimOrigin | null;
@@ -67,6 +67,16 @@ export type LocalRimAiRequest = Readonly<{
 }>;
 
 export type RimAiRequest = ProviderRimAiRequest | LocalRimAiRequest;
+
+/**
+ * The only semantic history a local model call may send.
+ * It already includes the current USER turn. Callers must not append another.
+ */
+export function localModelFacingHistory(
+  request: LocalRimAiRequest,
+): readonly LocalCanonicalHistoryEntry[] {
+  return request.canonicalHistory;
+}
 
 /** Projects committed Product messages. It does not append the current USER again. */
 export function projectLocalCanonicalHistory(

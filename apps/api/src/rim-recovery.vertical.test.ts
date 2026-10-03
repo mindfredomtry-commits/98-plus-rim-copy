@@ -118,9 +118,9 @@ describe("RIM AI recovery hooks", () => {
     expect(seen[0]?.continuityMode).toBe("provider-conversation");
     if (seen[0]?.continuityMode === "provider-conversation") {
       expect(seen[0].conversationId).toBe("conv-hook");
+      expect(seen[0].userMessage).toBe("привет");
     }
     expect(seen[0]?.requestId).toBe(chat.aiOperation.requestId);
-    expect(seen[0]?.userMessage).toBe("привет");
     expect(opened.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
     expect(
       opened.loaded.snapshot.extended.rimChat?.messages.filter(
@@ -171,7 +171,13 @@ describe("RIM AI recovery hooks", () => {
     expect(seen[0]?.continuityMode).toBe("local-canonical-history");
     expect(seen[0] && "conversationId" in seen[0]).toBe(false);
     expect(seen[0]?.requestId).toBe(chat.aiOperation.requestId);
-    expect(seen[0]?.userMessage).toBe("привет");
+    if (seen[0]?.continuityMode === "local-canonical-history") {
+      expect(
+        seen[0].canonicalHistory.filter(
+          (entry) => entry.kind === "USER" && entry.text === "привет",
+        ),
+      ).toHaveLength(1);
+    }
     expect(opened.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
     expect(
       opened.loaded.snapshot.extended.rimChat?.messages.filter(

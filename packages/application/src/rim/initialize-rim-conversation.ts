@@ -80,6 +80,11 @@ export async function reconcileRimInitialization(
   const applicable =
     parsed.status === "PRESENT" ? applicableRimProviderRuntime(parsed, ready.chat.id) : null;
   if (!applicable || !runtimeMatches(applicable, ready)) {
+    // A local RimChat keeps its frozen context. A correlation mismatch must not
+    // replace that runtime with a new provider Conversation.
+    if (applicable?.continuityMode === "local-canonical-history") {
+      return null;
+    }
     const created = notSubmittedRuntime(ready, tools.deps.allocateId);
     const saved = await trySave(tools, loaded.revision, created);
     if (!saved.ok) {

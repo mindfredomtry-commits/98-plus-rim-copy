@@ -28,7 +28,7 @@ export type {
   RimProviderRetrieval,
   RimProviderRetrievalPort,
 } from "./rim/rim-provider-retrieval.ts";
-export { projectLocalCanonicalHistory } from "./rim/rim-ai-port.ts";
+export { localModelFacingHistory, projectLocalCanonicalHistory } from "./rim/rim-ai-port.ts";
 export type {
   LocalCanonicalHistoryEntry,
   LocalRimAiRequest,
