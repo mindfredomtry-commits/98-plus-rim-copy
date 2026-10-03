@@ -170,6 +170,8 @@ function runtimeFor(
     contextRequestId: requestId,
     initialization,
     attempt: null,
+    continuityMode: "provider-conversation",
+    retiredAttemptId: null,
   };
 }
 
@@ -256,6 +258,8 @@ describe("DC-01 conversation initialization", () => {
       clientRequestId: request?.clientRequestId,
     });
     expect(runtime.attempt).toBeNull();
+    expect(runtime.continuityMode).toBe("provider-conversation");
+    expect(runtime.retiredAttemptId).toBeNull();
     expect(runtime.rimChatId).toBe(ready.snapshot.extended.rimChat?.id);
     const again = await reconcileRimInitialization(senderTools(app, fake, log));
     expect(again).toBeNull();

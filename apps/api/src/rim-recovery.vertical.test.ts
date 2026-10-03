@@ -91,6 +91,8 @@ function notSubmittedRuntime(
       submissionState,
       clientRequestId: "hook-client",
     },
+    continuityMode: "provider-conversation",
+    retiredAttemptId: null,
   };
 }
 

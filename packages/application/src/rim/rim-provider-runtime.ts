@@ -78,8 +78,18 @@ export type RimProviderAttempt =
     };
 
 /**
+ * Application conversational continuity for one RimChat.
+ * Not a Product Control State and not a Product Event.
+ * `local-canonical-history` is representable. No path enters it yet.
+ */
+export type RimContinuityMode = "provider-conversation" | "local-canonical-history";
+
+/**
  * Application runtime for one RimChatId.
  * Not part of Product RimChat, ProductSnapshot, or the Product Engine.
+ * `continuityMode` defaults to provider-conversation.
+ * `retiredAttemptId` names a prior technical attempt of the same logical request.
+ * It is not a second requestId. Null means no attempt has been retired.
  */
 export type RimProviderRuntime = Readonly<{
   rimChatId: RimChatId;
@@ -87,6 +97,8 @@ export type RimProviderRuntime = Readonly<{
   contextRequestId: ContextRequestId;
   initialization: RimProviderInitialization;
   attempt: RimProviderAttempt | null;
+  continuityMode: RimContinuityMode;
+  retiredAttemptId: RimProviderAttemptId | null;
 }>;
 
 export type RimProviderRuntimeRejection = "not-an-object" | "shape" | "initialization" | "attempt";
@@ -250,11 +262,17 @@ export function parseRimProviderRuntime(value: unknown): RimProviderRuntimeParse
       "contextRequestId",
       "initialization",
       "attempt",
+      "continuityMode",
+      "retiredAttemptId",
     ]) ||
     !nonEmptyString(value.rimChatId) ||
     !nonEmptyString(value.selectedContactId) ||
     !nonEmptyString(value.contextRequestId)
   ) {
+    return { status: "INVALID", reason: "shape" };
+  }
+  const continuity = parseContinuity(value);
+  if (!continuity) {
     return { status: "INVALID", reason: "shape" };
   }
   const initialization = parseInitialization(value.initialization);
@@ -274,6 +292,8 @@ export function parseRimProviderRuntime(value: unknown): RimProviderRuntimeParse
         contextRequestId: value.contextRequestId as ContextRequestId,
         initialization,
         attempt,
+        continuityMode: continuity.continuityMode,
+        retiredAttemptId: continuity.retiredAttemptId,
       },
     };
   }
@@ -285,7 +305,40 @@ export function parseRimProviderRuntime(value: unknown): RimProviderRuntimeParse
       contextRequestId: value.contextRequestId as ContextRequestId,
       initialization,
       attempt: null,
+      continuityMode: continuity.continuityMode,
+      retiredAttemptId: continuity.retiredAttemptId,
     },
+  };
+}
+
+/**
+ * DC-01 rows omit both fields. Absence is provider-conversation and no retired attempt.
+ * A present mode must be one of the two literals. A present retired id must be a string or null.
+ */
+function parseContinuity(value: Record<string, unknown>): {
+  continuityMode: RimContinuityMode;
+  retiredAttemptId: RimProviderAttemptId | null;
+} | null {
+  let continuityMode: RimContinuityMode;
+  if (value.continuityMode === undefined) {
+    continuityMode = "provider-conversation";
+  } else if (
+    value.continuityMode === "provider-conversation" ||
+    value.continuityMode === "local-canonical-history"
+  ) {
+    continuityMode = value.continuityMode;
+  } else {
+    return null;
+  }
+  if (value.retiredAttemptId === undefined || value.retiredAttemptId === null) {
+    return { continuityMode, retiredAttemptId: null };
+  }
+  if (!nonEmptyString(value.retiredAttemptId)) {
+    return null;
+  }
+  return {
+    continuityMode,
+    retiredAttemptId: value.retiredAttemptId as RimProviderAttemptId,
   };
 }
 

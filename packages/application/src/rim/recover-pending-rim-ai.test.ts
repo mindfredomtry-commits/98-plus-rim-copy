@@ -115,6 +115,8 @@ function runtimeFor(
     contextRequestId: chat.relationshipContext?.requestId ?? REQUEST_ID,
     initialization,
     attempt: providerAttempt,
+    continuityMode: "provider-conversation",
+    retiredAttemptId: null,
   };
 }
 

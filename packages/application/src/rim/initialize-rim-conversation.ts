@@ -137,6 +137,8 @@ function notSubmittedRuntime(
       clientRequestId: allocateId("rim-client-request"),
     },
     attempt: null,
+    continuityMode: "provider-conversation",
+    retiredAttemptId: null,
   };
 }
 
@@ -175,6 +177,8 @@ async function claimAndInitialize(
         clientRequestId: runtime.initialization.clientRequestId,
       },
       attempt: runtime.attempt,
+      continuityMode: runtime.continuityMode,
+      retiredAttemptId: runtime.retiredAttemptId,
     };
     const saved = await trySave(tools, loaded.revision, claimed);
     if (!saved.ok) {
@@ -246,6 +250,8 @@ async function persistStoredInitialization(
       clientRequestId: request.clientRequestId,
     },
     attempt: current.attempt,
+    continuityMode: current.continuityMode,
+    retiredAttemptId: current.retiredAttemptId,
   };
   const saved = await trySave(tools, loaded.revision, stored);
   if (!saved.ok) {

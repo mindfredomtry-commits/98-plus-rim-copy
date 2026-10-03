@@ -423,6 +423,8 @@ function withAttempt(runtime: RimProviderRuntime, attempt: RimProviderAttempt): 
     contextRequestId: runtime.contextRequestId,
     initialization: runtime.initialization,
     attempt,
+    continuityMode: runtime.continuityMode,
+    retiredAttemptId: runtime.retiredAttemptId,
   };
 }
 

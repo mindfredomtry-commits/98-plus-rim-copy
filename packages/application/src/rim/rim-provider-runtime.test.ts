@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MemorySqlClient, type ProductStore } from "@98plus/persistence";
 import {
+  CANONICAL_EVENT_COUNT,
+  MATRIX_CONTRACT_ROWS,
+  PRODUCT_CONTROL_STATE_COUNT,
   emptySnapshot,
   reduce,
   type CanonicalEvent,
@@ -39,6 +42,7 @@ import {
   parseRimProviderRuntime,
   type ProviderConversationId,
   type ProviderResponseId,
+  type RimContinuityMode,
   type RimProviderAttempt,
   type RimProviderAttemptId,
   type RimProviderInitialization,
@@ -72,6 +76,8 @@ function runtimeFor(
     contextRequestId: chat.relationshipContext?.requestId ?? REQUEST_ID,
     initialization,
     attempt,
+    continuityMode: "provider-conversation",
+    retiredAttemptId: null,
   };
 }
 
@@ -487,4 +493,154 @@ describe("RimProviderRuntime applicability", () => {
     );
     expect(applicableRimProviderRuntime({ status: "ABSENT" }, chat.id)).toBeNull();
   });
+});
+
+describe("DC-02 continuity runtime", () => {
+  function dc01Record(initialization: RimProviderInitialization, attempt: unknown = null) {
+    const chat = readyChat();
+    return {
+      rimChatId: chat.id,
+      selectedContactId: CONTACT_A,
+      contextRequestId: chat.relationshipContext?.requestId ?? REQUEST_ID,
+      initialization,
+      attempt,
+    };
+  }
+
+  function attempt(submission: RimProviderAttempt["submissionState"]): RimProviderAttempt {
+    if (submission === "response-id-known") {
+      return {
+        requestId: AI_REQUEST_ID,
+        attemptId: attemptId("attempt-1"),
+        submissionState: submission,
+        responseId: RESPONSE_ID as ProviderResponseId,
+        clientRequestId: null,
+      };
+    }
+    if (submission === "completed-retrieved") {
+      return {
+        requestId: AI_REQUEST_ID,
+        attemptId: attemptId("attempt-1"),
+        submissionState: submission,
+        responseId: RESPONSE_ID as ProviderResponseId,
+        providerStatus: "completed",
+        clientRequestId: null,
+      };
+    }
+    return {
+      requestId: AI_REQUEST_ID,
+      attemptId: attemptId("attempt-1"),
+      submissionState: submission,
+      clientRequestId: null,
+    };
+  }
+
+  it("keeps the frozen Product counts", () => {
+    expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+  });
+
+  it.each(["not-submitted", "acceptance-unknown", "stored"] as const)(
+    "parses DC-01 initialization %s without continuity fields as provider-conversation",
+    (submissionState) => {
+      const initialization: RimProviderInitialization =
+        submissionState === "stored"
+          ? storedInitialization()
+          : {
+              submissionState,
+              attemptId: attemptId("init-1"),
+              clientRequestId: null,
+            };
+      const parsed = parseRimProviderRuntime(dc01Record(initialization));
+      expect(parsed.status).toBe("PRESENT");
+      if (parsed.status !== "PRESENT") {
+        return;
+      }
+      expect(parsed.runtime.continuityMode).toBe("provider-conversation");
+      expect(parsed.runtime.retiredAttemptId).toBeNull();
+      expect(parsed.runtime.initialization).toEqual(initialization);
+      if (
+        submissionState === "stored" &&
+        parsed.runtime.initialization.submissionState === "stored"
+      ) {
+        expect(parsed.runtime.initialization.conversationId).toBe(CONV_ID);
+      }
+    },
+  );
+
+  it.each([
+    "not-submitted",
+    "acceptance-unknown",
+    "response-id-known",
+    "completed-retrieved",
+  ] as const)("parses DC-01 USER attempt %s without continuity fields", (submissionState) => {
+    const userAttempt = attempt(submissionState);
+    const parsed = parseRimProviderRuntime(dc01Record(storedInitialization(), userAttempt));
+    expect(parsed.status).toBe("PRESENT");
+    if (parsed.status !== "PRESENT") {
+      return;
+    }
+    expect(parsed.runtime.continuityMode).toBe("provider-conversation");
+    expect(parsed.runtime.retiredAttemptId).toBeNull();
+    expect(parsed.runtime.attempt).toEqual(userAttempt);
+  });
+
+  it("rejects an unknown continuity mode and a blank retired attempt id", () => {
+    const chat = readyChat();
+    const runtime = runtimeFor(chat);
+    expect(parseRimProviderRuntime({ ...runtime, continuityMode: "c2" }).status).toBe("INVALID");
+    expect(parseRimProviderRuntime({ ...runtime, retiredAttemptId: "" }).status).toBe("INVALID");
+  });
+
+  it.each(["sql", "memory"] as const)(
+    "round-trips both continuity modes and a retired attempt id (%s)",
+    async (kind) => {
+      const harness = await openStore(kind);
+      const chat = readyChat();
+      const seeded = await harness.install(USER_ID, chatSnapshot(chat));
+      const legacy = dc01Record(storedInitialization());
+      const legacySaved = await harness.store.saveRimProviderRuntime(
+        USER_ID,
+        seeded.revision,
+        legacy,
+      );
+      const legacyParsed = parseRimProviderRuntime(legacySaved.rimProviderRuntime);
+      expect(legacyParsed.status).toBe("PRESENT");
+      if (legacyParsed.status !== "PRESENT") {
+        return;
+      }
+      expect(legacyParsed.runtime.continuityMode).toBe("provider-conversation");
+      expect(legacyParsed.runtime.retiredAttemptId).toBeNull();
+      expect(legacySaved.rimProviderRuntime).not.toHaveProperty("continuityMode");
+      expect(legacyParsed.runtime.initialization).toMatchObject({
+        submissionState: "stored",
+        conversationId: CONV_ID,
+      });
+
+      const modes: readonly RimContinuityMode[] = [
+        "provider-conversation",
+        "local-canonical-history",
+      ];
+      let revision = legacySaved.revision;
+      for (const continuityMode of modes) {
+        const retiredAttemptId =
+          continuityMode === "local-canonical-history" ? attemptId("attempt-retired") : null;
+        const runtime: RimProviderRuntime = {
+          ...runtimeFor(chat),
+          continuityMode,
+          retiredAttemptId,
+        };
+        const saved = await harness.store.saveRimProviderRuntime(USER_ID, revision, runtime);
+        revision = saved.revision;
+        const reloaded = await harness.store.loadProductSnapshot(USER_ID);
+        expect(presentRuntime(reloaded.rimProviderRuntime, chat.id)).toEqual(runtime);
+        if (continuityMode === "local-canonical-history") {
+          expect(
+            presentRuntime(reloaded.rimProviderRuntime, chat.id)?.initialization,
+          ).toMatchObject({ submissionState: "stored", conversationId: CONV_ID });
+        }
+      }
+    },
+  );
 });

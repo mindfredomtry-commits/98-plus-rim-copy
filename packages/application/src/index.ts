@@ -56,6 +56,7 @@ export type {
   RetrievedProviderStatus,
   RimProviderAttempt,
   RimProviderAttemptId,
+  RimContinuityMode,
   RimProviderInitialization,
   RimProviderRuntime,
   RimProviderRuntimeParse,
