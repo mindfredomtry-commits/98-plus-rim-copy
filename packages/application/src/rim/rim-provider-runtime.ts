@@ -80,7 +80,7 @@ export type RimProviderAttempt =
 /**
  * Application conversational continuity for one RimChat.
  * Not a Product Control State and not a Product Event.
- * `local-canonical-history` is representable. No path enters it yet.
+ * `local-canonical-history` is entered once, by the DC-02 ambiguity transition.
  */
 export type RimContinuityMode = "provider-conversation" | "local-canonical-history";
 

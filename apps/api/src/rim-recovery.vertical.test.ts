@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type {
-  ProviderConversationId,
-  RimAiRequest,
-  RimProviderAttemptId,
-  RimProviderRuntime,
+import {
+  applicableRimProviderRuntime,
+  parseRimProviderRuntime,
+  type ProviderConversationId,
+  type RimAiRequest,
+  type RimProviderAttemptId,
+  type RimProviderRuntime,
 } from "@98plus/application";
 import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 import { executeIncomingOverboardVertical } from "./overboard.ts";
@@ -156,9 +158,23 @@ describe("RIM AI recovery hooks", () => {
       notSubmittedRuntime(chat, "acceptance-unknown"),
     );
     await openLobbyIfNeeded(runtime, context);
+    const once = await runtime.productStore.loadProductSnapshot(context.currentUserId);
+    const transitioned = applicableRimProviderRuntime(
+      parseRimProviderRuntime(once.rimProviderRuntime),
+      chat.id,
+    );
     await openLobbyIfNeeded(runtime, context);
     const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
+    const settled = applicableRimProviderRuntime(
+      parseRimProviderRuntime(loaded.rimProviderRuntime),
+      chat.id,
+    );
     expect(seen).toEqual([]);
     expect(loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(transitioned?.continuityMode).toBe("local-canonical-history");
+    expect(transitioned?.retiredAttemptId).toBe("attempt-hook");
+    expect(transitioned?.attempt?.submissionState).toBe("not-submitted");
+    expect(transitioned?.attempt?.requestId).toBe(chat.aiOperation.requestId);
+    expect(settled).toEqual(transitioned);
   });
 });

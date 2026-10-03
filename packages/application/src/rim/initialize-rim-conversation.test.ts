@@ -807,8 +807,20 @@ describe("DC-01 conversation initialization", () => {
     expect(loaded.snapshot.controlState).toBe("RIM.CHAT");
     expect(loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
     const runtime = (await presentRuntime(opened.store, USER_ID)).runtime;
-    expect(runtime.initialization.submissionState).toBe("stored");
-    expect(runtime.attempt?.submissionState).toBe("acceptance-unknown");
+    expect(runtime.initialization).toEqual({
+      submissionState: "stored",
+      attemptId: attempt("init-user"),
+      conversationId: conversation("conv-user"),
+      clientRequestId: "client-init",
+    });
+    expect(runtime.continuityMode).toBe("local-canonical-history");
+    expect(runtime.retiredAttemptId).toBe(attempt("attempt-user"));
+    expect(runtime.attempt?.attemptId).not.toBe(attempt("attempt-user"));
+    expect(runtime.attempt).toMatchObject({
+      requestId: AI_REQUEST_ID,
+      submissionState: "not-submitted",
+    });
+    expect(loaded.snapshot.extended.rimChat?.messages).toEqual([{ kind: "USER", text: "привет" }]);
   });
 
   it("routes pending USER work without a runtime through initialization and still does not respond", async () => {
@@ -849,6 +861,8 @@ describe("DC-01 conversation initialization", () => {
     const runtime = (await presentRuntime(opened.store, USER_ID)).runtime;
     expect(runtime.initialization.submissionState).toBe("stored");
     expect(runtime.attempt).toBeNull();
+    expect(runtime.continuityMode).toBe("provider-conversation");
+    expect(runtime.retiredAttemptId).toBeNull();
   });
 
   it("keeps an ordinary selector on Select Contact when initialization is unrecoverable", async () => {

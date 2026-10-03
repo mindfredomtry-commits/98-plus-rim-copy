@@ -14,12 +14,7 @@ import {
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import { listenCreateBanContactServer } from "./http.ts";
 import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
-import {
-  authenticateRuntime,
-  createCreateBanContactRuntime,
-  executeAuthenticatedEvent,
-  userIdOf,
-} from "./runtime.ts";
+import { createCreateBanContactRuntime, userIdOf } from "./runtime.ts";
 
 const USER_A_TG = "1001";
 const USER_B_TG = "1002";
@@ -213,9 +208,7 @@ describe("Feature 9 Ask RIM vertical", () => {
   });
 
   it("opens Ask RIM from the receiver Status, sends with origin, and returns to that item", async () => {
-    const { app, rimAi } = await start([
-      { kind: "FAILURE", failure: { code: "RIM_AI_FAILED" } as never },
-    ]);
+    const { app, rimAi } = await start();
     const { banId, statusItem } = await reachReceiverOverboard(app);
     const senderId = userId(app, USER_A_TG);
 
@@ -262,52 +255,14 @@ describe("Feature 9 Ask RIM vertical", () => {
     expect(sameChat.rimChat?.id).toBe(opened.rimChat?.id);
     expect(sameChat.rimChat?.askRimOrigin).toEqual(opened.rimChat?.askRimOrigin);
 
-    await dispatch(app.url, USER_B_TG, "RIM.CHANGE_INPUT_DRAFT", { inputDraft: "почему так" });
-    const failed = requireDiagnostics(await dispatch(app.url, USER_B_TG, "RIM.PRESS_SEND"));
-    expect(failed.rimChat?.aiOperation.status).toBe("FAILED");
-    expect(rimAi.requests).toHaveLength(1);
-    expect(rimAi.requests[0]?.conversationalOrigin).toEqual(opened.rimChat?.askRimOrigin);
-    expect(rimAi.requests[0]?.userMessage).toBe("почему так");
-    const failedRequestId =
-      failed.rimChat?.aiOperation.status === "FAILED" ? failed.rimChat.aiOperation.requestId : null;
-    const recovered = requireDiagnostics(
-      await dispatch(app.url, USER_B_TG, "RIM.PRESS_RETRY_AI", { failedRequestId }),
-    );
-    expect(recovered.rimChat?.aiOperation.status).toBe("PENDING");
-    expect(
-      recovered.rimChat?.aiOperation.status === "PENDING"
-        ? recovered.rimChat.aiOperation.requestId
-        : null,
-    ).toBe(failedRequestId);
-    expect(recovered.rimChat?.messages.filter((message) => message.kind === "USER")).toEqual([
-      { kind: "USER", text: "почему так" },
-    ]);
-    expect(rimAi.requests).toHaveLength(1);
-    if (!failedRequestId || !recovered.rimChat) {
-      throw new Error("expected the same logical request to stay pending");
-    }
-    const context = await authenticateRuntime(app.runtime, {
-      method: "development",
-      secret: DEV_SECRET,
-      telegramUserId: USER_B_TG,
-    });
-    const closed = await executeAuthenticatedEvent(app.runtime, context, {
-      name: "RIM.AI_RESULT_RECEIVED",
-      payload: {
-        rimChatId: recovered.rimChat.id,
-        requestId: failedRequestId,
-        result: { kind: "MESSAGE", text: "закрыто" },
-      },
-    });
-    expect(closed.status).toBe("APPLIED");
-    expect(rimAi.requests).toHaveLength(1);
-
     await dispatch(app.url, USER_B_TG, "RIM.CHANGE_INPUT_DRAFT", { inputDraft: "предложи" });
     const proposed = requireDiagnostics(await dispatch(app.url, USER_B_TG, "RIM.PRESS_SEND"));
     const proposals = proposed.rimChat?.messages.at(-1);
     expect(proposals?.kind).toBe("BAN_PROPOSALS");
     if (proposals?.kind !== "BAN_PROPOSALS") return;
-    expect(rimAi.requests[1]?.conversationalOrigin).toEqual(opened.rimChat?.askRimOrigin);
+    expect(rimAi.requests).toHaveLength(1);
+    expect(rimAi.requests[0]?.conversationalOrigin).toEqual(opened.rimChat?.askRimOrigin);
+    expect(rimAi.requests[0]?.userMessage).toBe("предложи");
     const proposalId = proposals.proposals[0]!.proposalId;
     const frozen = requireDiagnostics(
       await dispatch(app.url, USER_B_TG, "RIM.PRESS_SUGGESTION_FORBID", {
