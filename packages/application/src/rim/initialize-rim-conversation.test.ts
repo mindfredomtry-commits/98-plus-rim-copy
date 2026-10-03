@@ -708,7 +708,11 @@ describe("DC-01 conversation initialization", () => {
     expect(readyFake.initializationRequests).toHaveLength(1);
     const turn = readyFake.respondRequests[0];
     const initialized = readyFake.initializationRequests[0];
-    expect(turn?.conversationId).toBe(conversation("conv-then-user"));
+    expect(turn?.continuityMode).toBe("provider-conversation");
+    if (turn?.continuityMode !== "provider-conversation") {
+      throw new Error("expected provider continuation");
+    }
+    expect(turn.conversationId).toBe(conversation("conv-then-user"));
     expect(turn && "rimPrompt" in turn).toBe(false);
     expect(turn && "productSemantics" in turn).toBe(false);
     expect(turn?.contextRequestId).toBe(initialized?.contextRequestId);
@@ -780,13 +784,13 @@ describe("DC-01 conversation initialization", () => {
     });
     const log: RimInitializationObservation[] = [];
     let initialized = false;
-    let responded = false;
+    const seen: RimAiRequest[] = [];
     const settled = await recoverPendingRimAi({
       context: opened.context,
       deps: opened.deps,
       rimAi: {
-        async respond() {
-          responded = true;
+        async respond(request) {
+          seen.push(request);
           throw new Error("respond called");
         },
       },
@@ -799,14 +803,19 @@ describe("DC-01 conversation initialization", () => {
       initializationLog: log,
       retrieval: null,
     });
-    expect(settled).toBeNull();
+    expect(settled?.event.name).toBe("RIM.AI_REQUEST_FAILED");
+    expect(settled?.traces.some((trace) => trace.eventId === "E-59")).toBe(true);
+    expect(settled?.traces.some((trace) => trace.eventId === "E-64")).toBe(false);
     expect(initialized).toBe(false);
-    expect(responded).toBe(false);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.continuityMode).toBe("local-canonical-history");
+    expect(seen[0] && "conversationId" in seen[0]).toBe(false);
     expect(log).toEqual([]);
     const loaded = await opened.store.loadProductSnapshot(USER_ID);
     expect(loaded.snapshot.controlState).toBe("RIM.CHAT");
-    expect(loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("FAILED");
     const runtime = (await presentRuntime(opened.store, USER_ID)).runtime;
+    const localAttemptId = runtime.attempt?.attemptId;
     expect(runtime.initialization).toEqual({
       submissionState: "stored",
       attemptId: attempt("init-user"),
@@ -815,12 +824,29 @@ describe("DC-01 conversation initialization", () => {
     });
     expect(runtime.continuityMode).toBe("local-canonical-history");
     expect(runtime.retiredAttemptId).toBe(attempt("attempt-user"));
-    expect(runtime.attempt?.attemptId).not.toBe(attempt("attempt-user"));
+    expect(localAttemptId).not.toBe(attempt("attempt-user"));
     expect(runtime.attempt).toMatchObject({
       requestId: AI_REQUEST_ID,
-      submissionState: "not-submitted",
+      submissionState: "acceptance-unknown",
     });
     expect(loaded.snapshot.extended.rimChat?.messages).toEqual([{ kind: "USER", text: "привет" }]);
+    const again = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: {
+        async respond(request) {
+          seen.push(request);
+          throw new Error("respond called");
+        },
+      },
+      initializationLog: log,
+      retrieval: null,
+    });
+    expect(again).toBeNull();
+    expect(seen).toHaveLength(1);
+    expect((await presentRuntime(opened.store, USER_ID)).runtime.attempt?.attemptId).toBe(
+      localAttemptId,
+    );
   });
 
   it("routes pending USER work without a runtime through initialization and still does not respond", async () => {

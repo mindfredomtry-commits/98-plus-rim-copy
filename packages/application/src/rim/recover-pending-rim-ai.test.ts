@@ -8,23 +8,32 @@ import {
   counterAllocator,
   emptySnapshot,
   type AiRequestId,
+  type ContextRequestId,
+  type ExecutionProbability,
   type ProductSnapshot,
+  type ProposalId,
   type RimChat,
   type RimChatId,
   type UserId,
 } from "@98plus/product-model";
 import {
   AI_REQUEST_ID,
+  BAN_ID,
   CHAT_ID,
   CONTACT_A,
   CONTACT_B,
   REQUEST_ID,
+  STATUS_ITEM_ID,
   USER_ID,
+  defaultEvent,
   makeChat,
   pendingAi,
+  pendingOp,
   readyContext,
+  validCreateDraft,
   withChat,
   withControlState,
+  withOperation,
 } from "../../../product-model/src/kernel.fixtures.ts";
 import { executeProductEvent, type ProductExecutorDependencies } from "../execute.ts";
 import {
@@ -38,8 +47,13 @@ import {
 import { continueRimEffects } from "./continue-rim.ts";
 import { FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
 import { recoverPendingRimAi } from "./recover-pending-rim-ai.ts";
-import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
-import type { RimConversationInitializationPort } from "./rim-conversation-port.ts";
+import { projectLocalCanonicalHistory, type RimAiPort, type RimAiRequest } from "./rim-ai-port.ts";
+import {
+  assertProviderReadySemantics,
+  PRODUCT_SEMANTICS_UNAVAILABLE,
+  RIM_PROMPT_UNAVAILABLE,
+  type RimConversationInitializationPort,
+} from "./rim-conversation-port.ts";
 import type { RimProviderRetrievalPort } from "./rim-provider-retrieval.ts";
 import {
   applicableRimProviderRuntime,
@@ -123,6 +137,36 @@ function runtimeFor(
     retiredAttemptId: null,
   };
 }
+
+function storedConversationId(initialization: RimProviderRuntime["initialization"]): string {
+  if (initialization.submissionState !== "stored") {
+    throw new Error("expected stored initialization");
+  }
+  return initialization.conversationId;
+}
+
+function localRuntime(chat: RimChat, attemptId = "attempt-local"): RimProviderRuntime {
+  const requestId =
+    chat.aiOperation.status === "PENDING" ? chat.aiOperation.requestId : AI_REQUEST_ID;
+  return {
+    ...runtimeFor(chat, "not-submitted"),
+    continuityMode: "local-canonical-history",
+    retiredAttemptId: attempt("attempt-retired"),
+    attempt: {
+      requestId,
+      attemptId: attempt(attemptId),
+      submissionState: "not-submitted",
+      clientRequestId: null,
+    },
+  };
+}
+
+const localSeparatesConversationId: "conversationId" extends keyof Extract<
+  RimAiRequest,
+  { continuityMode: "local-canonical-history" }
+>
+  ? never
+  : true = true;
 
 function chatSnapshot(
   chat: RimChat,
@@ -352,14 +396,20 @@ describe("pending RIM AI recovery", () => {
     });
     expect(states).toEqual(["not-submitted", "acceptance-unknown", "returned-body-observed"]);
     expect(order).toEqual(["respond"]);
-    expect(seen[0]?.requestId).toBe(effect.requestId);
-    expect(seen[0]?.userMessage).toBe("привет");
+    expect(seen[0]?.continuityMode).toBe("provider-conversation");
+    if (seen[0]?.continuityMode !== "provider-conversation") {
+      throw new Error("expected provider continuation");
+    }
+    expect("canonicalHistory" in seen[0]).toBe(false);
+    expect(seen[0].requestId).toBe(effect.requestId);
+    expect(seen[0].userMessage).toBe("привет");
     expect(userTexts(settled.snapshot.extended.rimChat)).toEqual(["привет"]);
     expect(settled.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
     expect(settled.traces.some((trace) => trace.eventId === "E-54")).toBe(false);
     expect(settled.traces.some((trace) => trace.eventId === "E-58")).toBe(true);
     expect(settled.event.name).not.toBe("RIM.PRESS_RETRY_AI");
     const after = await readRuntime(app.store, SENDER_ID);
+    expect(seen[0].conversationId).toBe(storedConversationId(after.runtime.initialization));
     expect(after.runtime.continuityMode).toBe("provider-conversation");
     expect(after.runtime.retiredAttemptId).toBeNull();
     expect(after.runtime.attempt?.submissionState).toBe("returned-body-observed");
@@ -540,7 +590,7 @@ describe("pending RIM AI recovery", () => {
     expect(after.runtime.attempt?.submissionState).toBe("returned-body-observed");
   });
 
-  it("reaches the same local row from a restarted acceptance-unknown request without a live flight", async () => {
+  it("executes the transitioned local attempt once, without a second USER or Conversation", async () => {
     const { store, context, deps, chat } = await installPending();
     const seeded = await store.loadProductSnapshot(USER_ID);
     const before = runtimeFor(chat, "acceptance-unknown");
@@ -556,31 +606,49 @@ describe("pending RIM AI recovery", () => {
     const first = await recoverPendingRimAi({
       context,
       deps,
-      rimAi: port(seen),
+      rimAi: {
+        async respond(request) {
+          seen.push(request);
+          const loaded = await store.loadProductSnapshot(USER_ID);
+          const runtime = applicableRimProviderRuntime(
+            parseRimProviderRuntime(loaded.rimProviderRuntime),
+            request.rimChatId,
+          );
+          expect(runtime?.continuityMode).toBe("local-canonical-history");
+          expect(runtime?.attempt?.submissionState).toBe("acceptance-unknown");
+          expect(runtime?.attempt?.requestId).toBe(AI_REQUEST_ID);
+          expect(runtime?.retiredAttemptId).toBe(attempt("attempt-1"));
+          return { kind: "MESSAGE", text: "слышу" };
+        },
+      },
       conversation,
       retrieval: null,
     });
-    expect(first).toBeNull();
-    expect(seen).toEqual([]);
+    expect(first?.event.name).toBe("RIM.AI_RESULT_RECEIVED");
+    expect(first?.traces.some((trace) => trace.eventId === "E-58")).toBe(true);
+    expect(first?.traces.some((trace) => trace.eventId === "E-59")).toBe(false);
     expect(initialized).toBe(false);
+    expect(seen).toHaveLength(1);
+    const local = seen[0];
+    expect(local?.continuityMode).toBe("local-canonical-history");
+    expect(local && "conversationId" in local).toBe(false);
+    expect(local?.requestId).toBe(AI_REQUEST_ID);
+    expect(local?.userMessage).toBe("привет");
     const transitioned = await readRuntime(store, USER_ID);
     const nextAttempt = transitioned.runtime.attempt;
-    expect(transitioned.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(transitioned.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
     expect(userTexts(transitioned.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
     expect(transitioned.runtime.continuityMode).toBe("local-canonical-history");
     expect(transitioned.runtime.retiredAttemptId).toBe(attempt("attempt-1"));
     expect(nextAttempt?.attemptId).not.toBe(attempt("attempt-1"));
     expect(nextAttempt).toMatchObject({
       requestId: AI_REQUEST_ID,
-      submissionState: "not-submitted",
+      submissionState: "returned-body-observed",
     });
     expect(transitioned.runtime.initialization).toEqual(before.initialization);
     expect(transitioned.runtime.rimChatId).toBe(chat.id);
     expect(transitioned.runtime.selectedContactId).toBe(chat.selectedContactId);
     expect(transitioned.runtime.contextRequestId).toBe(before.contextRequestId);
-    expect(transitioned.loaded.snapshot.controlState).toBe("RIM.CHAT");
-    const reloaded = await readRuntime(store, USER_ID);
-    expect(reloaded.runtime).toEqual(transitioned.runtime);
     for (let time = 0; time < 2; time += 1) {
       const again = await recoverPendingRimAi({
         context,
@@ -592,12 +660,10 @@ describe("pending RIM AI recovery", () => {
       expect(again).toBeNull();
     }
     const settled = await readRuntime(store, USER_ID);
-    expect(seen).toEqual([]);
+    expect(seen).toHaveLength(1);
     expect(initialized).toBe(false);
     expect(settled.runtime).toEqual(transitioned.runtime);
     expect(settled.runtime.continuityMode).toBe("local-canonical-history");
-    expect(settled.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
-    expect(userTexts(settled.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
   });
 
   it("retrieves a known response without submitting the USER turn", async () => {
@@ -902,10 +968,11 @@ describe("pending RIM AI recovery", () => {
     ).toBe("PENDING");
   });
 
-  it("falls back to local history when the live provider call throws, without E-59 or Retry", async () => {
+  it("executes local history after a live provider throw, without E-59, Retry, or C1", async () => {
     const seen: RimAiRequest[] = [];
     const observed: { store: ProductStore | null } = { store: null };
     let providerAttemptId: string | undefined;
+    let localAttemptId: string | undefined;
     const { app, failed } = await failPendingSend(
       {
         async respond(request) {
@@ -917,11 +984,19 @@ describe("pending RIM AI recovery", () => {
                 request.rimChatId,
               )
             : null;
-          providerAttemptId = runtime?.attempt?.attemptId;
-          throw new FakeRimAiFailure({
-            code: "RIM_AI_FAILED",
-            message: "provider down",
-          } as never);
+          if (seen.length === 1) {
+            providerAttemptId = runtime?.attempt?.attemptId;
+            expect(request.continuityMode).toBe("provider-conversation");
+            throw new FakeRimAiFailure({
+              code: "RIM_AI_FAILED",
+              message: "provider down",
+            } as never);
+          }
+          localAttemptId = runtime?.attempt?.attemptId;
+          expect(runtime?.continuityMode).toBe("local-canonical-history");
+          expect(runtime?.attempt?.submissionState).toBe("acceptance-unknown");
+          expect(request.continuityMode).toBe("local-canonical-history");
+          return { kind: "MESSAGE", text: "локально" };
         },
       },
       observed,
@@ -929,27 +1004,38 @@ describe("pending RIM AI recovery", () => {
     const chat = failed.snapshot.extended.rimChat;
     expect(failed.traces.some((trace) => trace.eventId === "E-59")).toBe(false);
     expect(failed.traces.some((trace) => trace.eventId === "E-54")).toBe(false);
-    expect(failed.event.name).toBe("RIM.PRESS_SEND");
-    expect(chat?.aiOperation.status).toBe("PENDING");
-    if (!chat || chat.aiOperation.status !== "PENDING") {
-      return;
-    }
-    const requestId = chat.aiOperation.requestId;
+    expect(failed.traces.some((trace) => trace.eventId === "E-58")).toBe(true);
+    expect(failed.event.name).toBe("RIM.AI_RESULT_RECEIVED");
+    expect(chat?.aiOperation.status).toBe("IDLE");
     const after = await readRuntime(app.store, SENDER_ID);
-    expect(seen).toHaveLength(1);
-    expect(after.loaded.snapshot.extended.rimChat?.aiOperation).toMatchObject({
-      status: "PENDING",
-      requestId,
-    });
+    const requestId = after.runtime.attempt?.requestId;
+    expect(seen).toHaveLength(2);
+    const providerTurn = seen[0];
+    const localTurn = seen[1];
+    expect(providerTurn?.continuityMode).toBe("provider-conversation");
+    if (providerTurn?.continuityMode !== "provider-conversation") {
+      throw new Error("expected provider continuation");
+    }
+    expect(localTurn?.continuityMode).toBe("local-canonical-history");
+    expect(localTurn && "conversationId" in localTurn).toBe(false);
+    expect(localTurn?.requestId).toBe(providerTurn.requestId);
+    expect(localTurn?.requestId).toBe(requestId);
     expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["почему так"]);
+    expect(after.loaded.snapshot.extended.rimChat?.messages.at(-1)).toEqual({
+      kind: "RIM",
+      text: "локально",
+    });
     expect(after.runtime.continuityMode).toBe("local-canonical-history");
     expect(providerAttemptId).toBeTruthy();
+    expect(localAttemptId).toBeTruthy();
+    expect(localAttemptId).not.toBe(providerAttemptId);
     expect(after.runtime.retiredAttemptId).toBe(providerAttemptId);
-    expect(after.runtime.attempt?.attemptId).not.toBe(providerAttemptId);
+    expect(after.runtime.attempt?.attemptId).toBe(localAttemptId);
     expect(after.runtime.attempt).toMatchObject({
-      submissionState: "not-submitted",
+      submissionState: "returned-body-observed",
       requestId,
     });
+    expect(storedConversationId(after.runtime.initialization)).toBe(providerTurn.conversationId);
     expect(after.runtime.initialization.submissionState).toBe("stored");
     const again = await recoverPendingRimAi({
       context: authContext(SENDER_ID, "tg-sender"),
@@ -962,7 +1048,7 @@ describe("pending RIM AI recovery", () => {
       retrieval: null,
     });
     expect(again).toBeNull();
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(2);
     expect((await readRuntime(app.store, SENDER_ID)).runtime).toEqual(after.runtime);
   });
 
@@ -1550,18 +1636,23 @@ describe("DC-02 ambiguity transition", () => {
     expect(restored.snapshot.extended.rimChat?.id).toBe(chat.id);
     expect(restored.snapshot.extended.rimChat?.selectedContactId).toBe(CONTACT_A);
     expect(restored.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
-    expect(
-      await recoverPendingRimAi({
-        context: opened.context,
-        deps: opened.deps,
-        rimAi: port(seen),
-        retrieval: null,
-      }),
-    ).toBeNull();
+    const resumed = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen),
+      retrieval: null,
+    });
     const kept = await readRuntime(opened.store, USER_ID);
-    expect(seen).toEqual([]);
-    expect(kept.runtime).toEqual(local);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.continuityMode).toBe("local-canonical-history");
+    expect(seen[0] && "conversationId" in seen[0]).toBe(false);
+    expect(seen[0]?.requestId).toBe(AI_REQUEST_ID);
+    expect(resumed?.event.name).toBe("RIM.AI_RESULT_RECEIVED");
     expect(kept.runtime.continuityMode).toBe("local-canonical-history");
+    expect(kept.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+    expect(kept.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
+    expect(storedConversationId(kept.runtime.initialization)).toBe("conv-stored-1");
+    expect(kept.loaded.snapshot.extended.rimChat?.id).toBe(chat.id);
 
     const started = makeChat({
       id: "chat-next" as RimChatId,
@@ -1587,7 +1678,7 @@ describe("DC-02 ambiguity transition", () => {
       }),
     ).toBeNull();
     const next = await readRuntime(opened.store, USER_ID);
-    expect(seen).toEqual([]);
+    expect(seen).toHaveLength(1);
     expect(initialized).toEqual(["chat-next"]);
     expect(next.runtime.rimChatId).toBe(started.id);
     expect(next.runtime.selectedContactId).toBe(CONTACT_A);
@@ -1598,5 +1689,504 @@ describe("DC-02 ambiguity transition", () => {
       submissionState: "stored",
       conversationId: "conv-next",
     });
+  });
+
+  it("executes one seeded local attempt from frozen canonical history", async () => {
+    expect(localSeparatesConversationId).toBe(true);
+    const origin = {
+      sourceStatusItemId: STATUS_ITEM_ID,
+      banId: BAN_ID,
+      status: "BANTASTIC" as const,
+      sourceRole: "RECEIVER" as const,
+    };
+    const proposals = [
+      {
+        proposalId: "p-1" as ProposalId,
+        banText: "не обсуждать работу",
+        executionProbability: 0.2 as ExecutionProbability,
+      },
+      {
+        proposalId: "p-2" as ProposalId,
+        banText: "не опаздывать",
+        executionProbability: 0.5 as ExecutionProbability,
+      },
+      {
+        proposalId: "p-3" as ProposalId,
+        banText: "не повышать голос",
+        executionProbability: 0.8 as ExecutionProbability,
+      },
+    ] as const;
+    const chat = makeChat({
+      selectedContactId: CONTACT_A,
+      relationshipContext: readyContext(),
+      askRimOrigin: origin,
+      messages: [
+        { kind: "USER", text: "раньше" },
+        { kind: "RIM", text: "ответ" },
+        { kind: "BAN_PROPOSALS", message: "три", proposals },
+        { kind: "USER", text: "сейчас" },
+      ],
+      aiOperation: pendingAi({ userMessage: "сейчас" }),
+    });
+    const opened = await installPending(chat);
+    const seeded = localRuntime(chat);
+    await opened.store.saveRimProviderRuntime(USER_ID, opened.installed.revision, seeded);
+    const seen: RimAiRequest[] = [];
+    const saves: unknown[] = [];
+    const settled = await recoverPendingRimAi({
+      context: opened.context,
+      deps: { ...opened.deps, store: watchSaves(opened.store, saves, { count: 0 }) },
+      rimAi: {
+        async respond(request) {
+          seen.push(request);
+          const during = await readRuntime(opened.store, USER_ID);
+          expect(during.runtime.attempt).toMatchObject({
+            attemptId: attempt("attempt-local"),
+            submissionState: "acceptance-unknown",
+            requestId: AI_REQUEST_ID,
+          });
+          return { kind: "MESSAGE", text: "дальше" };
+        },
+      },
+      retrieval: null,
+    });
+    expect(settled?.event.name).toBe("RIM.AI_RESULT_RECEIVED");
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+    const request = seen[0];
+    if (request?.continuityMode !== "local-canonical-history") {
+      throw new Error("expected local execution");
+    }
+    expect(request.relationshipContext).toEqual(chat.relationshipContext?.data);
+    expect(request.conversationalOrigin).toEqual(origin);
+    expect(request.rimPrompt).toBe(RIM_PROMPT_UNAVAILABLE);
+    expect(request.productSemantics).toBe(PRODUCT_SEMANTICS_UNAVAILABLE);
+    expect(() => assertProviderReadySemantics(request)).toThrow(/not provider-ready/);
+    expect(request.canonicalHistory).toEqual(projectLocalCanonicalHistory(chat.messages));
+    expect(request.canonicalHistory.filter((entry) => entry.kind === "USER")).toEqual([
+      { kind: "USER", text: "раньше" },
+      { kind: "USER", text: "сейчас" },
+    ]);
+    expect(request.canonicalHistory).toContainEqual({ kind: "RIM", text: "ответ" });
+    expect(request.canonicalHistory).toContainEqual({
+      kind: "BAN_PROPOSALS",
+      message: "три",
+      proposals: [
+        { banText: "не обсуждать работу", executionProbability: 0.2 },
+        { banText: "не опаздывать", executionProbability: 0.5 },
+        { banText: "не повышать голос", executionProbability: 0.8 },
+      ],
+    });
+    expect(JSON.stringify(request.canonicalHistory)).not.toContain("proposalId");
+    expect(JSON.stringify(request.canonicalHistory)).not.toContain("скрытый-поток");
+    expect(Object.keys(request)).not.toContain("conversationId");
+    const states = saves.map((saved) => {
+      const parsed = parseRimProviderRuntime(saved);
+      return parsed.status === "PRESENT" ? parsed.runtime.attempt?.submissionState : parsed.status;
+    });
+    expect(states).toEqual(["acceptance-unknown", "returned-body-observed"]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
+    expect(storedConversationId(after.runtime.initialization)).toBe("conv-stored-1");
+    expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["раньше", "сейчас"]);
+  });
+
+  it("keeps an ordinary local request without origin and completes BAN_PROPOSALS once", async () => {
+    const chat = pendingChat("предложи");
+    const opened = await installPending(chat);
+    await opened.store.saveRimProviderRuntime(
+      USER_ID,
+      opened.installed.revision,
+      localRuntime(chat),
+    );
+    const seen: RimAiRequest[] = [];
+    const settled = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen, {
+        kind: "BAN_PROPOSALS",
+        message: "три запрета",
+        proposals: [
+          { banText: "не обсуждать работу", executionProbability: 0.2 },
+          { banText: "не опаздывать", executionProbability: 0.5 },
+          { banText: "не повышать голос", executionProbability: 0.8 },
+        ],
+      }),
+      retrieval: null,
+    });
+    expect(seen[0]?.continuityMode).toBe("local-canonical-history");
+    if (seen[0]?.continuityMode !== "local-canonical-history") {
+      throw new Error("expected local execution");
+    }
+    expect(seen[0].conversationalOrigin).toBeNull();
+    expect(settled?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const message = settled?.snapshot.extended.rimChat?.messages.at(-1);
+    expect(message?.kind).toBe("BAN_PROPOSALS");
+    if (message?.kind !== "BAN_PROPOSALS") {
+      return;
+    }
+    expect(new Set(message.proposals.map((item) => item.proposalId)).size).toBe(3);
+    expect(message.proposals.map((item) => item.proposalId)).not.toContain("provider-1");
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
+  });
+
+  it("does not execute a local attempt when the frozen RelationshipContext is missing", async () => {
+    const chat = makeChat({
+      selectedContactId: CONTACT_A,
+      relationshipContext: {
+        selectedContactId: CONTACT_A,
+        status: "error",
+        requestId: REQUEST_ID,
+        data: null,
+        failure: { code: "CONTEXT_FAILED", message: "missing" } as never,
+      },
+      messages: [{ kind: "USER", text: "привет" }],
+      aiOperation: pendingAi({ userMessage: "привет" }),
+    });
+    const opened = await installPending(chat);
+    const seeded = localRuntime(chat);
+    await opened.store.saveRimProviderRuntime(USER_ID, opened.installed.revision, seeded);
+    const seen: RimAiRequest[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context: opened.context,
+        deps: opened.deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect((await readRuntime(opened.store, USER_ID)).runtime).toEqual(seeded);
+  });
+
+  it("does not execute a local attempt when the pending request leaves the frozen context", async () => {
+    const chat = makeChat({
+      selectedContactId: CONTACT_A,
+      relationshipContext: readyContext(),
+      messages: [{ kind: "USER", text: "привет" }],
+      aiOperation: pendingAi({
+        userMessage: "привет",
+        contextRequestId: "context-other" as ContextRequestId,
+      }),
+    });
+    const opened = await installPending(chat);
+    const seeded = localRuntime(chat);
+    await opened.store.saveRimProviderRuntime(USER_ID, opened.installed.revision, seeded);
+    const seen: RimAiRequest[] = [];
+    let initialized = false;
+    expect(
+      await recoverPendingRimAi({
+        context: opened.context,
+        deps: opened.deps,
+        rimAi: port(seen),
+        conversation: {
+          async initialize() {
+            initialized = true;
+            throw new Error("initializer called");
+          },
+        },
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    expect(initialized).toBe(false);
+    expect((await readRuntime(opened.store, USER_ID)).runtime).toEqual(seeded);
+  });
+
+  it("lets exactly one caller execute a local attempt", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      localRuntime(chat),
+    );
+    const seen: RimAiRequest[] = [];
+    const tools = {
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: null,
+    };
+    const [first, second] = await Promise.all([
+      recoverPendingRimAi(tools),
+      recoverPendingRimAi(tools),
+    ]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.continuityMode).toBe("local-canonical-history");
+    const completions = [first, second].filter(
+      (result) => result?.event.name === "RIM.AI_RESULT_RECEIVED",
+    );
+    expect(completions).toHaveLength(1);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
+  });
+
+  it("stores a local returned body before E-58 and does not execute it again", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      localRuntime(chat),
+    );
+    const seen: RimAiRequest[] = [];
+    await expect(
+      recoverPendingRimAi({
+        context,
+        deps: { ...deps, store: interruptAfterReturnedBody(store) },
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).rejects.toThrow("interrupted before product completion");
+    const durable = await readRuntime(store, USER_ID);
+    expect(seen).toHaveLength(1);
+    expect(seen[0] && "conversationId" in seen[0]).toBe(false);
+    expect(durable.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-local"),
+      submissionState: "returned-body-observed",
+      requestId: AI_REQUEST_ID,
+    });
+    expect(durable.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    const again = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen),
+      retrieval: null,
+    });
+    expect(again).toBeNull();
+    expect(seen).toHaveLength(1);
+    expect((await readRuntime(store, USER_ID)).runtime).toEqual(durable.runtime);
+  });
+
+  it("terminally fails invalid local output without another attempt or mode change", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      localRuntime(chat),
+    );
+    const seen: RimAiRequest[] = [];
+    const failed = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: port(seen, { kind: "BAN_PROPOSALS", message: "сломан", proposals: [] }),
+      retrieval: null,
+    });
+    expect(failed?.event.name).toBe("RIM.AI_REQUEST_FAILED");
+    expect(failed?.traces.filter((trace) => trace.eventId === "E-59")).toHaveLength(1);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-local"),
+      submissionState: "returned-body-observed",
+    });
+    expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("does not allocate another attempt when a claimed local call throws", async () => {
+    const { store, context, deps, chat } = await installPending();
+    await store.saveRimProviderRuntime(
+      USER_ID,
+      (await store.loadProductSnapshot(USER_ID)).revision,
+      localRuntime(chat),
+    );
+    const seen: RimAiRequest[] = [];
+    const failed = await recoverPendingRimAi({
+      context,
+      deps,
+      rimAi: {
+        async respond(request) {
+          seen.push(request);
+          throw new Error("local down");
+        },
+      },
+      retrieval: null,
+    });
+    expect(failed?.event.name).toBe("RIM.AI_REQUEST_FAILED");
+    expect(failed?.traces.some((trace) => trace.eventId === "E-59")).toBe(true);
+    expect(failed?.traces.some((trace) => trace.eventId === "E-54")).toBe(false);
+    const after = await readRuntime(store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+    expect(after.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-local"),
+      submissionState: "acceptance-unknown",
+      requestId: AI_REQUEST_ID,
+    });
+    expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
+    expect(
+      await recoverPendingRimAi({
+        context,
+        deps: { ...deps, allocateId: counterAllocator(80) },
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    const chatFailed = after.loaded.snapshot.extended.rimChat;
+    if (!chatFailed || chatFailed.aiOperation.status !== "FAILED") {
+      throw new Error("expected a failed local attempt");
+    }
+    const retried = await executeProductEvent(
+      {
+        context,
+        event: eventOf("RIM.PRESS_RETRY_AI", { failedRequestId: chatFailed.aiOperation.requestId }),
+      },
+      deps,
+    );
+    const followed = await continueRimEffects(retried, {
+      context,
+      deps: { ...deps, allocateId: counterAllocator(90) },
+      rimAi: port(seen),
+      contextFailures: { remainingFailures: 0 },
+      loadSources: async () => [],
+    });
+    expect(followed.event.name).toBe("RIM.PRESS_RETRY_AI");
+    expect(followed.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(seen).toHaveLength(1);
+    const kept = await readRuntime(store, USER_ID);
+    expect(kept.runtime.continuityMode).toBe("local-canonical-history");
+    expect(kept.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));
+    expect(kept.runtime.retiredAttemptId).toBe(attempt("attempt-retired"));
+  });
+
+  it("executes a later USER turn through the same local chat without C1", async () => {
+    const seen: RimAiRequest[] = [];
+    let calls = 0;
+    const { app, failed } = await failPendingSend({
+      async respond(request) {
+        seen.push(request);
+        calls += 1;
+        if (calls === 1) {
+          throw new FakeRimAiFailure({
+            code: "RIM_AI_FAILED",
+            message: "provider down",
+          } as never);
+        }
+        return { kind: "MESSAGE", text: "первый" };
+      },
+    });
+    expect(failed.event.name).toBe("RIM.AI_RESULT_RECEIVED");
+    const firstChat = failed.snapshot.extended.rimChat;
+    const contextRequestId = firstChat?.relationshipContext?.requestId;
+    const chatId = firstChat?.id;
+    await app.sender(eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "ещё" }));
+    const sent = await app.sender(eventOf("RIM.PRESS_SEND"));
+    const settled = await continueRimEffects(sent, {
+      context: authContext(SENDER_ID, "tg-sender"),
+      deps: {
+        store: app.store,
+        clock: { nowMs: () => 2_000_000 },
+        allocateId: counterAllocator(400),
+      },
+      rimAi: {
+        async respond(request) {
+          seen.push(request);
+          const loaded = await app.store.loadProductSnapshot(SENDER_ID);
+          const messages = loaded.snapshot.extended.rimChat?.messages ?? [];
+          if (request.continuityMode === "local-canonical-history") {
+            expect(request.canonicalHistory).toEqual(projectLocalCanonicalHistory(messages));
+          }
+          return { kind: "MESSAGE", text: "второй" };
+        },
+      },
+      contextFailures: { remainingFailures: 0 },
+      loadSources: async () => [],
+    });
+    expect(seen).toHaveLength(3);
+    const providerTurn = seen[0];
+    const firstLocal = seen[1];
+    const later = seen[2];
+    if (providerTurn?.continuityMode !== "provider-conversation") {
+      throw new Error("expected the retired provider turn");
+    }
+    if (
+      firstLocal?.continuityMode !== "local-canonical-history" ||
+      later?.continuityMode !== "local-canonical-history"
+    ) {
+      throw new Error("expected later local execution");
+    }
+    expect(later.requestId).not.toBe(firstLocal.requestId);
+    expect(later.userMessage).toBe("ещё");
+    expect(later.rimChatId).toBe(chatId);
+    expect(later.contextRequestId).toBe(contextRequestId);
+    expect(later.relationshipContext).toEqual(firstLocal.relationshipContext);
+    expect(later.conversationalOrigin).toBeNull();
+    expect("conversationId" in later).toBe(false);
+    expect("conversationId" in firstLocal).toBe(false);
+    expect(JSON.stringify(later)).not.toContain(providerTurn.conversationId);
+    const userTurns = later.canonicalHistory.filter((entry) => entry.kind === "USER");
+    expect(userTurns.filter((entry) => entry.text === "ещё")).toHaveLength(1);
+    expect(later.canonicalHistory).toContainEqual({ kind: "RIM", text: "первый" });
+    expect(userTexts(settled.snapshot.extended.rimChat)).toEqual(["почему так", "ещё"]);
+    expect(settled.snapshot.extended.rimChat?.messages.at(-1)).toEqual({
+      kind: "RIM",
+      text: "второй",
+    });
+    const after = await readRuntime(app.store, SENDER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(storedConversationId(after.runtime.initialization)).toBe(providerTurn.conversationId);
+    expect(after.runtime.rimChatId).toBe(chatId);
+  });
+
+  it("does not execute local history after a successful Ban terminates the chat", async () => {
+    const chat = pendingChat();
+    const confirmBase = withOperation(
+      withControlState(chatSnapshot(chat), "CREATE_BAN.CONFIRM.RIM"),
+      pendingOp({ originatingState: "CREATE_BAN.CONFIRM.RIM" }),
+    );
+    const confirmWorld: ProductSnapshot = {
+      ...confirmBase,
+      extended: {
+        ...confirmBase.extended,
+        rimChat: chat,
+        createBanDraft: validCreateDraft("RIM"),
+        savedFrozenRimChat: chat,
+      },
+    };
+    const opened = await harness();
+    const installed = await opened.kit.installFixtureSnapshot(USER_ID, confirmWorld);
+    const seeded = localRuntime(chat);
+    await opened.store.saveRimProviderRuntime(USER_ID, installed.revision, seeded);
+    const seen: RimAiRequest[] = [];
+    expect(
+      await recoverPendingRimAi({
+        context: opened.context,
+        deps: opened.deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    const banned = await executeProductEvent(
+      { context: opened.context, event: defaultEvent("CREATE_BAN.SEND_CONFIRMED") },
+      opened.deps,
+    );
+    expect(banned.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(banned.snapshot.extended.rimChat).toBeNull();
+    expect(banned.snapshot.extended.savedFrozenRimChat).toBeNull();
+    expect(
+      await recoverPendingRimAi({
+        context: opened.context,
+        deps: opened.deps,
+        rimAi: port(seen),
+        retrieval: null,
+      }),
+    ).toBeNull();
+    expect(seen).toEqual([]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.rimChatId).toBe(chat.id);
   });
 });

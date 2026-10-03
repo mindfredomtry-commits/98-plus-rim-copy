@@ -94,6 +94,32 @@ export function assertProviderReadyInitialization(
   };
 }
 
+export type ProviderReadySemanticInputs = Readonly<{
+  rimPrompt: ProviderReadySemanticArtifact<"rim-prompt">;
+  productSemantics: ProviderReadySemanticArtifact<"product-semantics">;
+}>;
+
+/**
+ * Refuses local canonical execution whose prompt or semantics are still unavailable.
+ * A future provider transport must use this before building a stateless request.
+ * The lifecycle fake does not, because no provider-ready artifacts are minted.
+ */
+export function assertProviderReadySemantics(input: {
+  rimPrompt: RimPromptInput;
+  productSemantics: ProductSemanticsInput;
+}): ProviderReadySemanticInputs {
+  if (
+    !isProviderReadyArtifact(input.rimPrompt, "rim-prompt") ||
+    !isProviderReadyArtifact(input.productSemantics, "product-semantics")
+  ) {
+    throw new Error("RIM local semantic inputs are not provider-ready");
+  }
+  return {
+    rimPrompt: input.rimPrompt,
+    productSemantics: input.productSemantics,
+  };
+}
+
 export type RimConversationInitializationResult = Readonly<{
   conversationId: ProviderConversationId;
 }>;

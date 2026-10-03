@@ -473,7 +473,7 @@ describe("RIM AI output validation gate", () => {
     ]);
   });
 
-  it("does not terminally fail a thrown provider call when no response id is known", async () => {
+  it("completes a thrown provider call through local history instead of E-59", async () => {
     const app = await readyChat();
     const fake = new FakeRimAiAdapter([
       {
@@ -484,12 +484,13 @@ describe("RIM AI output validation gate", () => {
     await app.sender(eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "привет" }));
     const sent = await app.sender(eventOf("RIM.PRESS_SEND"));
     const failed = await continueRimEffects(sent, rimTools(app.store, fake));
-    expect(failed.event.name).toBe("RIM.PRESS_SEND");
-    expect(failed.traces.some((trace) => trace.eventId === "E-58")).toBe(false);
+    expect(failed.event.name).toBe("RIM.AI_RESULT_RECEIVED");
+    expect(failed.traces.some((trace) => trace.eventId === "E-58")).toBe(true);
     expect(failed.traces.some((trace) => trace.eventId === "E-59")).toBe(false);
     expect(failed.traces.some((trace) => trace.eventId === "E-54")).toBe(false);
     const chat = chatOf(failed);
-    expect(chat.aiOperation.status).toBe("PENDING");
+    expect(chat.aiOperation.status).toBe("IDLE");
+    expect(chat.messages.at(-1)).toEqual({ kind: "RIM", text: "привет" });
     expect(proposalIds(chat.messages)).toEqual([]);
     expect(userMessages(chat.messages)).toHaveLength(1);
     const runtime = applicableRimProviderRuntime(
@@ -497,9 +498,8 @@ describe("RIM AI output validation gate", () => {
       chat.id,
     );
     expect(runtime?.continuityMode).toBe("local-canonical-history");
-    expect(runtime?.attempt?.submissionState).toBe("not-submitted");
-    expect(runtime?.attempt?.requestId).toBe(
-      chat.aiOperation.status === "PENDING" ? chat.aiOperation.requestId : undefined,
-    );
+    expect(runtime?.attempt?.submissionState).toBe("returned-body-observed");
+    expect(runtime?.retiredAttemptId).toBeTruthy();
+    expect(runtime?.attempt?.attemptId).not.toBe(runtime?.retiredAttemptId);
   });
 });

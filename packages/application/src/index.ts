@@ -28,9 +28,17 @@ export type {
   RimProviderRetrieval,
   RimProviderRetrievalPort,
 } from "./rim/rim-provider-retrieval.ts";
-export type { RimAiPort, RimAiRequest } from "./rim/rim-ai-port.ts";
+export { projectLocalCanonicalHistory } from "./rim/rim-ai-port.ts";
+export type {
+  LocalCanonicalHistoryEntry,
+  LocalRimAiRequest,
+  ProviderRimAiRequest,
+  RimAiPort,
+  RimAiRequest,
+} from "./rim/rim-ai-port.ts";
 export {
   assertProviderReadyInitialization,
+  assertProviderReadySemantics,
   PRODUCT_SEMANTICS_UNAVAILABLE,
   RIM_PROMPT_UNAVAILABLE,
 } from "./rim/rim-conversation-port.ts";
@@ -38,6 +46,7 @@ export type {
   ProductSemanticsInput,
   ProviderReadyRimConversationInitializationRequest,
   ProviderReadySemanticArtifact,
+  ProviderReadySemanticInputs,
   RimConversationInitializationPort,
   RimConversationInitializationRequest,
   RimConversationInitializationResult,

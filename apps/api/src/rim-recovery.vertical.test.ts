@@ -115,6 +115,10 @@ describe("RIM AI recovery hooks", () => {
     expect(seen).toEqual([]);
     const opened = await openLobbyIfNeeded(runtime, context);
     expect(seen).toHaveLength(1);
+    expect(seen[0]?.continuityMode).toBe("provider-conversation");
+    if (seen[0]?.continuityMode === "provider-conversation") {
+      expect(seen[0].conversationId).toBe("conv-hook");
+    }
     expect(seen[0]?.requestId).toBe(chat.aiOperation.requestId);
     expect(seen[0]?.userMessage).toBe("привет");
     expect(opened.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
@@ -146,7 +150,7 @@ describe("RIM AI recovery hooks", () => {
     expect(seen[0]?.requestId).toBe(chat.aiOperation.requestId);
   });
 
-  it("does not resubmit acceptance-unknown when the session is opened again", async () => {
+  it("executes the local attempt when an acceptance-unknown session is opened", async () => {
     const seen: RimAiRequest[] = [];
     const { runtime, context, chat, sent } = await readyChat(seen);
     if (chat.aiOperation.status !== "PENDING") {
@@ -157,24 +161,39 @@ describe("RIM AI recovery hooks", () => {
       sent.revision,
       notSubmittedRuntime(chat, "acceptance-unknown"),
     );
-    await openLobbyIfNeeded(runtime, context);
+    const opened = await openLobbyIfNeeded(runtime, context);
     const once = await runtime.productStore.loadProductSnapshot(context.currentUserId);
     const transitioned = applicableRimProviderRuntime(
       parseRimProviderRuntime(once.rimProviderRuntime),
       chat.id,
     );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.continuityMode).toBe("local-canonical-history");
+    expect(seen[0] && "conversationId" in seen[0]).toBe(false);
+    expect(seen[0]?.requestId).toBe(chat.aiOperation.requestId);
+    expect(seen[0]?.userMessage).toBe("привет");
+    expect(opened.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("IDLE");
+    expect(
+      opened.loaded.snapshot.extended.rimChat?.messages.filter(
+        (message) => message.kind === "USER",
+      ),
+    ).toEqual([{ kind: "USER", text: "привет" }]);
+    expect(transitioned?.continuityMode).toBe("local-canonical-history");
+    expect(transitioned?.retiredAttemptId).toBe("attempt-hook");
+    if (transitioned?.initialization.submissionState !== "stored") {
+      throw new Error("expected stored initialization");
+    }
+    expect(transitioned.initialization.conversationId).toBe("conv-hook");
+    expect(transitioned?.attempt?.submissionState).toBe("returned-body-observed");
+    expect(transitioned?.attempt?.attemptId).not.toBe("attempt-hook");
+    expect(transitioned?.attempt?.requestId).toBe(chat.aiOperation.requestId);
     await openLobbyIfNeeded(runtime, context);
     const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
     const settled = applicableRimProviderRuntime(
       parseRimProviderRuntime(loaded.rimProviderRuntime),
       chat.id,
     );
-    expect(seen).toEqual([]);
-    expect(loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
-    expect(transitioned?.continuityMode).toBe("local-canonical-history");
-    expect(transitioned?.retiredAttemptId).toBe("attempt-hook");
-    expect(transitioned?.attempt?.submissionState).toBe("not-submitted");
-    expect(transitioned?.attempt?.requestId).toBe(chat.aiOperation.requestId);
+    expect(seen).toHaveLength(1);
     expect(settled).toEqual(transitioned);
   });
 });

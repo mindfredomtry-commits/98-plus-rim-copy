@@ -6,7 +6,15 @@ import {
   type ExecutionProbability,
   type ThreeSuggestions,
 } from "@98plus/product-model";
-import { FakeRimAiAdapter, type FakeRimAiStep } from "@98plus/application";
+import {
+  FakeRimAiAdapter,
+  applicableRimProviderRuntime,
+  parseRimProviderRuntime,
+  type FakeRimAiStep,
+  type RimAiPort,
+  type RimAiRequest,
+  type RimConversationInitializationPort,
+} from "@98plus/application";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import { listenCreateBanContactServer } from "./http.ts";
 import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
@@ -46,9 +54,26 @@ function authHeaders(telegramUserId: string): Record<string, string> {
   };
 }
 
-async function start(steps: readonly FakeRimAiStep[] = [], contextFailures = 0) {
+async function start(
+  steps: readonly FakeRimAiStep[] = [],
+  contextFailures = 0,
+  observed?: { seen: RimAiRequest[]; initializations: number },
+) {
+  const fake = new FakeRimAiAdapter(steps);
+  const recording: RimAiPort & RimConversationInitializationPort = {
+    async respond(request) {
+      observed?.seen.push(request);
+      return fake.respond(request);
+    },
+    async initialize(request) {
+      if (observed) {
+        observed.initializations += 1;
+      }
+      return fake.initialize(request);
+    },
+  };
   const runtime = createCreateBanContactRuntime({
-    rimAi: new FakeRimAiAdapter(steps),
+    rimAi: observed ? recording : fake,
     rimContextFailures: { remainingFailures: contextFailures },
   });
   const app = await listenCreateBanContactServer({
@@ -275,13 +300,15 @@ describe("Feature 8 RIM vertical", () => {
     });
   });
 
-  it("retries a failed context build and keeps an ambiguous AI call pending without Retry", async () => {
+  it("retries a failed context build and completes an ambiguous AI call through local history", async () => {
+    const observed = { seen: [] as RimAiRequest[], initializations: 0 };
     const app = await start(
       [
         { kind: "FAILURE", failure: { code: "RIM_AI_FAILED" } as never },
         { kind: "MESSAGE", text: "повтор" },
       ],
       1,
+      observed,
     );
     const opened = await session(app.url, USER_A_TG);
     expect(opened.controlState).toBe("RIM.LOBBY");
@@ -300,21 +327,43 @@ describe("Feature 8 RIM vertical", () => {
 
     await dispatch(app.url, USER_A_TG, "RIM.CHANGE_INPUT_DRAFT", { inputDraft: "спроси" });
     const aiFailed = await dispatch(app.url, USER_A_TG, "RIM.PRESS_SEND");
-    expect(aiFailed.rimChat?.aiOperation.status).toBe("PENDING");
-    const requestId =
-      aiFailed.rimChat?.aiOperation.status === "PENDING"
-        ? aiFailed.rimChat.aiOperation.requestId
-        : null;
+    expect(aiFailed.rimChat?.aiOperation.status).toBe("IDLE");
     expect(aiFailed.rimChat?.messages.filter((message) => message.kind === "USER")).toEqual([
       { kind: "USER", text: "спроси" },
     ]);
-    expect(aiFailed.rimChat?.messages.at(-1)).toEqual({ kind: "USER", text: "спроси" });
-    expect(
-      aiFailed.rimChat?.messages.some(
-        (message) => message.kind === "RIM" && message.text === "повтор",
-      ),
-    ).toBe(false);
-    expect(requestId).toBeTruthy();
+    expect(aiFailed.rimChat?.messages.at(-1)).toEqual({ kind: "RIM", text: "повтор" });
+    expect(observed.initializations).toBe(1);
+    expect(observed.seen).toHaveLength(2);
+    const providerTurn = observed.seen[0];
+    const localTurn = observed.seen[1];
+    expect(providerTurn?.continuityMode).toBe("provider-conversation");
+    expect(localTurn?.continuityMode).toBe("local-canonical-history");
+    if (
+      providerTurn?.continuityMode !== "provider-conversation" ||
+      localTurn?.continuityMode !== "local-canonical-history"
+    ) {
+      throw new Error("expected provider ambiguity to execute locally");
+    }
+    expect(localTurn.requestId).toBe(providerTurn.requestId);
+    expect("conversationId" in localTurn).toBe(false);
+    expect(JSON.stringify(localTurn)).not.toContain(providerTurn.conversationId);
+    const context = await authenticateRuntime(app.runtime, {
+      method: "development",
+      secret: DEV_SECRET,
+      telegramUserId: USER_A_TG,
+    });
+    const loaded = await app.runtime.productStore.loadProductSnapshot(context.currentUserId);
+    const runtime = applicableRimProviderRuntime(
+      parseRimProviderRuntime(loaded.rimProviderRuntime),
+      aiFailed.rimChat?.id ?? null,
+    );
+    expect(runtime?.continuityMode).toBe("local-canonical-history");
+    if (runtime?.initialization.submissionState !== "stored") {
+      throw new Error("expected stored initialization");
+    }
+    expect(runtime.initialization.conversationId).toBe(providerTurn.conversationId);
+    expect(runtime?.retiredAttemptId).toBeTruthy();
+    expect(runtime?.attempt?.submissionState).toBe("returned-body-observed");
   });
 
   it("ignores a stale context result and a stale AI result", async () => {

@@ -18,8 +18,17 @@ import {
   reconcileRimInitialization,
   type RimInitializationObservation,
 } from "./initialize-rim-conversation.ts";
-import type { RimAiPort, RimAiRequest } from "./rim-ai-port.ts";
-import type { RimConversationInitializationPort } from "./rim-conversation-port.ts";
+import {
+  projectLocalCanonicalHistory,
+  type LocalRimAiRequest,
+  type RimAiPort,
+  type RimAiRequest,
+} from "./rim-ai-port.ts";
+import {
+  PRODUCT_SEMANTICS_UNAVAILABLE,
+  RIM_PROMPT_UNAVAILABLE,
+  type RimConversationInitializationPort,
+} from "./rim-conversation-port.ts";
 import type { RimProviderRetrievalPort } from "./rim-provider-retrieval.ts";
 import {
   applicableRimProviderRuntime,
@@ -36,7 +45,7 @@ import { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./validate-rim-ai-ou
 const MAX_CLAIM_REENTRY = 1;
 
 /**
- * Process-local USER provider calls, keyed by user and technical attemptId.
+ * Process-local USER execution calls, keyed by user and technical attemptId.
  * The entry is registered before the acceptance-unknown claim is written and
  * cleared when that call exits, including its existing completion dispatch.
  * It is not persisted and it is not a Product fact. A restart drops it.
@@ -123,8 +132,11 @@ export async function continuePendingRimAi(
  * Does not create a Product request, append a USER message, or dispatch E-52 or E-54.
  * Recovery does not create a missing USER attempt.
  * An ambiguous provider USER attempt with no in-process flight is switched once
- * to local-canonical-history and left not-submitted. A live provider throw with
- * no durable responseId takes that same path and does not dispatch E-59.
+ * to local-canonical-history. That new not-submitted attempt is claimed and
+ * executed from Application canonical history, without the stored conversation id.
+ * A live provider throw with no durable responseId takes that same path and does
+ * not dispatch E-59 for the provider call. A later local throw uses the existing
+ * terminal failure path and does not allocate another attempt or switch mode.
  * A durably observed returned body is not that ambiguity, including after restart.
  */
 export async function recoverPendingRimAi(
@@ -215,9 +227,6 @@ async function reconcile(
     return null;
   }
   if (applicable.attempt.submissionState === "not-submitted") {
-    if (applicable.continuityMode === "local-canonical-history") {
-      return null;
-    }
     return claimThenSubmit(tools, loaded, applicable, reentry);
   }
   if (applicable.attempt.submissionState === "acceptance-unknown") {
@@ -294,7 +303,7 @@ async function transitionAmbiguousUserAttempt(
   if (!saved.ok) {
     return reentry >= MAX_CLAIM_REENTRY ? null : reconcile(tools, reentry + 1);
   }
-  return null;
+  return claimThenSubmit(tools, saved.loaded, next, reentry);
 }
 
 async function claimThenSubmit(
@@ -303,10 +312,15 @@ async function claimThenSubmit(
   runtime: RimProviderRuntime,
   reentry: number,
 ): Promise<ApplicationExecutionResult | null> {
-  if (runtime.continuityMode === "local-canonical-history") {
+  if (runtime.attempt?.submissionState !== "not-submitted") {
     return null;
   }
-  if (runtime.attempt?.submissionState !== "not-submitted") {
+  const pending = pendingChat(loaded.snapshot);
+  if (!pending || pending.snapshot.requestId !== runtime.attempt.requestId) {
+    return null;
+  }
+  const request = executionRequest(tools, pending, loaded, runtime);
+  if (!request) {
     return null;
   }
   const key = userFlightKey(tools.context.currentUserId, runtime.attempt.attemptId);
@@ -335,9 +349,18 @@ async function claimThenSubmit(
     if (!saved.ok) {
       retry = true;
     } else {
-      const pending = pendingChat(saved.loaded.snapshot);
-      if (pending && pending.snapshot.requestId === claimed.attempt?.requestId) {
-        const submitted = await submitClaimed(tools, pending, saved.loaded, claimed);
+      const pendingAfterClaim = pendingChat(saved.loaded.snapshot);
+      if (
+        pendingAfterClaim &&
+        pendingAfterClaim.snapshot.requestId === claimed.attempt?.requestId
+      ) {
+        const submitted = await submitClaimed(
+          tools,
+          pendingAfterClaim,
+          saved.loaded,
+          claimed,
+          request,
+        );
         if (submitted === AMBIGUOUS_PROVIDER_ATTEMPT) {
           ambiguousFailure = true;
         } else if (submitted === RETURNED_BODY_SAVE_CONFLICT) {
@@ -373,6 +396,7 @@ async function submitClaimed(
   pending: PendingChat,
   loaded: LoadedSnapshot,
   runtime: RimProviderRuntime,
+  request: RimAiRequest,
 ): Promise<
   | ApplicationExecutionResult
   | typeof AMBIGUOUS_PROVIDER_ATTEMPT
@@ -382,24 +406,9 @@ async function submitClaimed(
   if (runtime.initialization.submissionState !== "stored") {
     return null;
   }
-  const data =
-    pending.chat.relationshipContext?.status === "ready"
-      ? pending.chat.relationshipContext.data
-      : null;
-  const origin =
-    tools.origin.kind === "effect"
-      ? tools.origin.value
-      : validAskRimOrigin(loaded.snapshot, tools.context.currentUserId);
   let body: unknown;
   try {
-    body = await tools.rimAi.respond(
-      providerRequest(
-        pending,
-        data ?? EMPTY_CONTEXT,
-        origin,
-        runtime.initialization.conversationId,
-      ),
-    );
+    body = await tools.rimAi.respond(request);
   } catch (error) {
     if (ambiguousClaim(runtime)) {
       return AMBIGUOUS_PROVIDER_ATTEMPT;
@@ -606,6 +615,80 @@ function withAttempt(runtime: RimProviderRuntime, attempt: RimProviderAttempt): 
   };
 }
 
+function executionRequest(
+  tools: ReconcileTools,
+  pending: PendingChat,
+  loaded: LoadedSnapshot,
+  runtime: RimProviderRuntime,
+): RimAiRequest | null {
+  if (runtime.initialization.submissionState !== "stored") {
+    return null;
+  }
+  if (runtime.continuityMode === "local-canonical-history") {
+    const frozen = exactFrozenContext(pending, runtime);
+    if (!frozen) {
+      return null;
+    }
+    return localRequest(pending, frozen);
+  }
+  const data =
+    pending.chat.relationshipContext?.status === "ready"
+      ? pending.chat.relationshipContext.data
+      : null;
+  const origin =
+    tools.origin.kind === "effect"
+      ? tools.origin.value
+      : validAskRimOrigin(loaded.snapshot, tools.context.currentUserId);
+  return providerRequest(
+    pending,
+    data ?? EMPTY_CONTEXT,
+    origin,
+    runtime.initialization.conversationId,
+  );
+}
+
+/**
+ * The frozen ready payload for this RimChat.
+ * A local attempt does not rebuild context and does not borrow an empty payload.
+ */
+function exactFrozenContext(
+  pending: PendingChat,
+  runtime: RimProviderRuntime,
+): RelationshipContextData | null {
+  const context = pending.chat.relationshipContext;
+  if (!context || context.status !== "ready" || context.data === null) {
+    return null;
+  }
+  if (
+    pending.chat.id !== runtime.rimChatId ||
+    pending.chat.selectedContactId !== runtime.selectedContactId ||
+    context.selectedContactId !== runtime.selectedContactId ||
+    context.requestId !== runtime.contextRequestId ||
+    context.requestId !== pending.snapshot.contextRequestId
+  ) {
+    return null;
+  }
+  return context.data;
+}
+
+function localRequest(
+  pending: PendingChat,
+  relationshipContext: RelationshipContextData,
+): LocalRimAiRequest {
+  return {
+    continuityMode: "local-canonical-history",
+    requestId: pending.snapshot.requestId,
+    rimChatId: pending.snapshot.rimChatId,
+    userMessage: pending.snapshot.userMessage,
+    contextRequestId: pending.snapshot.contextRequestId,
+    relationshipContext,
+    conversationalOrigin: pending.chat.askRimOrigin,
+    rimPrompt: RIM_PROMPT_UNAVAILABLE,
+    productSemantics: PRODUCT_SEMANTICS_UNAVAILABLE,
+    canonicalHistory: projectLocalCanonicalHistory(pending.chat.messages),
+  };
+}
+
 function providerRequest(
   pending: PendingChat,
   relationshipContext: RelationshipContextData,
@@ -613,6 +696,7 @@ function providerRequest(
   conversationId: ProviderConversationId,
 ): RimAiRequest {
   return {
+    continuityMode: "provider-conversation",
     requestId: pending.snapshot.requestId,
     rimChatId: pending.snapshot.rimChatId,
     conversationId,
