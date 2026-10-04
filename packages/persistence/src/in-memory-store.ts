@@ -5,8 +5,11 @@ import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { cloneJson, sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
 import { ProductTables } from "./tables.ts";
+import { runtimeAttemptAllowsCommit } from "./runtime-attempt-authority.ts";
 import type {
   CheckPairLockContext,
+  CommitOwnedTransitionInput,
+  CommitOwnedTransitionResult,
   LoadedSnapshot,
   PersistShareLinkResolvedInput,
   PersistShareLinkResolvedResult,
@@ -48,6 +51,37 @@ export class InMemoryProductStore implements ProductStore {
   async persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot> {
     const snapshot = requireApplied(input.result);
     return this.write(input.currentUserId, input.expectedRevision, snapshot, false);
+  }
+
+  async commitOwnedTransition(
+    input: CommitOwnedTransitionInput,
+  ): Promise<CommitOwnedTransitionResult> {
+    const snapshot = requireApplied(input.result);
+    return this.withUserLock(input.currentUserId, () =>
+      this.tables.transaction(() => {
+        const current = this.tables.lockSession(input.currentUserId);
+        if (!current || current.revision !== input.expectedRevision) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        if (!runtimeAttemptAllowsCommit(current.rimProviderRuntime, input.requireAttempt)) {
+          return {
+            status: "ATTEMPT_SUPERSEDED" as const,
+            loaded: this.read(input.currentUserId),
+          };
+        }
+        const loaded = this.writeUnlocked(
+          input.currentUserId,
+          input.expectedRevision,
+          snapshot,
+          false,
+          "rimProviderRuntime" in input ? input.rimProviderRuntime : undefined,
+        );
+        return { status: "COMMITTED" as const, loaded };
+      }),
+    );
   }
 
   async saveRimProviderRuntime(
@@ -295,6 +329,7 @@ export class InMemoryProductStore implements ProductStore {
     expectedRevision: number,
     snapshot: ProductSnapshot,
     seed: boolean,
+    runtimeReplacement?: unknown,
   ): LoadedSnapshot {
     if (!this.tables.hasUser(currentUserId)) {
       throw new PersistenceError(
@@ -337,7 +372,12 @@ export class InMemoryProductStore implements ProductStore {
           current?.telegramPersistentReentryBootstrapClaimedUntilMs ?? null,
         telegramPersistentReentryBootstrapClaimToken:
           current?.telegramPersistentReentryBootstrapClaimToken ?? null,
-        rimProviderRuntime: current?.rimProviderRuntime ?? null,
+        rimProviderRuntime:
+          runtimeReplacement === undefined
+            ? (current?.rimProviderRuntime ?? null)
+            : runtimeReplacement === null
+              ? null
+              : cloneJson(runtimeReplacement),
       }),
     );
     return this.read(currentUserId);

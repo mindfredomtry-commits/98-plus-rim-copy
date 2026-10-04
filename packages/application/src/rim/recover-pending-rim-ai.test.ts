@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { PersistenceError, type ProductStore } from "@98plus/persistence";
+import {
+  PersistenceError,
+  type CommitOwnedTransitionInput,
+  type ProductStore,
+} from "@98plus/persistence";
 import { PersistenceTestKit } from "../../../persistence/src/test-kit.ts";
 import {
   CANONICAL_EVENT_COUNT,
@@ -14,6 +18,7 @@ import {
   type ProposalId,
   type RimChat,
   type RimChatId,
+  type TransitionResult,
   type UserId,
 } from "@98plus/product-model";
 import {
@@ -36,6 +41,7 @@ import {
   withControlState,
   withOperation,
 } from "../../../product-model/src/kernel.fixtures.ts";
+import { ApplicationError } from "../errors.ts";
 import { executeProductEvent, type ProductExecutorDependencies } from "../execute.ts";
 import {
   authContext,
@@ -272,6 +278,14 @@ function interruptAfterReturnedBody(inner: ProductStore): ProductStore {
             throw new Error("interrupted before product completion");
           }
           return target.persistTransition(input);
+        };
+      }
+      if (prop === "commitOwnedTransition") {
+        return async (input: CommitOwnedTransitionInput) => {
+          if (interrupt) {
+            throw new Error("interrupted before product completion");
+          }
+          return target.commitOwnedTransition(input);
         };
       }
       const value = Reflect.get(target, prop, receiver);
@@ -4547,5 +4561,593 @@ describe("DC-03 local retry", () => {
     expect(storedConversationId(after.runtime.initialization)).toBe("conv-new-chat");
     expect(storedConversationId(after.runtime.initialization)).not.toBe(retiredConversation);
     expect(after.runtime.attempt).toBeNull();
+  });
+});
+
+describe("DC-03 retry recovery", () => {
+  function rimTexts(chat: RimChat | null | undefined): string[] {
+    return (chat?.messages ?? []).flatMap((message) =>
+      message.kind === "RIM" ? [message.text] : [],
+    );
+  }
+
+  async function saveRuntime(store: ProductStore, runtime: RimProviderRuntime): Promise<void> {
+    const loaded = await store.loadProductSnapshot(USER_ID);
+    await store.saveRimProviderRuntime(USER_ID, loaded.revision, runtime);
+  }
+
+  async function openFailed(runtime: RimProviderRuntime) {
+    const opened = await installPending(failedChat());
+    await saveRuntime(opened.store, runtime);
+    return opened;
+  }
+
+  async function acceptRetry(opened: Awaited<ReturnType<typeof installPending>>) {
+    return executeProductEvent(
+      {
+        context: opened.context,
+        event: eventOf("RIM.PRESS_RETRY_AI", { failedRequestId: AI_REQUEST_ID }),
+      },
+      opened.deps,
+    );
+  }
+
+  function localMessage(text = "локально"): Awaited<ReturnType<RimAiPort["respond"]>> {
+    return { kind: "MESSAGE", text };
+  }
+
+  function crashAfterReplacementInstall(inner: ProductStore): ProductStore {
+    return new Proxy(inner, {
+      get(target, prop, receiver) {
+        if (prop === "saveRimProviderRuntime") {
+          return async (userId: UserId, expectedRevision: number, runtime: unknown) => {
+            const saved = await target.saveRimProviderRuntime(userId, expectedRevision, runtime);
+            const parsed = parseRimProviderRuntime(runtime);
+            if (
+              parsed.status === "PRESENT" &&
+              parsed.runtime.continuityMode === "local-canonical-history" &&
+              parsed.runtime.attempt?.submissionState === "not-submitted" &&
+              parsed.runtime.retryIntent === undefined &&
+              parsed.runtime.retiredAttemptId !== null
+            ) {
+              throw new Error("crash after replacement install");
+            }
+            return saved;
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+  }
+
+  function supersedeBeforeOwnedCommit(
+    inner: ProductStore,
+    replacement: RimProviderRuntime,
+  ): ProductStore {
+    return new Proxy(inner, {
+      get(target, prop, receiver) {
+        if (prop === "commitOwnedTransition") {
+          return async (input: CommitOwnedTransitionInput) => {
+            const current = await target.loadProductSnapshot(input.currentUserId);
+            await target.saveRimProviderRuntime(input.currentUserId, current.revision, replacement);
+            return target.commitOwnedTransition(input);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+  }
+
+  function appliedShell(snapshot: ProductSnapshot): TransitionResult {
+    return {
+      outcome: "APPLIED",
+      result: "NO_TRANSITION",
+      controlState: snapshot.controlState,
+      snapshot,
+      effects: [],
+      declaredEffects: [],
+      traces: [],
+      composition: [],
+      error: null,
+    } as unknown as TransitionResult;
+  }
+
+  it("does not install a replacement when E-54 was never accepted", async () => {
+    const opened = await openFailed(runtimeFor(failedChat(), "returned-body-observed"));
+    const before = await readRuntime(opened.store, USER_ID);
+    const recovered = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(),
+      retrieval: null,
+    });
+    expect(recovered).toBeNull();
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime).toEqual(before.runtime);
+    expect(after.runtime.retryIntent).toBeUndefined();
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("FAILED");
+    expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-1"));
+  });
+
+  it("rolls back E-54 and retry intent together when the commit fails", async () => {
+    const opened = await openFailed(runtimeFor(failedChat(), "returned-body-observed"));
+    const memory = opened.kit.memoryStore;
+    if (!memory) {
+      throw new Error("expected in-memory store");
+    }
+    const before = await opened.store.loadProductSnapshot(USER_ID);
+    memory.failNextWriteAfterBans();
+    const failed = await acceptRetry(opened);
+    expect(failed.status).toBe("PERSISTENCE_ERROR");
+    expect(failed.persisted).toBe(false);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.loaded.revision).toBe(before.revision);
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("FAILED");
+    expect(after.runtime.retryIntent).toBeUndefined();
+    expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-1"));
+    expect(after.runtime.continuityMode).toBe("provider-conversation");
+  });
+
+  it("installs exactly one local attempt after durable E-54 and before that attempt exists", async () => {
+    const opened = await openFailed(runtimeFor(failedChat(), "returned-body-observed"));
+    const accepted = await acceptRetry(opened);
+    expect(accepted.status).toBe("APPLIED");
+    expect(accepted.traces.filter((trace) => trace.eventId === "E-54")).toHaveLength(1);
+    const armed = await readRuntime(opened.store, USER_ID);
+    expect(armed.loaded.snapshot.extended.rimChat?.aiOperation).toMatchObject({
+      status: "PENDING",
+      requestId: AI_REQUEST_ID,
+    });
+    expect(armed.runtime.attempt?.attemptId).toBe(attempt("attempt-1"));
+    expect(armed.runtime.continuityMode).toBe("provider-conversation");
+    expect(armed.runtime.retryIntent).toEqual({
+      rimChatId: CHAT_ID,
+      contextRequestId: REQUEST_ID,
+      requestId: AI_REQUEST_ID,
+      attemptId: attempt("attempt-1"),
+    });
+    const seen: RimAiRequest[] = [];
+    const followed = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen, localMessage()),
+      retrieval: {
+        async retrieve() {
+          throw new Error("retired response must not be retrieved");
+        },
+      },
+    });
+    expect(seen).toHaveLength(1);
+    assertLocalRetry(seen[0], "привет");
+    expect(followed?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(userTexts(followed?.snapshot.extended.rimChat)).toEqual(["привет"]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.retryIntent).toBeUndefined();
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+    expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-1"));
+    expect(after.runtime.attempt?.attemptId).not.toBe(attempt("attempt-1"));
+    expect(after.runtime.attempt?.requestId).toBe(AI_REQUEST_ID);
+    expect(storedConversationId(after.runtime.initialization)).toBe("conv-stored-1");
+  });
+
+  it("does not install another attempt when recovery of an accepted retry is repeated", async () => {
+    const opened = await openFailed(runtimeFor(failedChat(), "completed-retrieved"));
+    await acceptRetry(opened);
+    const seen: RimAiRequest[] = [];
+    let nestedCalls = 0;
+    const first = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: {
+        async respond(request) {
+          seen.push(request);
+          const nested = await recoverPendingRimAi({
+            context: opened.context,
+            deps: opened.deps,
+            rimAi: {
+              async respond() {
+                nestedCalls += 1;
+                return localMessage("лишнее");
+              },
+            },
+            retrieval: null,
+          });
+          expect(nested).toBeNull();
+          return localMessage();
+        },
+      },
+      retrieval: null,
+    });
+    expect(nestedCalls).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(first?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const installed = await readRuntime(opened.store, USER_ID);
+    const second = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen, localMessage("ещё")),
+      retrieval: null,
+    });
+    expect(second).toBeNull();
+    expect(seen).toHaveLength(1);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.attempt?.attemptId).toBe(installed.runtime.attempt?.attemptId);
+    expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-1"));
+    expect(after.runtime.retryIntent).toBeUndefined();
+    expect(rimTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["локально"]);
+  });
+
+  it("executes the installed replacement after a crash and does not create another", async () => {
+    const opened = await openFailed(runtimeFor(failedChat(), "returned-body-observed"));
+    await acceptRetry(opened);
+    const crashing = {
+      ...opened.deps,
+      store: crashAfterReplacementInstall(opened.store),
+    };
+    await expect(
+      recoverPendingRimAi({
+        context: opened.context,
+        deps: crashing,
+        rimAi: port(),
+        retrieval: null,
+      }),
+    ).rejects.toThrow("crash after replacement install");
+    const installed = await readRuntime(opened.store, USER_ID);
+    expect(installed.runtime.retryIntent).toBeUndefined();
+    expect(installed.runtime.attempt?.submissionState).toBe("not-submitted");
+    expect(installed.runtime.continuityMode).toBe("local-canonical-history");
+    expect(installed.runtime.retiredAttemptId).toBe(attempt("attempt-1"));
+    expect(installed.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    const seen: RimAiRequest[] = [];
+    const followed = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen, localMessage()),
+      retrieval: null,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.continuityMode).toBe("local-canonical-history");
+    expect(followed?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.attempt?.attemptId).toBe(installed.runtime.attempt?.attemptId);
+    expect(after.runtime.retiredAttemptId).toBe(attempt("attempt-1"));
+    expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
+  });
+
+  it("retries a provider terminal attempt and a local terminal attempt from durable intent", async () => {
+    const provider = await openFailed(runtimeFor(failedChat(), "returned-body-observed"));
+    await acceptRetry(provider);
+    const providerSeen: RimAiRequest[] = [];
+    const providerFollowed = await recoverPendingRimAi({
+      context: provider.context,
+      deps: provider.deps,
+      rimAi: port(providerSeen, localMessage("из провайдера")),
+      retrieval: null,
+    });
+    expect(providerFollowed?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const providerAfter = await readRuntime(provider.store, USER_ID);
+    expect(providerAfter.runtime.continuityMode).toBe("local-canonical-history");
+    expect(providerAfter.runtime.retiredAttemptId).toBe(attempt("attempt-1"));
+    expect(providerAfter.runtime.retryIntent).toBeUndefined();
+    expect(providerSeen).toHaveLength(1);
+
+    const local = await openFailed(localAttemptRuntime(failedChat(), "returned-body-observed"));
+    await acceptRetry(local);
+    const armed = await readRuntime(local.store, USER_ID);
+    expect(armed.runtime.retryIntent?.attemptId).toBe(attempt("attempt-local"));
+    expect(armed.runtime.continuityMode).toBe("local-canonical-history");
+    const localSeen: RimAiRequest[] = [];
+    const localFollowed = await recoverPendingRimAi({
+      context: local.context,
+      deps: local.deps,
+      rimAi: port(localSeen, localMessage("ещё локально")),
+      retrieval: null,
+    });
+    expect(localFollowed?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const localAfter = await readRuntime(local.store, USER_ID);
+    expect(localAfter.runtime.continuityMode).toBe("local-canonical-history");
+    expect(localAfter.runtime.retiredAttemptId).toBe(attempt("attempt-local"));
+    expect(localAfter.runtime.attempt?.attemptId).not.toBe(attempt("attempt-local"));
+    expect(localAfter.runtime.retryIntent).toBeUndefined();
+    expect(localSeen).toHaveLength(1);
+    assertLocalRetry(localSeen[0], "привет");
+  });
+
+  it("does not regenerate a pending terminal attempt that has no retry intent", async () => {
+    const opened = await installPending();
+    const runtime = runtimeFor(opened.chat, "returned-body-observed");
+    await saveRuntime(opened.store, runtime);
+    const seen: RimAiRequest[] = [];
+    const recovered = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen),
+      retrieval: null,
+    });
+    expect(recovered).toBeNull();
+    expect(seen).toEqual([]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime).toEqual(runtime);
+    expect(after.runtime.continuityMode).toBe("provider-conversation");
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+
+    const retrieved = await installPending();
+    const completed = runtimeFor(retrieved.chat, "completed-retrieved");
+    await saveRuntime(retrieved.store, completed);
+    const again = await recoverPendingRimAi({
+      context: retrieved.context,
+      deps: retrieved.deps,
+      rimAi: port(),
+      retrieval: null,
+    });
+    expect(again).toBeNull();
+    const retrievedAfter = await readRuntime(retrieved.store, USER_ID);
+    expect(retrievedAfter.runtime).toEqual(completed);
+    expect(retrievedAfter.runtime.attempt?.attemptId).toBe(attempt("attempt-1"));
+  });
+
+  it("does not emit E-58 when a replacement supersedes the producing attempt first", async () => {
+    const opened = await installPending();
+    await saveRuntime(opened.store, runtimeFor(opened.chat, "response-id-known"));
+    const replacement = localRuntime(opened.chat, "attempt-b");
+    const raced = await recoverPendingRimAi({
+      context: opened.context,
+      deps: {
+        ...opened.deps,
+        store: supersedeBeforeOwnedCommit(opened.store, replacement),
+      },
+      rimAi: port(),
+      retrieval: retrieval("completed", localMessage("поздно")),
+    });
+    expect(raced).toBeNull();
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime).toEqual(replacement);
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(rimTexts(after.loaded.snapshot.extended.rimChat)).toEqual([]);
+    expect(userTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["привет"]);
+  });
+
+  it("does not emit E-59 when a replacement supersedes the producing attempt first", async () => {
+    for (const outcome of [
+      { status: "failed" as const, output: undefined },
+      { status: "completed" as const, output: invalidBody() },
+    ]) {
+      const opened = await installPending();
+      await saveRuntime(opened.store, runtimeFor(opened.chat, "response-id-known"));
+      const replacement = localRuntime(opened.chat, "attempt-b");
+      const raced = await recoverPendingRimAi({
+        context: opened.context,
+        deps: {
+          ...opened.deps,
+          store: supersedeBeforeOwnedCommit(opened.store, replacement),
+        },
+        rimAi: port(),
+        retrieval: retrieval(outcome.status, outcome.output),
+      });
+      expect(raced).toBeNull();
+      const after = await readRuntime(opened.store, USER_ID);
+      expect(after.runtime).toEqual(replacement);
+      expect(after.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+      expect(after.loaded.snapshot.extended.rimChat?.aiOperation).not.toMatchObject({
+        status: "FAILED",
+      });
+    }
+  });
+
+  it("keeps A's committed outcome when a late supersession uses the pre-commit revision", async () => {
+    const opened = await installPending();
+    await saveRuntime(opened.store, runtimeFor(opened.chat, "response-id-known"));
+    const before = await opened.store.loadProductSnapshot(USER_ID);
+    const completed = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(),
+      retrieval: retrieval("completed", localMessage("вовремя")),
+    });
+    expect(completed?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(completed?.snapshot.extended.rimChat?.aiOperation).toEqual({ status: "IDLE" });
+    await expect(
+      opened.store.saveRimProviderRuntime(
+        USER_ID,
+        before.revision,
+        localRuntime(opened.chat, "attempt-b"),
+      ),
+    ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
+    const afterWin = await readRuntime(opened.store, USER_ID);
+    expect(afterWin.runtime.attempt?.attemptId).toBe(attempt("attempt-1"));
+    const lateRetry = await acceptRetry(opened);
+    expect(lateRetry.persisted).toBe(false);
+    expect(lateRetry.traces.some((trace) => trace.eventId === "E-54")).toBe(false);
+    const still = await readRuntime(opened.store, USER_ID);
+    expect(still.runtime.attempt?.attemptId).toBe(attempt("attempt-1"));
+    expect(still.loaded.snapshot.extended.rimChat?.aiOperation).toEqual({ status: "IDLE" });
+
+    const failedOpen = await installPending();
+    await saveRuntime(failedOpen.store, runtimeFor(failedOpen.chat, "response-id-known"));
+    const failed = await recoverPendingRimAi({
+      context: failedOpen.context,
+      deps: failedOpen.deps,
+      rimAi: port(),
+      retrieval: retrieval("failed"),
+    });
+    expect(failed?.traces.filter((trace) => trace.eventId === "E-59")).toHaveLength(1);
+    const accepted = await acceptRetry(failedOpen);
+    expect(accepted.status).toBe("APPLIED");
+    expect(accepted.traces.filter((trace) => trace.eventId === "E-54")).toHaveLength(1);
+    const armed = await readRuntime(failedOpen.store, USER_ID);
+    expect(armed.runtime.attempt?.attemptId).toBe(attempt("attempt-1"));
+    expect(armed.runtime.retryIntent).toEqual({
+      rimChatId: CHAT_ID,
+      contextRequestId: REQUEST_ID,
+      requestId: AI_REQUEST_ID,
+      attemptId: attempt("attempt-1"),
+    });
+    expect(armed.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+  });
+
+  it("reaches one terminal outcome after the owned product commit rolls back", async () => {
+    const opened = await installPending();
+    await saveRuntime(opened.store, runtimeFor(opened.chat, "response-id-known"));
+    const memory = opened.kit.memoryStore;
+    if (!memory) {
+      throw new Error("expected in-memory store");
+    }
+    memory.failNextWriteAfterBans();
+    await expect(
+      recoverPendingRimAi({
+        context: opened.context,
+        deps: opened.deps,
+        rimAi: port(),
+        retrieval: retrieval("completed", localMessage("после сбоя")),
+      }),
+    ).rejects.toBeInstanceOf(ApplicationError);
+    const wedged = await readRuntime(opened.store, USER_ID);
+    expect(wedged.loaded.snapshot.extended.rimChat?.aiOperation.status).toBe("PENDING");
+    expect(wedged.runtime.attempt).toMatchObject({
+      attemptId: attempt("attempt-1"),
+      submissionState: "completed-retrieved",
+      providerStatus: "completed",
+      responseId: RESPONSE_ID,
+    });
+    const followed = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(),
+      retrieval: retrieval("completed", localMessage("после сбоя")),
+    });
+    expect(followed?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(rimTexts(followed?.snapshot.extended.rimChat)).toEqual(["после сбоя"]);
+    const again = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(),
+      retrieval: retrieval("completed", localMessage("ещё раз")),
+    });
+    expect(again).toBeNull();
+    expect(rimTexts(followed?.snapshot.extended.rimChat)).toEqual(["после сбоя"]);
+  });
+
+  it("dispatches one E-58 when completion recovery is repeated", async () => {
+    const opened = await installPending();
+    await saveRuntime(opened.store, runtimeFor(opened.chat, "response-id-known"));
+    const first = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(),
+      retrieval: retrieval("completed", localMessage("один")),
+    });
+    expect(first?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    const second = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(),
+      retrieval: retrieval("completed", localMessage("два")),
+    });
+    expect(second).toBeNull();
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(rimTexts(after.loaded.snapshot.extended.rimChat)).toEqual(["один"]);
+    expect(after.loaded.snapshot.extended.rimChat?.aiOperation).toEqual({ status: "IDLE" });
+  });
+
+  it("lets the replacement complete after the retired attempt loses ownership", async () => {
+    const opened = await installPending();
+    await saveRuntime(opened.store, runtimeFor(opened.chat, "response-id-known"));
+    const replacement = localRuntime(opened.chat, "attempt-b");
+    const raced = await recoverPendingRimAi({
+      context: opened.context,
+      deps: {
+        ...opened.deps,
+        store: supersedeBeforeOwnedCommit(opened.store, replacement),
+      },
+      rimAi: port(),
+      retrieval: retrieval("completed", localMessage("от A")),
+    });
+    expect(raced).toBeNull();
+    const seen: RimAiRequest[] = [];
+    const followed = await recoverPendingRimAi({
+      context: opened.context,
+      deps: opened.deps,
+      rimAi: port(seen, localMessage("от B")),
+      retrieval: null,
+    });
+    expect(seen).toHaveLength(1);
+    assertLocalRetry(seen[0], "привет");
+    expect(followed?.traces.filter((trace) => trace.eventId === "E-58")).toHaveLength(1);
+    expect(rimTexts(followed?.snapshot.extended.rimChat)).toEqual(["от B"]);
+    const after = await readRuntime(opened.store, USER_ID);
+    expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-b"));
+    expect(after.runtime.continuityMode).toBe("local-canonical-history");
+  });
+
+  it("rejects a product commit when the locked attempt is no longer authoritative", async () => {
+    const opened = await installPending();
+    const runtime = runtimeFor(opened.chat, "response-id-known");
+    await saveRuntime(opened.store, runtime);
+    const loaded = await opened.store.loadProductSnapshot(USER_ID);
+    const chat = loaded.snapshot.extended.rimChat;
+    if (!chat) {
+      throw new Error("expected a chat");
+    }
+    const mutated: ProductSnapshot = {
+      ...loaded.snapshot,
+      extended: {
+        ...loaded.snapshot.extended,
+        rimChat: { ...chat, inputDraft: "should-not-commit" },
+      },
+    };
+    const owned = await opened.store.commitOwnedTransition({
+      currentUserId: USER_ID,
+      expectedRevision: loaded.revision,
+      result: appliedShell(mutated),
+      requireAttempt: {
+        rimChatId: runtime.rimChatId,
+        selectedContactId: runtime.selectedContactId,
+        contextRequestId: runtime.contextRequestId,
+        requestId: AI_REQUEST_ID,
+        attemptId: attempt("attempt-other"),
+        continuityMode: "provider-conversation",
+      },
+    });
+    expect(owned.status).toBe("ATTEMPT_SUPERSEDED");
+    const after = await opened.store.loadProductSnapshot(USER_ID);
+    expect(after.revision).toBe(loaded.revision);
+    expect(after.snapshot.extended.rimChat?.inputDraft).toBe("");
+
+    const named = {
+      ...runtime,
+      retryIntent: {
+        rimChatId: runtime.rimChatId,
+        contextRequestId: runtime.contextRequestId,
+        requestId: AI_REQUEST_ID,
+        attemptId: attempt("attempt-1"),
+      },
+    };
+    await saveRuntime(opened.store, named);
+    const current = await opened.store.loadProductSnapshot(USER_ID);
+    const blocked = await opened.store.commitOwnedTransition({
+      currentUserId: USER_ID,
+      expectedRevision: current.revision,
+      result: appliedShell(mutated),
+      requireAttempt: {
+        rimChatId: runtime.rimChatId,
+        selectedContactId: runtime.selectedContactId,
+        contextRequestId: runtime.contextRequestId,
+        requestId: AI_REQUEST_ID,
+        attemptId: attempt("attempt-1"),
+        continuityMode: "provider-conversation",
+      },
+    });
+    expect(blocked.status).toBe("ATTEMPT_SUPERSEDED");
+    const still = await opened.store.loadProductSnapshot(USER_ID);
+    expect(still.revision).toBe(current.revision);
+    expect(still.snapshot.extended.rimChat?.inputDraft).toBe("");
+    const durable = await readRuntime(opened.store, USER_ID);
+    expect(durable.runtime.retryIntent?.attemptId).toBe(attempt("attempt-1"));
   });
 });

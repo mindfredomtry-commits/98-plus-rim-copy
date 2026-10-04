@@ -137,6 +137,7 @@ describe("Stage 5 executeProductEvent", () => {
         inner.claimTelegramPersistentReentryBootstrapDelivery(userId, nowMs, leaseMs),
       releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
         inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
+      commitOwnedTransition: (input) => inner.commitOwnedTransition(input),
       persistTransition: async () => {
         throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");
       },
@@ -191,6 +192,7 @@ describe("Stage 5 executeProductEvent", () => {
         inner.claimTelegramPersistentReentryBootstrapDelivery(userId, nowMs, leaseMs),
       releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
         inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
+      commitOwnedTransition: (input) => inner.commitOwnedTransition(input),
       persistTransition: async (_input: PersistTransitionInput) => {
         throw new PersistenceError("INVARIANT", "persistence refused the write");
       },

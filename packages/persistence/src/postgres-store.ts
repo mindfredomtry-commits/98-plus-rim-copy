@@ -27,10 +27,13 @@ import {
 } from "./codec.ts";
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { PersistenceError } from "./errors.ts";
+import { runtimeAttemptAllowsCommit } from "./runtime-attempt-authority.ts";
 import { SQL } from "./sql.ts";
 import type {
   BanReceiverBindResult,
   CheckPairLockContext,
+  CommitOwnedTransitionInput,
+  CommitOwnedTransitionResult,
   LoadedSnapshot,
   PersistShareLinkResolvedInput,
   PersistShareLinkResolvedResult,
@@ -254,6 +257,55 @@ export class PostgresProductStore implements ProductStore {
       );
     }
     return this.write(input.currentUserId, input.expectedRevision, input.result.snapshot, false);
+  }
+
+  async commitOwnedTransition(
+    input: CommitOwnedTransitionInput,
+  ): Promise<CommitOwnedTransitionResult> {
+    if (input.result.outcome !== "APPLIED") {
+      throw new PersistenceError(
+        "APPLIED_TRANSITION_REQUIRED",
+        "Only an APPLIED Product Kernel TransitionResult may be persisted",
+      );
+    }
+    try {
+      return await this.client.transaction(async (tx) => {
+        const sessionResult = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [
+          input.currentUserId,
+        ]);
+        const row = sessionResult.rows[0];
+        if (!row || Number(row.revision) !== input.expectedRevision) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        const runtime = parseJson(row.rim_provider_runtime ?? null);
+        if (!runtimeAttemptAllowsCommit(runtime, input.requireAttempt)) {
+          return {
+            status: "ATTEMPT_SUPERSEDED" as const,
+            loaded: await this.read(tx, input.currentUserId),
+          };
+        }
+        const loaded = await this.writeOn(
+          tx,
+          input.currentUserId,
+          input.expectedRevision,
+          input.result.snapshot,
+          false,
+          "rimProviderRuntime" in input ? input.rimProviderRuntime : undefined,
+        );
+        return { status: "COMMITTED" as const, loaded };
+      });
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "product persistence transaction failed",
+      );
+    }
   }
 
   async saveRimProviderRuntime(
@@ -623,6 +675,7 @@ export class PostgresProductStore implements ProductStore {
     expectedRevision: number,
     snapshot: ProductSnapshot,
     seed: boolean,
+    runtimeReplacement?: unknown,
   ): Promise<LoadedSnapshot> {
     const identity = await tx.query<{ user_id: string }>(SQL.selectIdentity, [currentUserId]);
     if (!identity.rows[0]) {
@@ -733,7 +786,10 @@ export class PostgresProductStore implements ProductStore {
         ? previousClaimedUntilMs
         : null,
       telegramPersistentReentryBootstrapClaimToken: previousClaimToken,
-      rimProviderRuntime: parseJson(sessionResult.rows[0]?.rim_provider_runtime ?? null),
+      rimProviderRuntime:
+        runtimeReplacement === undefined
+          ? parseJson(sessionResult.rows[0]?.rim_provider_runtime ?? null)
+          : runtimeReplacement,
     });
     await tx.query(SQL.upsertSession, [
       session.userId,

@@ -2,6 +2,7 @@ import type {
   AiRequestId,
   Brand,
   ContextRequestId,
+  ProductSnapshot,
   RimChatId,
   UserId,
 } from "@98plus/product-model";
@@ -102,6 +103,17 @@ export type RimContinuityMode = "provider-conversation" | "local-canonical-histo
  * `retiredAttemptId` names a prior technical attempt of the same logical request.
  * It is not a second requestId. Null means no attempt has been retired.
  */
+/**
+ * Durable proof that E-54 was accepted for this exact terminal attempt.
+ * Absent means no retry has been accepted. Cleared when the replacement attempt is installed.
+ */
+export type RimRetryIntent = Readonly<{
+  rimChatId: RimChatId;
+  contextRequestId: ContextRequestId;
+  requestId: AiRequestId;
+  attemptId: RimProviderAttemptId;
+}>;
+
 export type RimProviderRuntime = Readonly<{
   rimChatId: RimChatId;
   selectedContactId: UserId;
@@ -110,6 +122,80 @@ export type RimProviderRuntime = Readonly<{
   attempt: RimProviderAttempt | null;
   continuityMode: RimContinuityMode;
   retiredAttemptId: RimProviderAttemptId | null;
+  retryIntent?: RimRetryIntent;
+}>;
+
+const TERMINAL_RETRY_STATUSES = ["completed", "failed", "cancelled", "incomplete"] as const;
+
+export function terminalUnusableAttempt(attempt: RimProviderAttempt): boolean {
+  if (attempt.submissionState === "returned-body-observed") {
+    return true;
+  }
+  if (attempt.submissionState !== "completed-retrieved") {
+    return false;
+  }
+  return (TERMINAL_RETRY_STATUSES as readonly RetrievedProviderStatus[]).includes(
+    attempt.providerStatus,
+  );
+}
+
+/**
+ * Runtime written in the same commit that accepts E-54.
+ * Null when this failure is not a terminal attempt that DC-03 can retry.
+ */
+export function runtimeWithAcceptedRetry(
+  runtimeValue: unknown,
+  snapshot: ProductSnapshot,
+  failedRequestId: AiRequestId,
+): { readonly runtime: RimProviderRuntime; readonly authority: RuntimeAttemptAuthority } | null {
+  const chat = snapshot.extended.rimChat;
+  if (!chat || chat.aiOperation.status !== "FAILED") {
+    return null;
+  }
+  if (chat.aiOperation.requestId !== failedRequestId || !chat.selectedContactId) {
+    return null;
+  }
+  const parsed = parseRimProviderRuntime(runtimeValue);
+  const applicable = applicableRimProviderRuntime(parsed, chat.id);
+  const attempt = applicable?.attempt;
+  if (!applicable || !attempt || applicable.initialization.submissionState !== "stored") {
+    return null;
+  }
+  if (!terminalUnusableAttempt(attempt) || attempt.requestId !== failedRequestId) {
+    return null;
+  }
+  if (
+    applicable.selectedContactId !== chat.selectedContactId ||
+    applicable.contextRequestId !== chat.aiOperation.snapshot.contextRequestId
+  ) {
+    return null;
+  }
+  const retryIntent: RimRetryIntent = {
+    rimChatId: applicable.rimChatId,
+    contextRequestId: applicable.contextRequestId,
+    requestId: attempt.requestId,
+    attemptId: attempt.attemptId,
+  };
+  return {
+    runtime: { ...applicable, retryIntent },
+    authority: {
+      rimChatId: applicable.rimChatId,
+      selectedContactId: applicable.selectedContactId,
+      contextRequestId: applicable.contextRequestId,
+      requestId: attempt.requestId,
+      attemptId: attempt.attemptId,
+      continuityMode: applicable.continuityMode,
+    },
+  };
+}
+
+type RuntimeAttemptAuthority = Readonly<{
+  rimChatId: string;
+  selectedContactId: string;
+  contextRequestId: string;
+  requestId: string;
+  attemptId: string;
+  continuityMode: RimContinuityMode;
 }>;
 
 export type RimProviderRuntimeRejection = "not-an-object" | "shape" | "initialization" | "attempt";
@@ -299,6 +385,7 @@ export function parseRimProviderRuntime(value: unknown): RimProviderRuntimeParse
       "attempt",
       "continuityMode",
       "retiredAttemptId",
+      "retryIntent",
     ]) ||
     !nonEmptyString(value.rimChatId) ||
     !nonEmptyString(value.selectedContactId) ||
@@ -314,6 +401,11 @@ export function parseRimProviderRuntime(value: unknown): RimProviderRuntimeParse
   if (!initialization) {
     return { status: "INVALID", reason: "initialization" };
   }
+  const retryIntent = parseRetryIntent(value.retryIntent);
+  if (retryIntent === "invalid") {
+    return { status: "INVALID", reason: "shape" };
+  }
+  const retry = retryIntent ? { retryIntent } : {};
   if (value.attempt !== null) {
     const attempt = parseAttempt(value.attempt);
     if (!attempt) {
@@ -329,6 +421,7 @@ export function parseRimProviderRuntime(value: unknown): RimProviderRuntimeParse
         attempt,
         continuityMode: continuity.continuityMode,
         retiredAttemptId: continuity.retiredAttemptId,
+        ...retry,
       },
     };
   }
@@ -342,7 +435,30 @@ export function parseRimProviderRuntime(value: unknown): RimProviderRuntimeParse
       attempt: null,
       continuityMode: continuity.continuityMode,
       retiredAttemptId: continuity.retiredAttemptId,
+      ...retry,
     },
+  };
+}
+
+function parseRetryIntent(value: unknown): RimRetryIntent | null | "invalid" {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["rimChatId", "contextRequestId", "requestId", "attemptId"]) ||
+    !nonEmptyString(value.rimChatId) ||
+    !nonEmptyString(value.contextRequestId) ||
+    !nonEmptyString(value.requestId) ||
+    !nonEmptyString(value.attemptId)
+  ) {
+    return "invalid";
+  }
+  return {
+    rimChatId: value.rimChatId as RimChatId,
+    contextRequestId: value.contextRequestId as ContextRequestId,
+    requestId: value.requestId as AiRequestId,
+    attemptId: value.attemptId as RimProviderAttemptId,
   };
 }
 

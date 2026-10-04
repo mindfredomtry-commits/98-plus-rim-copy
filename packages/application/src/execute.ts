@@ -1,5 +1,9 @@
 import { callerUserId, type AuthenticatedContext } from "@98plus/identity";
-import { PersistenceError, type ProductStore } from "@98plus/persistence";
+import {
+  PersistenceError,
+  type ProductStore,
+  type RuntimeAttemptAuthority,
+} from "@98plus/persistence";
 import {
   asInstant,
   reduce,
@@ -13,6 +17,7 @@ import {
   type MatrixResult,
   type ProductControlState,
   type ProductSnapshot,
+  type RimChatId,
   type TransitionOutcome,
   type TransitionResult,
   type UserId,
@@ -21,6 +26,11 @@ import type { ApplicationClock, IdAllocator } from "./clock.ts";
 import { pendingExternalEffects, type PendingExternalEffect } from "./effects.ts";
 import { ApplicationError } from "./errors.ts";
 import { toCanonicalEvent, type ProductEventInput } from "./event.ts";
+import {
+  applicableRimProviderRuntime,
+  parseRimProviderRuntime,
+  runtimeWithAcceptedRetry,
+} from "./rim/rim-provider-runtime.ts";
 
 export type ProductExecutorDependencies = Readonly<{
   store: ProductStore;
@@ -142,6 +152,44 @@ export async function executeProductEvent(
       });
     }
     try {
+      if (event.name === "RIM.PRESS_RETRY_AI") {
+        const accepted = runtimeWithAcceptedRetry(
+          loaded.rimProviderRuntime,
+          loaded.snapshot,
+          event.payload.failedRequestId,
+        );
+        if (accepted) {
+          const owned = await deps.store.commitOwnedTransition({
+            currentUserId,
+            expectedRevision: loaded.revision,
+            result: transition,
+            requireAttempt: accepted.authority,
+            rimProviderRuntime: accepted.runtime,
+          });
+          if (owned.status === "ATTEMPT_SUPERSEDED") {
+            return executionResult({
+              status: "NOT_APPLIED",
+              currentUserId,
+              event,
+              transition,
+              snapshot: owned.loaded.snapshot,
+              revision: owned.loaded.revision,
+              persisted: false,
+              error: null,
+            });
+          }
+          return executionResult({
+            status: "APPLIED",
+            currentUserId,
+            event,
+            transition,
+            snapshot: owned.loaded.snapshot,
+            revision: owned.loaded.revision,
+            persisted: true,
+            error: null,
+          });
+        }
+      }
       const saved = await deps.store.persistTransition({
         currentUserId,
         expectedRevision: loaded.revision,
@@ -187,6 +235,106 @@ export async function executeProductEvent(
       error,
     );
   }
+}
+
+/**
+ * Commit E-58 or E-59 only for the attempt that was current at this revision.
+ * The store rechecks that attempt under the session lock in the same transaction
+ * as the Product write. A revision conflict or a superseded attempt discards the
+ * result and does not retry against the newer snapshot.
+ */
+export async function commitProductEventIfAttemptCurrent(
+  input: ExecuteProductEventInput & Readonly<{ authority: RuntimeAttemptAuthority }>,
+  deps: ProductExecutorDependencies,
+): Promise<ApplicationExecutionResult | null> {
+  const event = toCanonicalEvent(input.event);
+  const currentUserId = callerUserId(input.context, input.clientClaimedUserId);
+  const loaded = await deps.store.loadProductSnapshot(currentUserId);
+  if (!attemptStillCurrent(loaded.rimProviderRuntime, input.authority)) {
+    return null;
+  }
+  const transition = reduce(loaded.snapshot, event, {
+    now: asInstant(deps.clock.nowMs()),
+    currentUserId,
+    allocateId: deps.allocateId,
+  });
+  if (transition.outcome !== "APPLIED") {
+    return executionResult({
+      status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+      currentUserId,
+      event,
+      transition,
+      snapshot: loaded.snapshot,
+      revision: loaded.revision,
+      persisted: false,
+      error:
+        transition.outcome === "KERNEL_INVARIANT"
+          ? new ApplicationError(
+              "KERNEL_INVARIANT",
+              transition.error?.message ?? "Product Kernel invariant failed",
+              transition.error,
+            )
+          : null,
+    });
+  }
+  try {
+    const owned = await deps.store.commitOwnedTransition({
+      currentUserId,
+      expectedRevision: loaded.revision,
+      result: transition,
+      requireAttempt: input.authority,
+    });
+    if (owned.status !== "COMMITTED") {
+      return null;
+    }
+    return executionResult({
+      status: "APPLIED",
+      currentUserId,
+      event,
+      transition,
+      snapshot: owned.loaded.snapshot,
+      revision: owned.loaded.revision,
+      persisted: true,
+      error: null,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceError && error.code === "REVISION_CONFLICT") {
+      return null;
+    }
+    if (error instanceof PersistenceError) {
+      throw persistenceApplicationError(error);
+    }
+    throw error;
+  }
+}
+
+function attemptStillCurrent(runtimeValue: unknown, authority: RuntimeAttemptAuthority): boolean {
+  const parsed = parseRimProviderRuntime(runtimeValue);
+  const applicable =
+    parsed.status === "PRESENT"
+      ? applicableRimProviderRuntime(parsed, authority.rimChatId as RimChatId)
+      : null;
+  const attempt = applicable?.attempt;
+  if (!applicable || !attempt) {
+    return false;
+  }
+  const intent = applicable.retryIntent;
+  if (
+    intent &&
+    intent.attemptId === authority.attemptId &&
+    intent.requestId === authority.requestId &&
+    intent.rimChatId === authority.rimChatId &&
+    intent.contextRequestId === authority.contextRequestId
+  ) {
+    return false;
+  }
+  return (
+    applicable.selectedContactId === authority.selectedContactId &&
+    applicable.contextRequestId === authority.contextRequestId &&
+    applicable.continuityMode === authority.continuityMode &&
+    attempt.attemptId === authority.attemptId &&
+    attempt.requestId === authority.requestId
+  );
 }
 
 export type ExecuteShareLinkResolvedInput = ExecuteProductEventInput &

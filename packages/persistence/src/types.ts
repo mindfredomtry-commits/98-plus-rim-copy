@@ -12,6 +12,9 @@ import type {
   TransitionResult,
 } from "@98plus/product-model";
 import type { BanId, UserId } from "@98plus/product-model";
+import type { RuntimeAttemptAuthority } from "./runtime-attempt-authority.ts";
+
+export type { RuntimeAttemptAuthority };
 
 export type PersistenceSqlClient = {
   query<T>(sql: string, params: readonly unknown[]): Promise<SqlQueryResult<T>>;
@@ -39,6 +42,21 @@ export type PersistTransitionInput = Readonly<{
   expectedRevision: number;
   result: TransitionResult;
 }>;
+
+/**
+ * Product commit guarded by the current technical attempt.
+ * The attempt check and the snapshot write share one session transaction.
+ * `rimProviderRuntime`, when present, replaces that column in the same commit.
+ */
+export type CommitOwnedTransitionInput = PersistTransitionInput &
+  Readonly<{
+    requireAttempt: RuntimeAttemptAuthority;
+    rimProviderRuntime?: unknown;
+  }>;
+
+export type CommitOwnedTransitionResult =
+  | { readonly status: "COMMITTED"; readonly loaded: LoadedSnapshot }
+  | { readonly status: "ATTEMPT_SUPERSEDED"; readonly loaded: LoadedSnapshot };
 
 /** Atomic E-45 receiver bind + APPLIED transition persist (single commit boundary). */
 export type PersistShareLinkResolvedInput = PersistTransitionInput &
@@ -122,6 +140,12 @@ export type ReleaseTelegramPersistentReentryBootstrapClaimResult =
 export type ProductStore = {
   loadProductSnapshot(currentUserId: UserId): Promise<LoadedSnapshot>;
   persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot>;
+  /**
+   * Persist an APPLIED transition only while `requireAttempt` is still the locked
+   * runtime's current attempt and that attempt is not already marked for retry.
+   * A superseded attempt does not write Product state.
+   */
+  commitOwnedTransition(input: CommitOwnedTransitionInput): Promise<CommitOwnedTransitionResult>;
   /**
    * CAS-bind Ban.receiverId and persist an APPLIED E-45 transition in one transaction.
    * On BIND_REJECTED or any throw before commit, receiverId must remain unchanged.

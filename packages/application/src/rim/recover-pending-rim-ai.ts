@@ -11,7 +11,7 @@ import {
   type RimRequestSnapshot,
 } from "@98plus/product-model";
 import type { ApplicationExecutionResult, ProductExecutorDependencies } from "../execute.ts";
-import { executeProductEvent } from "../execute.ts";
+import { commitProductEventIfAttemptCurrent } from "../execute.ts";
 import type { ProductEventInput } from "../event.ts";
 import { FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
 import {
@@ -37,9 +37,11 @@ import {
   type ProviderConversationId,
   type ProviderResponseId,
   type RetrievedProviderStatus,
+  terminalUnusableAttempt,
   type RimProviderAttempt,
   type RimProviderAttemptId,
   type RimProviderRuntime,
+  type RimRetryIntent,
 } from "./rim-provider-runtime.ts";
 import { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./validate-rim-ai-output.ts";
 
@@ -90,12 +92,6 @@ type ReconcileTools = Readonly<{
   mode: "live" | "recover";
   origin: OriginSource;
   inFlightRequestIds: readonly string[];
-  /**
-   * True only for the live continuation of an explicit E-54.
-   * Recovery must not set this. PENDING plus a terminal attempt is also the
-   * crash window before E-58/E-59, so it is not itself a retry.
-   */
-  userRetry: boolean;
 }>;
 
 type ProducingAttempt = Readonly<{
@@ -126,7 +122,6 @@ export async function continuePendingRimAi(
   tools: PendingRimAiTools &
     Readonly<{
       origin: AskRimOrigin | null;
-      userRetry?: boolean;
     }>,
 ): Promise<ApplicationExecutionResult | null> {
   const initialized = await ensureInitialization(tools);
@@ -139,7 +134,6 @@ export async function continuePendingRimAi(
       mode: "live",
       origin: { kind: "effect", value: tools.origin },
       inFlightRequestIds: [],
-      userRetry: tools.userRetry === true,
     },
     0,
   );
@@ -166,10 +160,9 @@ export async function continuePendingRimAi(
  * that retained that id. A historical returned body with no response id is not
  * retrieved. A retrieval result dispatches only after its observation CAS
  * commits for this attempt.
- * An explicit E-54 of a terminal unusable attempt retires that attempt and
- * executes one new local attempt for the same logical request. Recovery does
- * not take that path. E-58 and E-59 dispatch only while the producing attempt
- * is still the current attempt for that RimChat and logical request.
+ * An accepted E-54 records retry intent in that same commit. Recovery uses
+ * that intent to install one replacement local attempt, then clears it.
+ * E-58 and E-59 commit only while the producing attempt still owns the session.
  */
 export async function recoverPendingRimAi(
   tools: PendingRimAiTools &
@@ -197,7 +190,6 @@ export async function recoverPendingRimAi(
       mode: "recover",
       origin: { kind: "current" },
       inFlightRequestIds: tools.inFlightRequestIds ?? [],
-      userRetry: false,
     },
     0,
   );
@@ -268,7 +260,7 @@ async function reconcile(
     }
     return null;
   }
-  if (tools.userRetry && terminalUnusableForRetry(applicable.attempt)) {
+  if (acceptedDurableRetry(pending, applicable)) {
     return retryTerminalAttemptLocally(tools, loaded, applicable, reentry);
   }
   if (applicable.attempt.submissionState === "returned-body-observed") {
@@ -342,50 +334,27 @@ async function transitionAmbiguousUserAttempt(
   if (!saved.ok) {
     return reentry >= MAX_CLAIM_REENTRY ? null : reconcile(tools, reentry + 1);
   }
-  return claimThenSubmit({ ...tools, userRetry: false }, saved.loaded, next, reentry);
+  return claimThenSubmit(tools, saved.loaded, next, reentry);
 }
 
-const TERMINAL_RETRY_STATUSES = ["completed", "failed", "cancelled", "incomplete"] as const;
-
-/**
- * Durable states that a live invalid body or a retrieved terminal provider
- * status leave behind after E-59. Acceptance-unknown, response-id-known, and
- * nonterminal retrieval statuses are not retry provenance.
- */
-function terminalUnusableForRetry(attempt: RimProviderAttempt): boolean {
-  if (attempt.submissionState === "returned-body-observed") {
-    return true;
-  }
-  if (attempt.submissionState !== "completed-retrieved") {
-    return false;
-  }
-  return (TERMINAL_RETRY_STATUSES as readonly RetrievedProviderStatus[]).includes(
-    attempt.providerStatus,
-  );
-}
-
-function legitimateTerminalRetry(
-  tools: ReconcileTools,
-  pending: PendingChat,
-  runtime: RimProviderRuntime,
-): boolean {
+function acceptedDurableRetry(pending: PendingChat, runtime: RimProviderRuntime): boolean {
   const attempt = runtime.attempt;
-  if (!tools.userRetry || tools.mode !== "live" || !attempt) {
+  const intent = runtime.retryIntent;
+  if (!attempt || !intent || runtime.initialization.submissionState !== "stored") {
     return false;
   }
-  if (!terminalUnusableForRetry(attempt)) {
-    return false;
-  }
-  if (runtime.initialization.submissionState !== "stored") {
-    return false;
-  }
-  if (attempt.requestId !== pending.snapshot.requestId) {
+  if (!terminalUnusableAttempt(attempt)) {
     return false;
   }
   return (
-    runtime.rimChatId === pending.chat.id &&
-    runtime.selectedContactId === pending.chat.selectedContactId &&
-    runtime.contextRequestId === pending.snapshot.contextRequestId
+    intent.rimChatId === runtime.rimChatId &&
+    intent.rimChatId === pending.chat.id &&
+    intent.contextRequestId === runtime.contextRequestId &&
+    intent.contextRequestId === pending.snapshot.contextRequestId &&
+    intent.requestId === attempt.requestId &&
+    intent.requestId === pending.snapshot.requestId &&
+    intent.attemptId === attempt.attemptId &&
+    runtime.selectedContactId === pending.chat.selectedContactId
   );
 }
 
@@ -403,7 +372,7 @@ async function retryTerminalAttemptLocally(
 ): Promise<ApplicationExecutionResult | null> {
   const current = runtime.attempt;
   const pending = pendingChat(loaded.snapshot);
-  if (!current || !pending || !legitimateTerminalRetry(tools, pending, runtime)) {
+  if (!current || !pending || !acceptedDurableRetry(pending, runtime)) {
     return null;
   }
   const next: RimProviderRuntime = {
@@ -424,7 +393,7 @@ async function retryTerminalAttemptLocally(
   if (!saved.ok) {
     return reentry >= MAX_CLAIM_REENTRY ? null : reconcile(tools, reentry + 1);
   }
-  return claimThenSubmit({ ...tools, userRetry: false }, saved.loaded, next, reentry);
+  return claimThenSubmit(tools, saved.loaded, next, reentry);
 }
 
 async function claimThenSubmit(
@@ -794,7 +763,8 @@ function sameRuntimeIdentity(claimed: RimProviderRuntime, loaded: RimProviderRun
     claimed.selectedContactId !== loaded.selectedContactId ||
     claimed.contextRequestId !== loaded.contextRequestId ||
     claimed.continuityMode !== loaded.continuityMode ||
-    claimed.retiredAttemptId !== loaded.retiredAttemptId
+    claimed.retiredAttemptId !== loaded.retiredAttemptId ||
+    !sameRetryIntent(claimed.retryIntent, loaded.retryIntent)
   ) {
     return false;
   }
@@ -949,42 +919,16 @@ async function dispatchIfCurrent(
   event: ProductEventInput,
   authority: ProducingAttempt,
 ): Promise<ApplicationExecutionResult | null> {
-  const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
-  if (!producingAttemptStillCurrent(loaded, authority)) {
-    return null;
-  }
-  return dispatch(tools, event);
-}
-
-function producingAttemptStillCurrent(
-  loaded: LoadedSnapshot,
-  authority: ProducingAttempt,
-): boolean {
-  const pending = pendingChat(loaded.snapshot);
-  if (!pending || pending.chat.selectedContactId !== authority.selectedContactId) {
-    return false;
-  }
-  if (
-    pending.chat.id !== authority.rimChatId ||
-    pending.snapshot.requestId !== authority.requestId ||
-    pending.snapshot.contextRequestId !== authority.contextRequestId
-  ) {
-    return false;
-  }
-  const parsed = parseRimProviderRuntime(loaded.rimProviderRuntime);
-  const applicable =
-    parsed.status === "PRESENT" ? applicableRimProviderRuntime(parsed, pending.chat.id) : null;
-  const attempt = applicable?.attempt;
-  if (!applicable || !attempt) {
-    return false;
-  }
-  return (
-    applicable.rimChatId === authority.rimChatId &&
-    applicable.selectedContactId === authority.selectedContactId &&
-    applicable.contextRequestId === authority.contextRequestId &&
-    applicable.continuityMode === authority.continuityMode &&
-    attempt.attemptId === authority.attemptId &&
-    attempt.requestId === authority.requestId
+  return commitProductEventIfAttemptCurrent(
+    {
+      context: tools.context,
+      event,
+      ...(tools.clientClaimedUserId === undefined
+        ? {}
+        : { clientClaimedUserId: tools.clientClaimedUserId }),
+      authority,
+    },
+    tools.deps,
   );
 }
 
@@ -1017,19 +961,18 @@ function failureEvent(snapshot: RimRequestSnapshot, failure: Failure): ProductEv
   };
 }
 
-async function dispatch(
-  tools: ReconcileTools,
-  event: ProductEventInput,
-): Promise<ApplicationExecutionResult> {
-  return executeProductEvent(
-    {
-      context: tools.context,
-      event,
-      ...(tools.clientClaimedUserId === undefined
-        ? {}
-        : { clientClaimedUserId: tools.clientClaimedUserId }),
-    },
-    tools.deps,
+function sameRetryIntent(
+  left: RimRetryIntent | undefined,
+  right: RimRetryIntent | undefined,
+): boolean {
+  if (!left || !right) {
+    return !left && !right;
+  }
+  return (
+    left.rimChatId === right.rimChatId &&
+    left.contextRequestId === right.contextRequestId &&
+    left.requestId === right.requestId &&
+    left.attemptId === right.attemptId
   );
 }
 
@@ -1079,6 +1022,7 @@ function withAttempt(runtime: RimProviderRuntime, attempt: RimProviderAttempt): 
     attempt,
     continuityMode: runtime.continuityMode,
     retiredAttemptId: runtime.retiredAttemptId,
+    ...(runtime.retryIntent ? { retryIntent: runtime.retryIntent } : {}),
   };
 }
 

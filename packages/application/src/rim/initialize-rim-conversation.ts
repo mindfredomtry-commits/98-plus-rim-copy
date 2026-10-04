@@ -184,6 +184,7 @@ async function claimAndInitialize(
       attempt: runtime.attempt,
       continuityMode: runtime.continuityMode,
       retiredAttemptId: runtime.retiredAttemptId,
+      ...(runtime.retryIntent ? { retryIntent: runtime.retryIntent } : {}),
     };
     const saved = await trySave(tools, loaded.revision, claimed);
     if (!saved.ok) {
@@ -257,6 +258,7 @@ async function persistStoredInitialization(
     attempt: current.attempt,
     continuityMode: current.continuityMode,
     retiredAttemptId: current.retiredAttemptId,
+    ...(current.retryIntent ? { retryIntent: current.retryIntent } : {}),
   };
   const saved = await trySave(tools, loaded.revision, stored);
   if (!saved.ok) {
