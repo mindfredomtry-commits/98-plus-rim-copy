@@ -67,6 +67,47 @@ export type OpenAiGenerationClient = {
   };
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Completed text for one streaming Response.
+ * A string `output_text` is kept. Otherwise this matches openai 7.27.0
+ * `addOutputText`: walk `output` in order, keep `type === "message"` items,
+ * keep `content.type === "output_text"` strings, and join them with "".
+ * Reasoning, refusals, tool calls, and unknown types contribute nothing.
+ * No collected string leaves the field unset so the extractor still sees absence.
+ */
+function completedOutputText(response: {
+  readonly output_text?: unknown;
+  readonly output?: unknown;
+}): string | undefined {
+  if (typeof response.output_text === "string") {
+    return response.output_text;
+  }
+  if (!Array.isArray(response.output)) {
+    return undefined;
+  }
+  const texts: string[] = [];
+  for (const item of response.output) {
+    if (!isRecord(item) || item.type !== "message" || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const content of item.content) {
+      if (
+        !isRecord(content) ||
+        content.type !== "output_text" ||
+        typeof content.text !== "string"
+      ) {
+        continue;
+      }
+      texts.push(content.text);
+    }
+  }
+  return texts.length > 0 ? texts.join("") : undefined;
+}
+
 /** Keeps only the string fields this transport reads from one SDK stream event. */
 function generationEvent(event: { readonly type: string }): OpenAiGenerationEvent {
   const record = event as {
@@ -76,6 +117,7 @@ function generationEvent(event: { readonly type: string }): OpenAiGenerationEven
     response?: {
       id?: unknown;
       output_text?: unknown;
+      output?: unknown;
       status?: unknown;
       error?: { message?: unknown } | null;
     };
@@ -92,10 +134,11 @@ function generationEvent(event: { readonly type: string }): OpenAiGenerationEven
     projected.text = record.text;
   }
   if (response) {
+    const outputText = completedOutputText(response);
     const errorMessage = response.error?.message;
     projected.response = {
       ...(typeof response.id === "string" ? { id: response.id } : {}),
-      ...(typeof response.output_text === "string" ? { output_text: response.output_text } : {}),
+      ...(typeof outputText === "string" ? { output_text: outputText } : {}),
       ...(typeof response.status === "string" ? { status: response.status } : {}),
       ...(typeof errorMessage === "string" ? { error: { message: errorMessage } } : {}),
     };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenAI } from "openai";
 import type {
   AiRequestId,
   AskRimOrigin,
@@ -27,6 +28,7 @@ import { extractRimCandidateFromCompletedText } from "./rim-completed-output.ts"
 import {
   OpenAiGenerationTransportError,
   OpenAiResponseGenerator,
+  openAiGenerationClient,
   type OpenAiGenerationBody,
   type OpenAiGenerationEvent,
   type OpenAiGenerationStream,
@@ -123,6 +125,41 @@ function streamFrom(
         }
       },
     },
+  };
+}
+
+function projecting(events: readonly object[]) {
+  const calls: RecordedCreate[] = [];
+  let retrieves = 0;
+  let aborted = false;
+  const sdk = {
+    responses: {
+      async create(body: OpenAiGenerationBody, options: RecordedCreate["options"]) {
+        calls.push({ body, options });
+        return {
+          controller: {
+            abort() {
+              aborted = true;
+            },
+          },
+          async *[Symbol.asyncIterator]() {
+            for (const event of events) {
+              yield event;
+            }
+          },
+        };
+      },
+      async retrieve() {
+        retrieves += 1;
+        return { id: "resp_retrieved" };
+      },
+    },
+  };
+  return {
+    calls,
+    aborted: () => aborted,
+    retrieves: () => retrieves,
+    client: openAiGenerationClient(sdk as unknown as Pick<OpenAI, "responses">),
   };
 }
 
@@ -601,6 +638,268 @@ describe("OpenAiResponseGenerator", () => {
       );
       expect(result).toEqual(extractRimCandidateFromCompletedText(outputText));
     }
+  });
+});
+
+const BAN_OUTPUT = {
+  type: "BAN_PROPOSALS",
+  message: "три запрета",
+  proposals: [
+    { banText: "не обсуждать работу", executionProbability: 0.2 },
+    { banText: "не опаздывать", executionProbability: 0.5 },
+    { banText: "не повышать голос", executionProbability: 1 },
+  ],
+};
+
+function completedFromOutput(output: readonly unknown[], id = "resp_output") {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      status: "completed",
+      output,
+    },
+  };
+}
+
+function messageItem(text: string) {
+  return {
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text }],
+  };
+}
+
+describe("streaming completed output extraction", () => {
+  it("keeps a string output_text ahead of response.output", async () => {
+    const transport = projecting([
+      created("resp_prefer"),
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_prefer",
+          status: "completed",
+          output_text: JSON.stringify({ output: messageOutput("из-поля") }),
+          output: [messageItem(JSON.stringify({ output: messageOutput("из-массива") }))],
+        },
+      },
+    ]);
+    const result = await new OpenAiResponseGenerator(transport.client, MODEL).respond(
+      providerRequest(),
+      acceptObserver([]),
+    );
+    expect(result).toEqual(messageOutput("из-поля"));
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.options).toEqual({ maxRetries: 0 });
+    expect(transport.retrieves()).toBe(0);
+  });
+
+  it("reads the live completed payload that has no output_text field", async () => {
+    const envelope = JSON.stringify({ output: messageOutput("из-сообщения") });
+    const completedEvent = completedFromOutput(
+      [
+        { type: "reasoning", content: [] },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: envelope }],
+        },
+      ],
+      "resp_live",
+    );
+    expect(Object.hasOwn(completedEvent.response, "output_text")).toBe(false);
+    const transport = projecting([
+      created("resp_live"),
+      { type: "response.output_text.delta", delta: "PARTIAL_DELTA" },
+      { type: "response.output_text.done", text: "DONE_NOT_CANONICAL" },
+      completedEvent,
+    ]);
+    const seen: string[] = [];
+    const result = await new OpenAiResponseGenerator(transport.client, MODEL).respond(
+      providerRequest(),
+      acceptObserver(seen),
+    );
+    expect(seen).toEqual(["resp_live"]);
+    expect(result).toEqual(messageOutput("из-сообщения"));
+    expect(validateRimAiOutput(result)).toEqual({
+      ok: true,
+      result: { kind: "MESSAGE", text: "из-сообщения" },
+    });
+    expect(JSON.stringify(result)).not.toContain("DONE_NOT_CANONICAL");
+    expect(JSON.stringify(result)).not.toContain("PARTIAL_DELTA");
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.retrieves()).toBe(0);
+    const call = transport.calls[0];
+    expect(call?.body.model).toBe(MODEL);
+    expect(call?.body.conversation).toBe(CONVERSATION_ID);
+    expect(call?.body.input).toBe(CURRENT_USER);
+    expect(call?.body.store).toBe(true);
+    expect(call?.body.stream).toBe(true);
+    expect(call?.body.text.format).toBe(RIM_OUTPUT_FORMAT);
+    expect(call?.options).toEqual({ maxRetries: 0 });
+    expect(Object.hasOwn(call?.body ?? {}, "previous_response_id")).toBe(false);
+  });
+
+  it("returns a BAN_PROPOSALS candidate from message output_text content", async () => {
+    const transport = projecting([
+      created("resp_ban"),
+      completedFromOutput(
+        [{ type: "reasoning" }, messageItem(JSON.stringify({ output: BAN_OUTPUT }))],
+        "resp_ban",
+      ),
+    ]);
+    const result = await new OpenAiResponseGenerator(transport.client, MODEL).respond(
+      providerRequest(),
+      acceptObserver([]),
+    );
+    expect(result).toEqual(BAN_OUTPUT);
+    expect(validateRimAiOutput(result)).toEqual({
+      ok: true,
+      result: {
+        kind: "BAN_PROPOSALS",
+        message: BAN_OUTPUT.message,
+        proposals: BAN_OUTPUT.proposals,
+      },
+    });
+  });
+
+  it("joins message output_text fragments in order and ignores other items", async () => {
+    const joined = JSON.stringify({ output: messageOutput("склеено") });
+    const splitAt = joined.indexOf("склеено");
+    const transport = projecting([
+      created("resp_join"),
+      completedFromOutput(
+        [
+          { type: "reasoning", content: [{ type: "summary_text", text: "скрыто" }] },
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              { type: "refusal", refusal: "нет" },
+              { type: "output_text", text: joined.slice(0, splitAt) },
+              { type: "input_image" },
+              { type: "output_text", text: 12 },
+            ],
+          },
+          { type: "function_call", name: "ignored" },
+          messageItem(joined.slice(splitAt)),
+        ],
+        "resp_join",
+      ),
+    ]);
+    const result = await new OpenAiResponseGenerator(transport.client, MODEL).respond(
+      providerRequest(),
+      acceptObserver([]),
+    );
+    expect(result).toEqual(messageOutput("склеено"));
+    expect(JSON.stringify(result)).not.toContain("скрыто");
+    expect(JSON.stringify(result)).not.toContain("нет");
+  });
+
+  it("does not repair malformed or unenveloped text taken from output", async () => {
+    const malformed = projecting([
+      created("resp_bad"),
+      completedFromOutput([messageItem("not-json{")], "resp_bad"),
+    ]);
+    const malformedResult = await new OpenAiResponseGenerator(malformed.client, MODEL).respond(
+      providerRequest(),
+      acceptObserver([]),
+    );
+    expect(malformedResult).toBe("not-json{");
+    expect(validateRimAiOutput(malformedResult)).toEqual({ ok: false, reason: "not-an-object" });
+
+    const bare = JSON.stringify({ type: "MESSAGE", text: "без конверта" });
+    const missing = projecting([
+      created("resp_bare"),
+      completedFromOutput([messageItem(bare)], "resp_bare"),
+    ]);
+    const missingResult = await new OpenAiResponseGenerator(missing.client, MODEL).respond(
+      providerRequest(),
+      acceptObserver([]),
+    );
+    expect(missingResult).toBe(bare);
+    expect(validateRimAiOutput(missingResult)).toEqual({ ok: false, reason: "not-an-object" });
+  });
+
+  it("keeps absence of completed text unusable", async () => {
+    const transport = projecting([
+      created("resp_none"),
+      completedFromOutput(
+        [
+          { type: "reasoning", content: [] },
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "refusal", refusal: "нет" }],
+          },
+          { type: "function_call" },
+        ],
+        "resp_none",
+      ),
+    ]);
+    const result = await new OpenAiResponseGenerator(transport.client, MODEL).respond(
+      providerRequest(),
+      acceptObserver([]),
+    );
+    expect(result).toBeNull();
+    expect(validateRimAiOutput(result)).toEqual({ ok: false, reason: "not-an-object" });
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.retrieves()).toBe(0);
+  });
+
+  it("still waits for the observer before returning output-derived text", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const enteredGate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const transport = projecting([
+      created("resp_live_order"),
+      completedFromOutput(
+        [{ type: "reasoning" }, messageItem(JSON.stringify({ output: messageOutput("после") }))],
+        "resp_live_order",
+      ),
+    ]);
+    let settled = false;
+    const pending = new OpenAiResponseGenerator(transport.client, MODEL)
+      .respond(providerRequest(), {
+        async onResponseCreated() {
+          entered();
+          await gate;
+          return { accepted: true };
+        },
+      })
+      .then((value) => {
+        settled = true;
+        return value;
+      });
+    await enteredGate;
+    expect(settled).toBe(false);
+    release();
+    await expect(pending).resolves.toEqual(messageOutput("после"));
+  });
+
+  it("still discards a refused body taken from response.output", async () => {
+    const transport = projecting([
+      created("resp_live_refused"),
+      completedFromOutput(
+        [messageItem(JSON.stringify({ output: messageOutput("нельзя") }))],
+        "resp_live_refused",
+      ),
+    ]);
+    await expect(
+      new OpenAiResponseGenerator(transport.client, MODEL).respond(providerRequest(), {
+        async onResponseCreated() {
+          return { accepted: false };
+        },
+      }),
+    ).rejects.toBeInstanceOf(OpenAiGenerationTransportError);
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.aborted()).toBe(true);
+    expect(transport.retrieves()).toBe(0);
   });
 });
 
