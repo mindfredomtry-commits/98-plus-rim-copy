@@ -10,6 +10,7 @@ import {
   recoverPendingRimAi,
   type RimAiPort,
   type RimContextFailures,
+  type RimConversationInitializationPort,
   type RimProviderRetrievalPort,
 } from "@98plus/application";
 import {
@@ -30,6 +31,11 @@ import {
 import type { UserId } from "@98plus/product-model";
 import { MemorySqlRegisteredUserDirectory, type RegisteredUserDirectory } from "./directory.ts";
 import { toTestUiDiagnostics, type TestUiDiagnostics } from "./diagnostics.ts";
+import {
+  selectRimProvider,
+  type OpenAiSdkClient,
+  type RimProviderSelection,
+} from "./openai/compose-rim-provider.ts";
 import type { TelegramPersistentReentryBootstrapIntent } from "./telegram-persistent-reentry.ts";
 
 export const DEFAULT_DEV_AUTH_SECRET = "test-secret";
@@ -69,8 +75,17 @@ export type CreateBanContactRuntime = Readonly<{
   telegramPersistentReentryBootstrapAfterClaim: (() => Promise<void>) | null;
   /** Mock/live bootstrap send intents for Stage 13A tests and diagnostics. */
   telegramPersistentReentryBootstrapIntents: TelegramPersistentReentryBootstrapIntent[];
+  /** Selected provider. Explicit test ports keep the Fake label and do not read env. */
+  rimProvider: "fake" | "openai";
+  /** Configured generation model. Null in Fake mode. */
+  rimModel: string | null;
   rimAi: RimAiPort;
-  /** Known-response retrieval. Null until a provider adapter can retrieve by responseId. */
+  /**
+   * Conversation initialization. Null in Fake mode so the Fake adapter's
+   * initialize remains the conversationPortFrom fallback.
+   */
+  rimConversationInitialization: RimConversationInitializationPort | null;
+  /** Known-response retrieval. Null in Fake mode. */
   rimProviderRetrieval: RimProviderRetrievalPort | null;
   rimContextFailures: RimContextFailures;
 }>;
@@ -94,8 +109,14 @@ export type CreateBanContactRuntimeOptions = Readonly<{
   telegramPersistentReentryBootstrapSend?: TelegramPersistentReentryBootstrapSend;
   telegramPersistentReentryBootstrapAfterClaim?: () => Promise<void>;
   rimAi?: RimAiPort;
+  rimConversationInitialization?: RimConversationInitializationPort | null;
   rimProviderRetrieval?: RimProviderRetrievalPort | null;
   rimContextFailures?: RimContextFailures;
+  /**
+   * Test seam for OpenAI mode. Production uses createOpenAiClient.
+   * Invoked only when RIM_PROVIDER=openai and no explicit port is injected.
+   */
+  createOpenAiClient?: (apiKey: string) => OpenAiSdkClient;
 }>;
 
 export function developmentIdentityConfig(
@@ -109,9 +130,50 @@ export function developmentIdentityConfig(
   });
 }
 
+function explicitRimPorts(options: CreateBanContactRuntimeOptions): boolean {
+  return (
+    options.rimAi !== undefined ||
+    options.rimConversationInitialization !== undefined ||
+    options.rimProviderRetrieval !== undefined
+  );
+}
+
+function resolveRimProvider(options: CreateBanContactRuntimeOptions): RimProviderSelection {
+  if (explicitRimPorts(options)) {
+    return {
+      provider: "fake",
+      model: null,
+      rimAi: options.rimAi ?? new FakeRimAiAdapter(),
+      rimConversationInitialization: options.rimConversationInitialization ?? null,
+      rimProviderRetrieval: options.rimProviderRetrieval ?? null,
+    };
+  }
+  return selectRimProvider({
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.createOpenAiClient === undefined
+      ? {}
+      : { createClient: options.createOpenAiClient }),
+  });
+}
+
+export function rimProviderTools(runtime: CreateBanContactRuntime): {
+  rimAi: RimAiPort;
+  retrieval: RimProviderRetrievalPort | null;
+  conversation?: RimConversationInitializationPort;
+} {
+  return {
+    rimAi: runtime.rimAi,
+    retrieval: runtime.rimProviderRetrieval,
+    ...(runtime.rimConversationInitialization
+      ? { conversation: runtime.rimConversationInitialization }
+      : {}),
+  };
+}
+
 export function createCreateBanContactRuntime(
   options: CreateBanContactRuntimeOptions = {},
 ): CreateBanContactRuntime {
+  const provider = resolveRimProvider(options);
   const sql = options.sql ?? new MemorySqlClient();
   const identityStore = options.identityStore ?? new PostgresIdentityStore(sql);
   const productStore = options.productStore ?? new PostgresProductStore(sql);
@@ -138,8 +200,11 @@ export function createCreateBanContactRuntime(
     telegramPersistentReentryBootstrapAfterClaim:
       options.telegramPersistentReentryBootstrapAfterClaim ?? null,
     telegramPersistentReentryBootstrapIntents: [],
-    rimAi: options.rimAi ?? new FakeRimAiAdapter(),
-    rimProviderRetrieval: options.rimProviderRetrieval ?? null,
+    rimProvider: provider.provider,
+    rimModel: provider.model,
+    rimAi: provider.rimAi,
+    rimConversationInitialization: provider.rimConversationInitialization,
+    rimProviderRetrieval: provider.rimProviderRetrieval,
     rimContextFailures: options.rimContextFailures ?? { remainingFailures: 0 },
   };
 }
@@ -235,8 +300,7 @@ export async function openLobbyIfNeeded(
     const recovered = await recoverPendingRimAi({
       context,
       deps: executorDeps(runtime),
-      rimAi: runtime.rimAi,
-      retrieval: runtime.rimProviderRetrieval,
+      ...rimProviderTools(runtime),
     });
     return {
       ...(await loadDiagnostics(runtime, context, recovered)),

@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { FakeRimAiAdapter } from "@98plus/application";
-import { createCreateBanContactRuntime } from "../runtime.ts";
 import {
   loadRimProviderConfig,
   publicRimProviderConfig,
@@ -132,17 +130,5 @@ describe("loadRimProviderConfig", () => {
       expect((error as RimProviderConfigError).code).toBe("OPENAI_MODEL_REQUIRED");
       expect(error).not.toMatchObject({ provider: "fake" });
     }
-  });
-
-  it("keeps runtime composition on FakeRimAiAdapter when openai config is parseable", () => {
-    const env = {
-      RIM_PROVIDER: "openai",
-      OPENAI_API_KEY: FAKE_KEY,
-      OPENAI_MODEL: FAKE_MODEL,
-    };
-    expect(loadRimProviderConfig(env).provider).toBe("openai");
-    const runtime = createCreateBanContactRuntime({ env });
-    expect(runtime.rimAi).toBeInstanceOf(FakeRimAiAdapter);
-    expect(runtime.rimProviderRetrieval).toBeNull();
   });
 });

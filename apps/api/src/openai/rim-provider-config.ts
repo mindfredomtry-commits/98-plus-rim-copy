@@ -1,10 +1,9 @@
 /**
  * Server-side RIM provider configuration.
  *
- * Parsing is intentionally separate from runtime selection. Pass 1 does not
- * construct an OpenAI adapter or change FakeRimAiAdapter composition.
- * OPENAI_API_KEY stays on the server config object and is omitted from the
- * public view and from JSON serialization.
+ * Parsing does not construct an OpenAI client. Runtime selection lives in
+ * selectRimProvider. OPENAI_API_KEY stays on the server config object and is
+ * omitted from the public view and from JSON serialization.
  */
 
 export type RimProviderConfigErrorCode =

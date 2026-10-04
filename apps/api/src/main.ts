@@ -42,12 +42,17 @@ const authMode = runtime.config.allowDevelopmentAuth
   : "telegram-initData-only";
 const tokenStatus = process.env.TELEGRAM_BOT_TOKEN?.trim() ? "configured" : "missing";
 const usernameStatus = process.env.TELEGRAM_BOT_USERNAME?.trim() ? "configured" : "missing";
+const rimProviderLine =
+  runtime.rimProvider === "openai"
+    ? `RIM provider: openai model=${runtime.rimModel ?? ""}`
+    : "RIM provider: fake";
 
 process.stdout.write(
   [
     "98+ TEST UI — temporary Stage 11 Telegram verification host",
     `listening ${host}:${port} (local url ${listening.url})`,
     `auth=${authMode}`,
+    rimProviderLine,
     `TELEGRAM_BOT_TOKEN=${tokenStatus}`,
     `TELEGRAM_BOT_USERNAME=${usernameStatus}`,
     "persistence=MemorySqlClient (volatile; lost on restart)",

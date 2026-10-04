@@ -31,6 +31,7 @@ import { applyElapsedDomainTimers } from "./duration-expired.ts";
 import {
   executeAuthenticatedEvent,
   executorDeps,
+  rimProviderTools,
   type CreateBanContactRuntime,
 } from "./runtime.ts";
 
@@ -177,8 +178,7 @@ async function finishWithElapsedTimers(
     context,
     ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
     deps: executorDeps(runtime),
-    rimAi: runtime.rimAi,
-    retrieval: runtime.rimProviderRetrieval,
+    ...rimProviderTools(runtime),
     contextFailures: runtime.rimContextFailures,
     loadSources: (currentUserId, contactId) =>
       runtime.productStore.listRelationshipContextSources(currentUserId, contactId),
@@ -187,8 +187,7 @@ async function finishWithElapsedTimers(
     context,
     ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
     deps: executorDeps(runtime),
-    rimAi: runtime.rimAi,
-    retrieval: runtime.rimProviderRetrieval,
+    ...rimProviderTools(runtime),
     inFlightRequestIds: inFlightRimAiRequestIds(settled),
   });
   const completed = recovered ?? settled;
