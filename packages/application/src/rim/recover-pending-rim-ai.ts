@@ -26,8 +26,7 @@ import {
   type RimResponseCreatedObservation,
 } from "./rim-ai-port.ts";
 import {
-  PRODUCT_SEMANTICS_UNAVAILABLE,
-  RIM_PROMPT_UNAVAILABLE,
+  providerReadySemanticInputs,
   type RimConversationInitializationPort,
 } from "./rim-conversation-port.ts";
 import type { RimProviderRetrievalPort } from "./rim-provider-retrieval.ts";
@@ -1086,6 +1085,7 @@ function localRequest(
   pending: PendingChat,
   relationshipContext: RelationshipContextData,
 ): LocalRimAiRequest {
+  const semantics = providerReadySemanticInputs();
   return {
     continuityMode: "local-canonical-history",
     requestId: pending.snapshot.requestId,
@@ -1093,8 +1093,8 @@ function localRequest(
     contextRequestId: pending.snapshot.contextRequestId,
     relationshipContext,
     conversationalOrigin: pending.chat.askRimOrigin,
-    rimPrompt: RIM_PROMPT_UNAVAILABLE,
-    productSemantics: PRODUCT_SEMANTICS_UNAVAILABLE,
+    rimPrompt: semantics.rimPrompt,
+    productSemantics: semantics.productSemantics,
     canonicalHistory: projectLocalCanonicalHistory(pending.chat.messages),
   };
 }

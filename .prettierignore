@@ -1,3 +1,4 @@
 dist
 node_modules
 package-lock.json
+packages/application/src/rim/semantics/*.md

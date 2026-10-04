@@ -12,8 +12,7 @@ import { executeProductEvent } from "../execute.ts";
 import type { RimAiPort } from "./rim-ai-port.ts";
 import {
   conversationPortFrom,
-  PRODUCT_SEMANTICS_UNAVAILABLE,
-  RIM_PROMPT_UNAVAILABLE,
+  providerReadySemanticInputs,
   type RimConversationInitializationPort,
   type RimConversationInitializationRequest,
 } from "./rim-conversation-port.ts";
@@ -365,14 +364,15 @@ function initializationRequest(
   if (runtime.initialization.submissionState === "stored") {
     throw new Error("stored initialization cannot be submitted again");
   }
+  const semantics = providerReadySemanticInputs();
   return {
     rimChatId: ready.chat.id,
     selectedContactId: ready.chat.selectedContactId,
     contextRequestId: ready.requestId,
     attemptId: runtime.initialization.attemptId,
     clientRequestId: runtime.initialization.clientRequestId,
-    rimPrompt: RIM_PROMPT_UNAVAILABLE,
-    productSemantics: PRODUCT_SEMANTICS_UNAVAILABLE,
+    rimPrompt: semantics.rimPrompt,
+    productSemantics: semantics.productSemantics,
     relationshipContext: ready.data,
     origin: validAskRimOrigin(snapshot, currentUserId),
   };

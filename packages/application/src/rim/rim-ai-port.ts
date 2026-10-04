@@ -51,8 +51,8 @@ export type LocalCanonicalHistoryEntry =
  * `canonicalHistory` is the complete model-facing semantic history. E-52 has
  * already appended the current USER turn, so that history contains it once.
  * This request has no second user-message field to serialize.
- * Prompt and semantics may still be unavailable placeholders. A real provider
- * transport must reject those through `assertProviderReadySemantics`.
+ * Prompt and semantics are the approved provider-ready artifacts.
+ * A real provider transport must confirm them through `assertProviderReadySemantics`.
  */
 export type LocalRimAiRequest = Readonly<{
   continuityMode: "local-canonical-history";
@@ -76,6 +76,23 @@ export function localModelFacingHistory(
   request: LocalRimAiRequest,
 ): readonly LocalCanonicalHistoryEntry[] {
   return request.canonicalHistory;
+}
+
+/**
+ * Model-facing continuation of a stored Conversation.
+ * Correlation fields on the request stay inside Application.
+ * The provider payload is the stored conversation id and the new USER message.
+ */
+export type ProviderModelFacingTurn = Readonly<{
+  conversationId: ProviderConversationId;
+  userMessage: string;
+}>;
+
+export function providerModelFacingTurn(request: ProviderRimAiRequest): ProviderModelFacingTurn {
+  return {
+    conversationId: request.conversationId,
+    userMessage: request.userMessage,
+  };
 }
 
 /** Projects committed Product messages. It does not append the current USER again. */

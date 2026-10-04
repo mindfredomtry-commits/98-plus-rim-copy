@@ -51,12 +51,20 @@ import {
   type RimInitializationObservation,
 } from "./initialize-rim-conversation.ts";
 import { recoverPendingRimAi } from "./recover-pending-rim-ai.ts";
-import type { RimAiPort, RimAiRequest, RimAiResponseObserver } from "./rim-ai-port.ts";
+import {
+  providerModelFacingTurn,
+  type RimAiPort,
+  type RimAiRequest,
+  type RimAiResponseObserver,
+} from "./rim-ai-port.ts";
 import {
   assertProviderReadyInitialization,
+  PRODUCT_SEMANTICS_MVP15,
   PRODUCT_SEMANTICS_UNAVAILABLE,
   RIM_PROMPT_UNAVAILABLE,
+  RIM_PROMPT_V1,
   type RimConversationInitializationPort,
+  type RimConversationInitializationRequest,
 } from "./rim-conversation-port.ts";
 import {
   applicableRimProviderRuntime,
@@ -249,10 +257,21 @@ describe("DC-01 conversation initialization", () => {
     expect(fake.initializationRequests).toHaveLength(1);
     expect(fake.respondRequests).toEqual([]);
     const request = fake.initializationRequests[0];
-    expect(request?.rimPrompt).toEqual(RIM_PROMPT_UNAVAILABLE);
-    expect(request?.productSemantics).toEqual(PRODUCT_SEMANTICS_UNAVAILABLE);
+    expect(request?.rimPrompt).toBe(RIM_PROMPT_V1);
+    expect(request?.productSemantics).toBe(PRODUCT_SEMANTICS_MVP15);
+    if (
+      request?.rimPrompt.availability === "available" &&
+      request.productSemantics.availability === "available"
+    ) {
+      expect(request.rimPrompt.text).toBe(RIM_PROMPT_V1.text);
+      expect(request.productSemantics.text).toBe(PRODUCT_SEMANTICS_MVP15.text);
+    }
     expect(request?.origin).toBeNull();
-    expect(request?.relationshipContext.aggregates.userToContact.bansSentCount).toBe(0);
+    const readyContextData = ready.snapshot.extended.rimChat?.relationshipContext;
+    expect(readyContextData?.status).toBe("ready");
+    if (readyContextData?.status === "ready") {
+      expect(request?.relationshipContext).toEqual(readyContextData.data);
+    }
     const { runtime } = await presentRuntime(app.store, SENDER_ID);
     expect(runtime.initialization).toEqual({
       submissionState: "stored",
@@ -297,7 +316,14 @@ describe("DC-01 conversation initialization", () => {
     expect(fake.initializationRequests[0]?.origin).toEqual(
       ready.snapshot.extended.rimChat?.askRimOrigin,
     );
-    expect(fake.initializationRequests[0]?.rimPrompt).toEqual(RIM_PROMPT_UNAVAILABLE);
+    expect(fake.initializationRequests[0]?.origin).not.toBeNull();
+    expect(fake.initializationRequests[0]?.rimPrompt).toBe(RIM_PROMPT_V1);
+    expect(fake.initializationRequests[0]?.productSemantics).toBe(PRODUCT_SEMANTICS_MVP15);
+    const askContext = ready.snapshot.extended.rimChat?.relationshipContext;
+    expect(askContext?.status).toBe("ready");
+    if (askContext?.status === "ready") {
+      expect(fake.initializationRequests[0]?.relationshipContext).toEqual(askContext.data);
+    }
     expect(log).toEqual([
       "initialization-runtime-created",
       "initialization-claimed",
@@ -788,13 +814,25 @@ describe("DC-01 conversation initialization", () => {
     expect(turn?.relationshipContext).toEqual(initialized?.relationshipContext);
     expect(turn?.conversationalOrigin).toBeNull();
     expect(turn?.userMessage).toBe("после");
+    const facing = providerModelFacingTurn(turn);
+    expect(facing).toEqual({
+      conversationId: conversation("conv-then-user"),
+      userMessage: "после",
+    });
+    expect(Object.keys(facing).sort()).toEqual(["conversationId", "userMessage"]);
+    expect(JSON.stringify(facing).split("после").length - 1).toBe(1);
+    expect(JSON.stringify(facing)).not.toContain("relationshipContext");
+    expect(JSON.stringify(facing)).not.toContain("conversationalOrigin");
+    expect(JSON.stringify(facing)).not.toContain("rimPrompt");
+    expect(JSON.stringify(facing)).not.toContain("productSemantics");
+    expect(JSON.stringify(facing)).not.toContain(RIM_PROMPT_V1.text.slice(0, 40));
     expect(settled.event.name).toBe("RIM.AI_RESULT_RECEIVED");
     const after = await presentRuntime(readyApp.app.store, SENDER_ID);
     expect(after.runtime.initialization).toEqual(stored.runtime.initialization);
     expect(after.runtime.attempt?.submissionState).toBe("returned-body-observed");
   });
 
-  it("refuses unavailable semantic artifacts as provider-ready initialization input", async () => {
+  it("initializes with the approved semantic pair and rejects unavailable fixtures", async () => {
     expect(RIM_PROMPT_UNAVAILABLE).toEqual({ availability: "unavailable" });
     expect(PRODUCT_SEMANTICS_UNAVAILABLE).toEqual({ availability: "unavailable" });
     expect(Object.keys(RIM_PROMPT_UNAVAILABLE)).toEqual(["availability"]);
@@ -806,8 +844,13 @@ describe("DC-01 conversation initialization", () => {
     if (!request) {
       throw new Error("expected an initialization request");
     }
-    expect(request.rimPrompt).toBe(RIM_PROMPT_UNAVAILABLE);
-    expect(request.productSemantics).toBe(PRODUCT_SEMANTICS_UNAVAILABLE);
+    expect(request.rimPrompt).toBe(RIM_PROMPT_V1);
+    expect(request.productSemantics).toBe(PRODUCT_SEMANTICS_MVP15);
+    expect(assertProviderReadyInitialization(request)).toMatchObject({
+      rimPrompt: RIM_PROMPT_V1,
+      productSemantics: PRODUCT_SEMANTICS_MVP15,
+      origin: null,
+    });
     const storedChat = (await app.store.loadProductSnapshot(SENDER_ID)).snapshot.extended.rimChat;
     const storedContext = storedChat?.relationshipContext;
     expect(storedContext?.status).toBe("ready");
@@ -818,7 +861,12 @@ describe("DC-01 conversation initialization", () => {
       expect(request.selectedContactId).toBe(storedChat?.selectedContactId);
     }
     expect(request.origin).toBeNull();
-    expect(() => assertProviderReadyInitialization(request)).toThrow(/not provider-ready/);
+    const unavailable: RimConversationInitializationRequest = {
+      ...request,
+      rimPrompt: RIM_PROMPT_UNAVAILABLE,
+      productSemantics: PRODUCT_SEMANTICS_UNAVAILABLE,
+    };
+    expect(() => assertProviderReadyInitialization(unavailable)).toThrow(/not provider-ready/);
     expect(fake.respondRequests).toEqual([]);
   });
 

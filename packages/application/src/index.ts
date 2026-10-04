@@ -28,10 +28,15 @@ export type {
   RimProviderRetrieval,
   RimProviderRetrievalPort,
 } from "./rim/rim-provider-retrieval.ts";
-export { localModelFacingHistory, projectLocalCanonicalHistory } from "./rim/rim-ai-port.ts";
+export {
+  localModelFacingHistory,
+  projectLocalCanonicalHistory,
+  providerModelFacingTurn,
+} from "./rim/rim-ai-port.ts";
 export type {
   LocalCanonicalHistoryEntry,
   LocalRimAiRequest,
+  ProviderModelFacingTurn,
   ProviderRimAiRequest,
   RimAiPort,
   RimAiRequest,
@@ -41,8 +46,11 @@ export type {
 export {
   assertProviderReadyInitialization,
   assertProviderReadySemantics,
+  PRODUCT_SEMANTICS_MVP15,
   PRODUCT_SEMANTICS_UNAVAILABLE,
+  providerReadySemanticInputs,
   RIM_PROMPT_UNAVAILABLE,
+  RIM_PROMPT_V1,
 } from "./rim/rim-conversation-port.ts";
 export type {
   ProductSemanticsInput,

@@ -62,8 +62,8 @@ import {
 } from "./rim-ai-port.ts";
 import {
   assertProviderReadySemantics,
-  PRODUCT_SEMANTICS_UNAVAILABLE,
-  RIM_PROMPT_UNAVAILABLE,
+  PRODUCT_SEMANTICS_MVP15,
+  RIM_PROMPT_V1,
   type RimConversationInitializationPort,
 } from "./rim-conversation-port.ts";
 import type { RimProviderRetrievalPort } from "./rim-provider-retrieval.ts";
@@ -1966,9 +1966,19 @@ describe("DC-02 ambiguity transition", () => {
     }
     expect(request.relationshipContext).toEqual(chat.relationshipContext?.data);
     expect(request.conversationalOrigin).toEqual(origin);
-    expect(request.rimPrompt).toBe(RIM_PROMPT_UNAVAILABLE);
-    expect(request.productSemantics).toBe(PRODUCT_SEMANTICS_UNAVAILABLE);
-    expect(() => assertProviderReadySemantics(request)).toThrow(/not provider-ready/);
+    expect(request.rimPrompt).toBe(RIM_PROMPT_V1);
+    expect(request.productSemantics).toBe(PRODUCT_SEMANTICS_MVP15);
+    if (
+      request.rimPrompt.availability === "available" &&
+      request.productSemantics.availability === "available"
+    ) {
+      expect(request.rimPrompt.text).toBe(RIM_PROMPT_V1.text);
+      expect(request.productSemantics.text).toBe(PRODUCT_SEMANTICS_MVP15.text);
+    }
+    expect(assertProviderReadySemantics(request)).toEqual({
+      rimPrompt: RIM_PROMPT_V1,
+      productSemantics: PRODUCT_SEMANTICS_MVP15,
+    });
     expect(request.canonicalHistory).toEqual(projectLocalCanonicalHistory(chat.messages));
     expect("userMessage" in request).toBe(false);
     const facing = localModelFacingHistory(request);
