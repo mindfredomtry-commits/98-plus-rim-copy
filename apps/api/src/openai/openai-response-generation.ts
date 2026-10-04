@@ -12,6 +12,7 @@ import {
 } from "@98plus/application";
 import { canonicalJson } from "./canonical-json.ts";
 import { OPENAI_CLIENT_MAX_RETRIES } from "./openai-client.ts";
+import { extractRimCandidateFromCompletedText } from "./rim-completed-output.ts";
 import { RIM_OUTPUT_FORMAT } from "./rim-output-format.ts";
 
 /**
@@ -210,24 +211,7 @@ function failureText(kind: string, event: OpenAiGenerationEvent): string {
 }
 
 function unwrapCompletedOutput(event: OpenAiGenerationEvent): unknown {
-  const text = event.response?.output_text;
-  if (typeof text !== "string") {
-    return text ?? null;
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed) &&
-      "output" in parsed
-    ) {
-      return parsed.output;
-    }
-    return text;
-  } catch {
-    return text;
-  }
+  return extractRimCandidateFromCompletedText(event.response?.output_text);
 }
 
 function stop(stream: OpenAiGenerationStream, error: OpenAiGenerationTransportError): never {

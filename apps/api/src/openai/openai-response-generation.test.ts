@@ -23,6 +23,7 @@ import {
 import { PRODUCT_SEMANTICS_MVP15_TEXT } from "../../../../packages/application/src/rim/semantics/product-semantics-mvp15.ts";
 import { RIM_PROMPT_V1_TEXT } from "../../../../packages/application/src/rim/semantics/rim-prompt-v1.ts";
 import { canonicalJson } from "./canonical-json.ts";
+import { extractRimCandidateFromCompletedText } from "./rim-completed-output.ts";
 import {
   OpenAiGenerationTransportError,
   OpenAiResponseGenerator,
@@ -566,6 +567,40 @@ describe("OpenAiResponseGenerator", () => {
     const unwrapped = await generatorFor(JSON.stringify({ type: "MESSAGE", text: "без конверта" }));
     expect(unwrapped).toBe(JSON.stringify({ type: "MESSAGE", text: "без конверта" }));
     expect(validateRimAiOutput(unwrapped)).toEqual({ ok: false, reason: "not-an-object" });
+  });
+
+  it("keeps completed-body extraction identical to the shared transport helper", async () => {
+    const samples = [
+      JSON.stringify({ output: messageOutput("общий") }),
+      JSON.stringify({
+        output: {
+          type: "BAN_PROPOSALS",
+          message: "три",
+          proposals: [
+            { banText: "а", executionProbability: 0.1 },
+            { banText: "б", executionProbability: 0.2 },
+            { banText: "в", executionProbability: 0.3 },
+          ],
+        },
+      }),
+      "not-json{",
+      JSON.stringify({ type: "MESSAGE", text: "без конверта" }),
+      JSON.stringify({ output: { type: "MESSAGE" } }),
+    ];
+    for (const outputText of samples) {
+      const transport = recording([
+        created("resp_shared"),
+        {
+          type: "response.completed",
+          response: { id: "resp_shared", status: "completed", output_text: outputText },
+        },
+      ]);
+      const result = await new OpenAiResponseGenerator(transport.client, MODEL).respond(
+        providerRequest(),
+        acceptObserver([]),
+      );
+      expect(result).toEqual(extractRimCandidateFromCompletedText(outputText));
+    }
   });
 });
 
