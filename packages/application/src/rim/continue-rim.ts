@@ -75,6 +75,7 @@ export async function continueRimEffects(
           : { initializationLog: tools.initializationLog }),
         retrieval: tools.retrieval ?? null,
         origin: effect.conversationalOrigin,
+        userRetry: current.event.name === "RIM.PRESS_RETRY_AI",
       });
       return settled ?? current;
     }

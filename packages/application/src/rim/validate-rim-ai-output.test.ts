@@ -372,7 +372,7 @@ describe("RIM AI output validation gate", () => {
     },
   );
 
-  it("does not resubmit the USER turn when E-54 follows a validation failure", async () => {
+  it("retries a validation failure locally without a second USER message", async () => {
     const app = await readyChat();
     const seen: RimAiRequest[] = [];
     const tools = rimTools(app.store, {
@@ -416,18 +416,27 @@ describe("RIM AI output validation gate", () => {
     });
     expect(userMessages(chatOf(retried).messages)).toEqual([{ kind: "USER", text: "почему так" }]);
     const followed = await continueRimEffects(retried, tools);
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(2);
     expect(seen[0]?.requestId).toBe(failedRequestId);
     if (seen[0]?.continuityMode !== "provider-conversation") {
       throw new Error("expected provider continuation");
     }
     expect(seen[0].userMessage).toBe("почему так");
-    expect(followed.event.name).toBe("RIM.PRESS_RETRY_AI");
+    const retry = seen[1];
+    expect(retry?.continuityMode).toBe("local-canonical-history");
+    expect(retry?.requestId).toBe(failedRequestId);
+    expect(retry && "conversationId" in retry).toBe(false);
+    if (retry?.continuityMode === "local-canonical-history") {
+      expect(retry.canonicalHistory.filter((entry) => entry.kind === "USER")).toEqual([
+        { kind: "USER", text: "почему так" },
+      ]);
+    }
+    expect(followed.event.name).toBe("RIM.AI_REQUEST_FAILED");
     expect(followed.traces.some((trace) => trace.eventId === "E-58")).toBe(false);
     expect(followed.traces.some((trace) => trace.eventId === "E-64")).toBe(false);
-    expect(followed.traces.some((trace) => trace.eventId === "E-59")).toBe(false);
+    expect(followed.traces.filter((trace) => trace.eventId === "E-59")).toHaveLength(1);
     const chat = chatOf(followed);
-    expect(chat.aiOperation).toMatchObject({ status: "PENDING", requestId: failedRequestId });
+    expect(chat.aiOperation).toMatchObject({ status: "FAILED", requestId: failedRequestId });
     expect(userMessages(chat.messages)).toEqual([{ kind: "USER", text: "почему так" }]);
     expect(chat.messages.at(-1)).toEqual({ kind: "USER", text: "почему так" });
     const after = await app.store.loadProductSnapshot(SENDER_ID);
@@ -435,11 +444,11 @@ describe("RIM AI output validation gate", () => {
       parseRimProviderRuntime(after.rimProviderRuntime),
       chat.id,
     );
-    expect(afterRuntime?.continuityMode).toBe("provider-conversation");
-    expect(afterRuntime?.retiredAttemptId).toBeNull();
+    expect(afterRuntime?.continuityMode).toBe("local-canonical-history");
+    expect(afterRuntime?.retiredAttemptId).toBe(attemptId);
+    expect(afterRuntime?.attempt?.attemptId).not.toBe(attemptId);
     expect(afterRuntime?.attempt).toMatchObject({
       submissionState: "returned-body-observed",
-      attemptId,
       requestId: failedRequestId,
     });
     expect(afterRuntime?.attempt).not.toHaveProperty("responseId");

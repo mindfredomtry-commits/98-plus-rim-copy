@@ -90,6 +90,21 @@ type ReconcileTools = Readonly<{
   mode: "live" | "recover";
   origin: OriginSource;
   inFlightRequestIds: readonly string[];
+  /**
+   * True only for the live continuation of an explicit E-54.
+   * Recovery must not set this. PENDING plus a terminal attempt is also the
+   * crash window before E-58/E-59, so it is not itself a retry.
+   */
+  userRetry: boolean;
+}>;
+
+type ProducingAttempt = Readonly<{
+  rimChatId: RimProviderRuntime["rimChatId"];
+  selectedContactId: RimProviderRuntime["selectedContactId"];
+  contextRequestId: RimProviderRuntime["contextRequestId"];
+  requestId: AiRequestId;
+  attemptId: RimProviderAttemptId;
+  continuityMode: RimProviderRuntime["continuityMode"];
 }>;
 
 export type PendingRimAiTools = Readonly<{
@@ -111,6 +126,7 @@ export async function continuePendingRimAi(
   tools: PendingRimAiTools &
     Readonly<{
       origin: AskRimOrigin | null;
+      userRetry?: boolean;
     }>,
 ): Promise<ApplicationExecutionResult | null> {
   const initialized = await ensureInitialization(tools);
@@ -123,6 +139,7 @@ export async function continuePendingRimAi(
       mode: "live",
       origin: { kind: "effect", value: tools.origin },
       inFlightRequestIds: [],
+      userRetry: tools.userRetry === true,
     },
     0,
   );
@@ -149,6 +166,10 @@ export async function continuePendingRimAi(
  * that retained that id. A historical returned body with no response id is not
  * retrieved. A retrieval result dispatches only after its observation CAS
  * commits for this attempt.
+ * An explicit E-54 of a terminal unusable attempt retires that attempt and
+ * executes one new local attempt for the same logical request. Recovery does
+ * not take that path. E-58 and E-59 dispatch only while the producing attempt
+ * is still the current attempt for that RimChat and logical request.
  */
 export async function recoverPendingRimAi(
   tools: PendingRimAiTools &
@@ -176,6 +197,7 @@ export async function recoverPendingRimAi(
       mode: "recover",
       origin: { kind: "current" },
       inFlightRequestIds: tools.inFlightRequestIds ?? [],
+      userRetry: false,
     },
     0,
   );
@@ -245,6 +267,9 @@ async function reconcile(
       return transitionAmbiguousUserAttempt(tools, loaded, applicable, reentry);
     }
     return null;
+  }
+  if (tools.userRetry && terminalUnusableForRetry(applicable.attempt)) {
+    return retryTerminalAttemptLocally(tools, loaded, applicable, reentry);
   }
   if (applicable.attempt.submissionState === "returned-body-observed") {
     if (applicable.attempt.responseId === undefined) {
@@ -317,7 +342,89 @@ async function transitionAmbiguousUserAttempt(
   if (!saved.ok) {
     return reentry >= MAX_CLAIM_REENTRY ? null : reconcile(tools, reentry + 1);
   }
-  return claimThenSubmit(tools, saved.loaded, next, reentry);
+  return claimThenSubmit({ ...tools, userRetry: false }, saved.loaded, next, reentry);
+}
+
+const TERMINAL_RETRY_STATUSES = ["completed", "failed", "cancelled", "incomplete"] as const;
+
+/**
+ * Durable states that a live invalid body or a retrieved terminal provider
+ * status leave behind after E-59. Acceptance-unknown, response-id-known, and
+ * nonterminal retrieval statuses are not retry provenance.
+ */
+function terminalUnusableForRetry(attempt: RimProviderAttempt): boolean {
+  if (attempt.submissionState === "returned-body-observed") {
+    return true;
+  }
+  if (attempt.submissionState !== "completed-retrieved") {
+    return false;
+  }
+  return (TERMINAL_RETRY_STATUSES as readonly RetrievedProviderStatus[]).includes(
+    attempt.providerStatus,
+  );
+}
+
+function legitimateTerminalRetry(
+  tools: ReconcileTools,
+  pending: PendingChat,
+  runtime: RimProviderRuntime,
+): boolean {
+  const attempt = runtime.attempt;
+  if (!tools.userRetry || tools.mode !== "live" || !attempt) {
+    return false;
+  }
+  if (!terminalUnusableForRetry(attempt)) {
+    return false;
+  }
+  if (runtime.initialization.submissionState !== "stored") {
+    return false;
+  }
+  if (attempt.requestId !== pending.snapshot.requestId) {
+    return false;
+  }
+  return (
+    runtime.rimChatId === pending.chat.id &&
+    runtime.selectedContactId === pending.chat.selectedContactId &&
+    runtime.contextRequestId === pending.snapshot.contextRequestId
+  );
+}
+
+/**
+ * Explicit E-54 after a terminal unusable attempt.
+ * The same RimChat, logical request, initialization, and semantic USER stay.
+ * The technical attempt is replaced and continuity becomes local, including
+ * when it was already local. The stored Conversation id is not sent or deleted.
+ */
+async function retryTerminalAttemptLocally(
+  tools: ReconcileTools,
+  loaded: LoadedSnapshot,
+  runtime: RimProviderRuntime,
+  reentry: number,
+): Promise<ApplicationExecutionResult | null> {
+  const current = runtime.attempt;
+  const pending = pendingChat(loaded.snapshot);
+  if (!current || !pending || !legitimateTerminalRetry(tools, pending, runtime)) {
+    return null;
+  }
+  const next: RimProviderRuntime = {
+    rimChatId: runtime.rimChatId,
+    selectedContactId: runtime.selectedContactId,
+    contextRequestId: runtime.contextRequestId,
+    initialization: runtime.initialization,
+    attempt: {
+      requestId: current.requestId,
+      attemptId: tools.deps.allocateId("rim-provider-attempt") as RimProviderAttemptId,
+      submissionState: "not-submitted",
+      clientRequestId: null,
+    },
+    continuityMode: "local-canonical-history",
+    retiredAttemptId: current.attemptId,
+  };
+  const saved = await trySave(tools, loaded.revision, next);
+  if (!saved.ok) {
+    return reentry >= MAX_CLAIM_REENTRY ? null : reconcile(tools, reentry + 1);
+  }
+  return claimThenSubmit({ ...tools, userRetry: false }, saved.loaded, next, reentry);
 }
 
 async function claimThenSubmit(
@@ -445,7 +552,11 @@ async function submitClaimed(
             code: "RIM_AI_FAILED",
             message: error instanceof Error ? error.message : "rim ai failed",
           } as unknown as Failure);
-    return dispatch(tools, failureEvent(pending.snapshot, failure));
+    const authority = producingAttempt(runtime);
+    if (!authority) {
+      return null;
+    }
+    return dispatchIfCurrent(tools, failureEvent(pending.snapshot, failure), authority);
   }
   const observedProvenance = provenance.read();
   if (observedProvenance.kind === "conflict" || observedProvenance.kind === "refused") {
@@ -461,10 +572,11 @@ async function submitClaimed(
   }
   const current = pendingChat(observed.loaded.snapshot);
   const attempt = runtime.attempt;
-  if (!current || !attempt || current.snapshot.requestId !== attempt.requestId) {
+  const authority = producingAttempt(runtime);
+  if (!current || !attempt || !authority || current.snapshot.requestId !== attempt.requestId) {
     return null;
   }
-  return dispatch(tools, completionEvent(current.snapshot, body));
+  return dispatchIfCurrent(tools, completionEvent(current.snapshot, body), authority);
 }
 
 async function acceptResponseCreated(
@@ -748,10 +860,11 @@ async function retrieveThenComplete(
     return null;
   }
   const pending = pendingChat(saved.loaded.snapshot);
-  if (!pending) {
+  const authority = producingAttempt(runtime);
+  if (!pending || !authority) {
     return null;
   }
-  return completeRetrieved(tools, pending, retrieved.providerStatus, retrieved.output);
+  return completeRetrieved(tools, pending, retrieved.providerStatus, retrieved.output, authority);
 }
 
 function retrievalObservationAccepted(
@@ -791,23 +904,88 @@ async function completeRetrieved(
   pending: PendingChat,
   status: RetrievedProviderStatus,
   output: unknown,
+  authority: ProducingAttempt,
 ): Promise<ApplicationExecutionResult | null> {
   if (status === "queued" || status === "in_progress") {
     return null;
   }
   if (status === "failed" || status === "cancelled" || status === "incomplete") {
-    return dispatch(
+    return dispatchIfCurrent(
       tools,
       failureEvent(pending.snapshot, {
         code: "RIM_AI_FAILED",
         message: status,
       } as unknown as Failure),
+      authority,
     );
   }
   if (output === undefined) {
     return null;
   }
-  return dispatch(tools, completionEvent(pending.snapshot, output));
+  return dispatchIfCurrent(tools, completionEvent(pending.snapshot, output), authority);
+}
+
+function producingAttempt(runtime: RimProviderRuntime): ProducingAttempt | null {
+  const attempt = runtime.attempt;
+  if (!attempt) {
+    return null;
+  }
+  return {
+    rimChatId: runtime.rimChatId,
+    selectedContactId: runtime.selectedContactId,
+    contextRequestId: runtime.contextRequestId,
+    requestId: attempt.requestId,
+    attemptId: attempt.attemptId,
+    continuityMode: runtime.continuityMode,
+  };
+}
+
+/**
+ * The producing attempt must still be current immediately before E-58 or E-59.
+ * requestId is shared by a retired attempt and its replacement, so it is not enough.
+ */
+async function dispatchIfCurrent(
+  tools: ReconcileTools,
+  event: ProductEventInput,
+  authority: ProducingAttempt,
+): Promise<ApplicationExecutionResult | null> {
+  const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
+  if (!producingAttemptStillCurrent(loaded, authority)) {
+    return null;
+  }
+  return dispatch(tools, event);
+}
+
+function producingAttemptStillCurrent(
+  loaded: LoadedSnapshot,
+  authority: ProducingAttempt,
+): boolean {
+  const pending = pendingChat(loaded.snapshot);
+  if (!pending || pending.chat.selectedContactId !== authority.selectedContactId) {
+    return false;
+  }
+  if (
+    pending.chat.id !== authority.rimChatId ||
+    pending.snapshot.requestId !== authority.requestId ||
+    pending.snapshot.contextRequestId !== authority.contextRequestId
+  ) {
+    return false;
+  }
+  const parsed = parseRimProviderRuntime(loaded.rimProviderRuntime);
+  const applicable =
+    parsed.status === "PRESENT" ? applicableRimProviderRuntime(parsed, pending.chat.id) : null;
+  const attempt = applicable?.attempt;
+  if (!applicable || !attempt) {
+    return false;
+  }
+  return (
+    applicable.rimChatId === authority.rimChatId &&
+    applicable.selectedContactId === authority.selectedContactId &&
+    applicable.contextRequestId === authority.contextRequestId &&
+    applicable.continuityMode === authority.continuityMode &&
+    attempt.attemptId === authority.attemptId &&
+    attempt.requestId === authority.requestId
+  );
 }
 
 function completionEvent(snapshot: RimRequestSnapshot, output: unknown): ProductEventInput {
