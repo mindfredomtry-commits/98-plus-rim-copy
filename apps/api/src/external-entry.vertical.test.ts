@@ -14,6 +14,10 @@ import {
   TEMPLATE_CREATE_BAN_STAGE,
   parseShareStartParam,
 } from "./index.ts";
+import {
+  formatMachineDiagnostics,
+  type MachineDiagnosticsInput,
+} from "../../miniapp/src/test-ui/machine-diagnostics.ts";
 import { listenCreateBanContactServer } from "./http.ts";
 import {
   createCreateBanContactRuntime,
@@ -87,6 +91,21 @@ async function session(
     diagnostics: json.diagnostics!,
     externalEntry: json.externalEntry,
   };
+}
+
+async function snapshot(
+  url: string,
+  telegramUserId: string,
+): Promise<{ diagnostics: TestUiDiagnostics; httpStatus: number }> {
+  const response = await fetch(`${url}/api/snapshot`, {
+    headers: authHeaders(telegramUserId),
+  });
+  const json = (await response.json()) as {
+    diagnostics?: TestUiDiagnostics;
+    error?: unknown;
+  };
+  expect(response.status, JSON.stringify(json)).toBe(200);
+  return { httpStatus: response.status, diagnostics: json.diagnostics! };
 }
 
 async function dispatch(
@@ -393,6 +412,137 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(winner.diagnostics.incomingItems).toHaveLength(1);
     expect(loser.diagnostics.incomingItems).toEqual([]);
     expect(loser.diagnostics.controlState).toBe("RIM.LOBBY");
+  });
+
+  it("fresh HTTP session and snapshot both hydrate the claimed Ban for sender and receiver", async () => {
+    const app = await start();
+    const senderUserId = userIdOf(app.runtime, USER_A_TG);
+    const receiverUserId = userIdOf(app.runtime, USER_B_TG);
+    expect(senderUserId).toBeTruthy();
+    expect(receiverUserId).toBeTruthy();
+    expect(senderUserId).not.toBe(receiverUserId);
+
+    await session(app.url, USER_A_TG);
+    await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START");
+    await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_TEMPLATE", { templateContext: {} });
+    await dispatch(app.url, USER_A_TG, "CREATE_BAN.CHANGE_BAN_TEXT", { banText: BAN_TEXT });
+    await dispatch(app.url, USER_A_TG, "CREATE_BAN.CHANGE_DURATION", { durationMinutes: 10 });
+    await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_NEXT");
+    const prepared = (await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_FORBID")).diagnostics!;
+    const preparedShare = (
+      prepared.shareOperations as Array<{
+        attemptId: string;
+        token: string;
+        status: string;
+        createdBanId: string | null;
+      }>
+    )[0]!;
+    expect(prepared.bans).toEqual([]);
+    expect(prepared.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(preparedShare.status).toBe("ACTIVE");
+    expect(preparedShare.createdBanId).toBeNull();
+    const token = preparedShare.token;
+
+    const claimed = await session(app.url, USER_B_TG, {
+      openIfNeeded: true,
+      startParam: `share_${token}`,
+    });
+    const claimedBans = claimed.diagnostics.bans as Array<{
+      id: string;
+      senderId: string;
+      receiverId: string | null;
+      boundViaTelegramShareLink: boolean;
+      acceptance: string;
+      status: string | null;
+    }>;
+    expect(claimedBans).toHaveLength(1);
+    const claimedBan = claimedBans[0]!;
+    expect(claimedBan.senderId).toBe(senderUserId);
+    expect(claimedBan.receiverId).toBe(receiverUserId);
+    expect(claimedBan.boundViaTelegramShareLink).toBe(true);
+    expect(claimedBan.acceptance).toBe("PENDING");
+    expect(claimedBan.status).toBeNull();
+    expect(claimed.diagnostics.incomingItems).toHaveLength(1);
+    expect(claimed.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(claimed.externalEntry).toMatchObject({
+      outcome: "RESOLVED",
+      bindStatus: "BOUND",
+      shareTargetBanId: claimedBan.id,
+    });
+    const banId = claimedBan.id;
+
+    const stored = app.runtime.sql.tables.snapshot();
+    expect(stored.bans.size).toBe(1);
+    const storedBan = [...stored.bans.values()][0]!;
+    expect(storedBan.id).toBe(banId);
+    expect(storedBan.senderId).toBe(senderUserId);
+    expect(storedBan.receiverId).toBe(receiverUserId);
+    const storedShares = [...stored.shares.values()];
+    expect(storedShares).toHaveLength(1);
+    expect(storedShares[0]?.ownerId).toBe(senderUserId);
+    expect(storedShares[0]?.status).toBe("CONFIRMED");
+    expect(storedShares[0]?.createdBanId).toBe(banId);
+    const storedIncoming = [...stored.items.values()].filter(
+      (item) => item.kind === "INCOMING_BAN",
+    );
+    expect(storedIncoming).toHaveLength(1);
+    expect(storedIncoming[0]?.ownerId).toBe(receiverUserId);
+    expect(storedIncoming[0]?.banId).toBe(banId);
+
+    const senderSession = await session(app.url, USER_A_TG, { openIfNeeded: true });
+    const senderSnapshot = await snapshot(app.url, USER_A_TG);
+    const receiverSession = await session(app.url, USER_B_TG, { openIfNeeded: true });
+
+    const senderSessionBans = senderSession.diagnostics.bans as Array<{
+      id: string;
+      senderId: string;
+      receiverId: string | null;
+    }>;
+    const senderSnapshotBans = senderSnapshot.diagnostics.bans as Array<{
+      id: string;
+      senderId: string;
+      receiverId: string | null;
+    }>;
+    const receiverSessionBans = receiverSession.diagnostics.bans as Array<{
+      id: string;
+      senderId: string;
+      receiverId: string | null;
+    }>;
+    expect(senderSessionBans).toHaveLength(1);
+    expect(senderSnapshotBans).toHaveLength(1);
+    expect(receiverSessionBans).toHaveLength(1);
+    expect(senderSessionBans[0]?.id).toBe(banId);
+    expect(senderSnapshotBans[0]?.id).toBe(banId);
+    expect(receiverSessionBans[0]?.id).toBe(banId);
+    expect(senderSessionBans[0]?.senderId).toBe(senderUserId);
+    expect(senderSessionBans[0]?.receiverId).toBe(receiverUserId);
+    expect(senderSnapshotBans[0]).toEqual(senderSessionBans[0]);
+    expect(senderSession.diagnostics.controlState).toBe(
+      "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    );
+    expect(senderSnapshot.diagnostics.controlState).toBe(senderSession.diagnostics.controlState);
+    const senderShare = (
+      senderSession.diagnostics.shareOperations as Array<{
+        status: string;
+        createdBanId: string | null;
+      }>
+    )[0]!;
+    const snapshotShare = (
+      senderSnapshot.diagnostics.shareOperations as Array<{
+        status: string;
+        createdBanId: string | null;
+      }>
+    )[0]!;
+    expect(senderShare.status).toBe("CONFIRMED");
+    expect(senderShare.createdBanId).toBe(banId);
+    expect(snapshotShare).toEqual(senderShare);
+    expect(receiverSession.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(receiverSession.diagnostics.incomingItems).toHaveLength(1);
+    const machineLine = (diagnostics: TestUiDiagnostics): string =>
+      formatMachineDiagnostics(diagnostics as unknown as MachineDiagnosticsInput);
+    expect(machineLine(senderSession.diagnostics)).toContain("BANS: 1");
+    expect(machineLine(senderSnapshot.diagnostics)).toContain("BANS: 1");
+    expect(machineLine(receiverSession.diagnostics)).toContain("BANS: 1");
   });
 
   it("transport rejects E-44 / E-45 / E-46 from TEST UI events", async () => {
