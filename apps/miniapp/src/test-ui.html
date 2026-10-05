@@ -226,10 +226,7 @@
               void sendForbid();
               return;
             }
-            if (name === "CREATE_BAN.SHARE_CONFIRMED" || name === "CREATE_BAN.SHARE_CANCELLED") {
-              if (name === "CREATE_BAN.SHARE_CONFIRMED") {
-                payload.result = {};
-              }
+            if (name === "CREATE_BAN.SHARE_CANCELLED") {
               void sendEvent(name, payload);
               return;
             }
@@ -346,7 +343,7 @@
             error: {
               code: "TELEGRAM_SHARE_PREPARE_MISSING",
               message:
-                "preparedMessageId missing — savePreparedInlineMessage did not succeed; SHARE_CONFIRMED was not fabricated.",
+                "preparedMessageId missing — savePreparedInlineMessage did not succeed; a Ban was not created.",
             },
           };
           render();
@@ -359,7 +356,7 @@
             error: {
               code: "TELEGRAM_SHARE_UNAVAILABLE",
               message:
-                "Telegram.WebApp.shareMessage is unavailable in this runtime; SHARE_CONFIRMED was not fabricated. Stay on SHARE_PENDING.",
+                "Telegram.WebApp.shareMessage is unavailable in this runtime. A Ban was not created. Stay on SHARE_PENDING.",
             },
           };
           render();
@@ -367,12 +364,13 @@
         }
         await new Promise((resolve) => {
           webApp.shareMessage(share.preparedMessageId, (success) => {
-            void sendEvent(
-              success ? "CREATE_BAN.SHARE_CONFIRMED" : "CREATE_BAN.SHARE_CANCELLED",
-              success
-                ? { shareAttemptId: share.attemptId, result: {} }
-                : { shareAttemptId: share.attemptId },
-            ).finally(resolve);
+            if (!success) {
+              void sendEvent("CREATE_BAN.SHARE_CANCELLED", {
+                shareAttemptId: share.attemptId,
+              }).finally(resolve);
+              return;
+            }
+            resolve(undefined);
           });
         });
       }

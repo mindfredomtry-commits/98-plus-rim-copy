@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MATRIX_CONTRACT_ROWS, reduce } from "./index.ts";
+import { MATRIX_CONTRACT_ROWS, isCanonicalEventName, reduce } from "./index.ts";
 import type { Ban, CheckPair } from "./entities.ts";
 import type { CanonicalEvent } from "./events.ts";
 import type { ProductSnapshot } from "./extended-state.ts";
@@ -9,6 +9,7 @@ import type {
   DomainTimerId,
   DurationMinutes,
   NotificationItemId,
+  ShareLinkId,
 } from "./ids.ts";
 import type { CheckDerivedStatus } from "./primitives.ts";
 import {
@@ -888,12 +889,8 @@ describe("Stage 2 semantic effect audit", () => {
     expect(result.snapshot.extended.priorities.timerItemId).toBeNull();
   });
 
-  it("Template E-12 creates the Ban from the Share draft only once", () => {
-    let snapshot = withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
-    snapshot = {
-      ...snapshot,
-      extended: { ...snapshot.extended, createBanDraft: validCreateDraft("TEMPLATE") },
-    };
+  it("E-45 claim mints one Template Ban; a removed client callback cannot mint", () => {
+    let snapshot = withControlState(emptySnapshot(), "RIM.LOBBY");
     snapshot = withEntities(snapshot, {
       shareOperations: {
         [SHARE_ATTEMPT_ID]: shareOp({
@@ -907,50 +904,58 @@ describe("Stage 2 semantic effect audit", () => {
         }),
       },
     });
-    const first = applied(
-      snapshot,
-      eventOf("CREATE_BAN.SHARE_CONFIRMED", {
-        shareAttemptId: SHARE_ATTEMPT_ID,
-        result: {} as import("./primitives.ts").ShareResult,
-      }),
-    );
+    const claim = eventOf("TELEGRAM_SHARE_LINK.RESOLVED", {
+      targetBanId: BAN_ID,
+      receiverId: USER_ID,
+      incomingBanItemId: INCOMING_ITEM_ID,
+      shareAttemptId: SHARE_ATTEMPT_ID,
+      shareOwnerId: CONTACT_A,
+    });
+    const first = applied(snapshot, claim);
     expect(first.outcome).toBe("APPLIED");
+    expect(first.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
     const bans = Object.values(first.snapshot.extended.entities.bans);
     expect(bans).toHaveLength(1);
-    expect(bans[0]?.banText).toBe("share ban");
-    expect(bans[0]?.durationMinutes).toBe(21);
-    expect(bans[0]?.receiverId).toBeNull();
+    expect(bans[0]).toMatchObject({
+      id: BAN_ID,
+      senderId: CONTACT_A,
+      receiverId: USER_ID,
+      banText: "share ban",
+      durationMinutes: 21,
+      acceptance: "PENDING",
+      status: null,
+      boundViaTelegramShareLink: true,
+      sourceProposalId: null,
+    });
+    const incoming = Object.values(first.snapshot.extended.entities.notificationItems).filter(
+      (item) => item.kind === "INCOMING_BAN",
+    );
+    expect(incoming).toHaveLength(1);
     expect(first.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
       "CONFIRMED",
     );
-    const second = applied(
-      first.snapshot,
-      eventOf("CREATE_BAN.SHARE_CONFIRMED", {
-        shareAttemptId: SHARE_ATTEMPT_ID,
-        result: {} as import("./primitives.ts").ShareResult,
-      }),
+    expect(first.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.createdBanId).toBe(
+      BAN_ID,
     );
+    const second = applied(first.snapshot, claim);
     expect(Object.values(second.snapshot.extended.entities.bans)).toHaveLength(1);
+    expect(
+      Object.values(second.snapshot.extended.entities.notificationItems).filter(
+        (item) => item.kind === "INCOMING_BAN",
+      ),
+    ).toHaveLength(1);
+    expect(isCanonicalEventName("CREATE_BAN.SHARE_CONFIRMED")).toBe(false);
 
-    const cancelled = applied(
+    const opened = applied(
       snapshot,
-      eventOf("CREATE_BAN.SHARE_CANCELLED", { shareAttemptId: SHARE_ATTEMPT_ID }),
-    );
-    expect(cancelled.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
-      "CANCELLED",
-    );
-    expect(cancelled.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).not.toBe(
-      "INVALIDATED",
-    );
-    const lateShare = applied(
-      cancelled.snapshot,
-      eventOf("CREATE_BAN.SHARE_CONFIRMED", {
-        shareAttemptId: SHARE_ATTEMPT_ID,
-        result: {} as import("./primitives.ts").ShareResult,
+      eventOf("TELEGRAM_SHARE_LINK.OPENED", {
+        shareLinkId: branded<ShareLinkId>("share-link-1"),
+        shareTargetBanId: null,
+        currentTelegramUserId: USER_ID,
       }),
     );
-    expect(lateShare.outcome).not.toBe("APPLIED");
-    expect(Object.keys(lateShare.snapshot.extended.entities.bans)).toEqual([]);
+    expect(opened.outcome).toBe("APPLIED");
+    expect(Object.keys(opened.snapshot.extended.entities.bans)).toEqual([]);
   });
 
   it("E-32 processes the Timer Notification Item and leaves the domain Timer unchanged", () => {
@@ -1953,6 +1958,6 @@ describe("Stage 2 semantic effect audit", () => {
 
 describe("Stage 2 semantic audit inventory", () => {
   it("keeps every Matrix row identity available for the reachability suite", () => {
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
   });
 });

@@ -12,6 +12,7 @@ import type {
   TransitionResult,
 } from "@98plus/product-model";
 import type { BanId, UserId } from "@98plus/product-model";
+import type { ClaimTemplateShareInput, ClaimTemplateShareResult } from "./claim-template-share.ts";
 import type { RuntimeAttemptAuthority } from "./runtime-attempt-authority.ts";
 
 export type { RuntimeAttemptAuthority };
@@ -191,6 +192,13 @@ export type ProductStore = {
     rightUserId: UserId,
   ): Promise<readonly RelationshipContextSource[]>;
   findShareByToken(token: string): Promise<StoredShareLookup | null>;
+  getShareByAttemptId(attemptId: string): Promise<StoredShareLookup | null>;
+  /**
+   * Atomically mint one Template Ban for an authenticated non-sender.
+   * The share row stays owned by the sender. Receiver session/items are the
+   * only user snapshot written. Sender control state is not updated.
+   */
+  claimTemplateShare(input: ClaimTemplateShareInput): Promise<ClaimTemplateShareResult>;
   getBanById(banId: BanId): Promise<Ban | null>;
   bindBanReceiver(banId: BanId, receiverId: UserId): Promise<BanReceiverBindResult>;
   /**

@@ -374,54 +374,6 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
       ],
     };
   }
-  if (row.eventId === "E-12") {
-    const share = matchingShare(input);
-    if (!share || share.status !== "ACTIVE") {
-      return missing(row, "E-12 requires a matching active Share operation");
-    }
-    if (share.createdBanId) {
-      const existing = snapshot.extended.entities.bans[share.createdBanId];
-      if (!existing) {
-        return missing(row, "E-12 Share operation already created a Ban that is not present");
-      }
-      return {
-        ok: true,
-        effects: [
-          { type: "UPSERT_BAN", ban: existing },
-          {
-            type: "UPSERT_SHARE_OPERATION",
-            operation: { ...share, status: "CONFIRMED", createdBanId: existing.id },
-          },
-        ],
-      };
-    }
-    const draft = share.draft;
-    if (!isValidBanText(draft.banText) || draft.durationMinutes === null) {
-      return missing(row, "E-12 Share operation is missing required Ban text or duration");
-    }
-    const banId = context.allocateId("ban") as BanId;
-    const ban: Ban = {
-      id: banId,
-      senderId: context.currentUserId,
-      receiverId: draft.selectedContactId,
-      banText: draft.banText,
-      durationMinutes: draft.durationMinutes,
-      acceptance: "PENDING",
-      status: null,
-      boundViaTelegramShareLink: false,
-      sourceProposalId: null,
-    };
-    return {
-      ok: true,
-      effects: [
-        { type: "UPSERT_BAN", ban },
-        {
-          type: "UPSERT_SHARE_OPERATION",
-          operation: { ...share, status: "CONFIRMED", createdBanId: banId },
-        },
-      ],
-    };
-  }
   if (row.eventId === "E-30") {
     const draft = replySendFacts(input);
     if (!draft) {
@@ -509,7 +461,7 @@ function instantiateCreatedBan(row: MatrixContractRow, input: ResolveInput): Ins
           ban: existing ?? {
             id: createdBanId,
             senderId: context.currentUserId,
-            receiverId,
+            receiverId: draft.selectedContactId,
             banText: draft.banText,
             durationMinutes: draft.durationMinutes,
             acceptance: "PENDING",
@@ -857,13 +809,10 @@ export function instantiateEffects(
           effects.push({ type: "SET_PENDING_EXTERNAL_ENTRY", entry: null });
         } else if (row.eventId === "E-44") {
           const shareLinkId = eventField<ShareLinkId>(event, "shareLinkId");
-          const shareTargetBanId = eventField<BanId>(event, "shareTargetBanId");
+          const shareTargetBanId = eventField<BanId | null>(event, "shareTargetBanId");
           const currentTelegramUserId = eventField<UserId>(event, "currentTelegramUserId");
-          if (!shareLinkId || !shareTargetBanId || !currentTelegramUserId) {
-            return missing(
-              row,
-              "E-44 requires Share Link identity, target Ban, and current Telegram user",
-            );
+          if (!shareLinkId || shareTargetBanId === undefined || !currentTelegramUserId) {
+            return missing(row, "E-44 requires Share Link identity and the current Telegram user");
           }
           effects.push({
             type: "SET_PENDING_EXTERNAL_ENTRY",
@@ -1322,8 +1271,44 @@ export function instantiateEffects(
     const banId = eventField<BanId>(event, "targetBanId");
     const receiverId = eventField<UserId>(event, "receiverId");
     const itemId = eventField<NotificationItemId>(event, "incomingBanItemId");
-    const ban = banId ? snapshot.extended.entities.bans[banId] : undefined;
+    const shareAttemptId = eventField<ShareAttemptId>(event, "shareAttemptId");
+    const shareOwnerId = eventField<UserId>(event, "shareOwnerId");
+    const share = shareAttemptId
+      ? snapshot.extended.entities.shareOperations[shareAttemptId]
+      : undefined;
+    let ban = banId ? snapshot.extended.entities.bans[banId] : undefined;
+    const draft = share?.draft;
     if (
+      !ban &&
+      banId &&
+      share &&
+      share.status === "ACTIVE" &&
+      share.createdBanId === null &&
+      shareOwnerId &&
+      receiverId === context.currentUserId &&
+      shareOwnerId !== receiverId &&
+      draft &&
+      isValidBanText(draft.banText) &&
+      draft.durationMinutes !== null &&
+      isValidDurationMinutes(draft.durationMinutes)
+    ) {
+      ban = {
+        id: banId,
+        senderId: shareOwnerId,
+        receiverId,
+        banText: draft.banText,
+        durationMinutes: draft.durationMinutes,
+        acceptance: "PENDING",
+        status: null,
+        boundViaTelegramShareLink: true,
+        sourceProposalId: null,
+      };
+      effects.push({ type: "UPSERT_BAN", ban });
+      effects.push({
+        type: "UPSERT_SHARE_OPERATION",
+        operation: { ...share, status: "CONFIRMED", createdBanId: banId },
+      });
+    } else if (
       ban &&
       receiverId &&
       receiverId === context.currentUserId &&
@@ -1389,7 +1374,7 @@ export function instantiateEffects(
   }
   if (row.eventId === "E-13") {
     const share = matchingShare(input);
-    if (share) {
+    if (share && share.status === "ACTIVE") {
       effects.push({
         type: "UPSERT_SHARE_OPERATION",
         operation: { ...share, status: "CANCELLED" },

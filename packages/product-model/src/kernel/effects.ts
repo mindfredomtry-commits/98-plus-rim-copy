@@ -438,7 +438,7 @@ export function nextCreateDraft(
   if (row.eventId === "E-32" || row.eventId === "E-45" || row.eventId === "E-33") {
     return null;
   }
-  if (row.eventId === "E-10" || row.eventId === "E-12") {
+  if (row.eventId === "E-10") {
     return null;
   }
   return current;

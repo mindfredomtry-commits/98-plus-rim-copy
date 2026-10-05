@@ -4,10 +4,10 @@
  * Product path (Bot API 8.0+):
  * 1. Server prepares a message via Bot API `savePreparedInlineMessage` (requires TELEGRAM_BOT_TOKEN).
  * 2. Client invokes `Telegram.WebApp.shareMessage(preparedMessageId, callback)`.
- * 3. callback(true) → dispatch CREATE_BAN.SHARE_CONFIRMED (E-12)
+ * 3. callback(true) is not a Product fact and must not mint a Ban
  *    callback(false) → dispatch CREATE_BAN.SHARE_CANCELLED (E-13)
  *
- * Do NOT use `shareURL` / `t.me/share/url` as the product E-12/E-13 authority —
+ * Do NOT use `shareURL` / `t.me/share/url` as Ban-mint authority —
  * those APIs do not provide a reliable success vs cancel distinction.
  */
 
@@ -123,7 +123,7 @@ export async function prepareTelegramShareMessage(
 
 /**
  * Invoke Telegram.WebApp.shareMessage and map the boolean callback to product outcomes.
- * Returns null if shareMessage is unavailable (caller must not invent E-12).
+ * Returns null if shareMessage is unavailable (caller must not invent a Ban).
  */
 export function invokeTelegramShareMessage(
   webApp: TelegramShareClientApi | null | undefined,
@@ -141,6 +141,6 @@ export function invokeTelegramShareMessage(
 
 export function telegramShareOutcomeToEventName(
   outcome: "CONFIRMED" | "CANCELLED",
-): "CREATE_BAN.SHARE_CONFIRMED" | "CREATE_BAN.SHARE_CANCELLED" {
-  return outcome === "CONFIRMED" ? "CREATE_BAN.SHARE_CONFIRMED" : "CREATE_BAN.SHARE_CANCELLED";
+): "CREATE_BAN.SHARE_CANCELLED" | null {
+  return outcome === "CANCELLED" ? "CREATE_BAN.SHARE_CANCELLED" : null;
 }

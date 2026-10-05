@@ -36,7 +36,6 @@ import type {
   Failure,
   ServerState,
   ShareLinkFailureReason,
-  ShareResult,
   TemplateContext,
 } from "./primitives.ts";
 import { asInstant, counterAllocator, emptySnapshot } from "./kernel/snapshot.ts";
@@ -142,8 +141,6 @@ export function defaultEvent(name: CanonicalEventName): CanonicalEvent {
     case "CREATE_BAN.SEND_FAILED":
     case "REPLY_BAN.SEND_FAILED":
       return eventOf(name, { operationId: OP_ID, failure: {} as Failure });
-    case "CREATE_BAN.SHARE_CONFIRMED":
-      return eventOf(name, { shareAttemptId: SHARE_ATTEMPT_ID, result: {} as ShareResult });
     case "CREATE_BAN.SHARE_CANCELLED":
       return eventOf(name, { shareAttemptId: SHARE_ATTEMPT_ID });
     case "NOTIFICATIONS.OVERBOARD_CONFIRMED":
@@ -1100,7 +1097,6 @@ function prepareBranchSnapshot(
       }
       break;
     }
-    case "E-12:matching-share-attempt":
     case "E-13:closed-without-send":
     case "E-32:share-unresolved":
       next = withEntities(next, { shareOperations: { [SHARE_ATTEMPT_ID]: shareOp() } });

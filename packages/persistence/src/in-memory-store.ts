@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Ban, ProductSnapshot, TransitionResult, UserId } from "@98plus/product-model";
 import type { BanId } from "@98plus/product-model";
+import {
+  classifyShareForClaim,
+  createdClaimBan,
+  snapshotForReceiverClaimPersist,
+  type ClaimTemplateShareInput,
+  type ClaimTemplateShareResult,
+} from "./claim-template-share.ts";
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { cloneJson, sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
@@ -30,6 +37,7 @@ function requireApplied(result: TransitionResult): ProductSnapshot {
 export class InMemoryProductStore implements ProductStore {
   private readonly tables: ProductTables;
   private readonly userLocks = new Map<string, Promise<void>>();
+  private readonly shareLocks = new Map<string, Promise<void>>();
   private failAfterBans = false;
 
   constructor(tables: ProductTables = new ProductTables()) {
@@ -227,6 +235,23 @@ export class InMemoryProductStore implements ProductStore {
     return { share: operation, ownerId };
   }
 
+  async getShareByAttemptId(attemptId: string) {
+    const share = this.tables.getShare(attemptId);
+    if (!share) {
+      return null;
+    }
+    const { ownerId, ...operation } = share;
+    return { share: operation, ownerId };
+  }
+
+  async claimTemplateShare(input: ClaimTemplateShareInput): Promise<ClaimTemplateShareResult> {
+    return this.withShareLock(input.token, () =>
+      this.withUserLock(input.receiverId, () =>
+        this.tables.transaction(() => this.claimTemplateShareUnlocked(input)),
+      ),
+    );
+  }
+
   async getBanById(banId: BanId): Promise<Ban | null> {
     const ban = this.tables.getBan(banId);
     if (!ban) {
@@ -263,6 +288,86 @@ export class InMemoryProductStore implements ProductStore {
         };
       }),
     );
+  }
+
+  private claimTemplateShareUnlocked(input: ClaimTemplateShareInput): ClaimTemplateShareResult {
+    const stored = this.tables.findShareByToken(input.token);
+    if (!stored) {
+      return { status: "REJECTED", reason: "UNKNOWN_TOKEN" };
+    }
+    const { ownerId, ...share } = stored;
+    const existingBan = share.createdBanId ? this.tables.getBan(share.createdBanId) : undefined;
+    const ban = existingBan ? (({ createdSeq: _createdSeq, ...rest }) => rest)(existingBan) : null;
+    const classification = classifyShareForClaim(ownerId, share, input.receiverId, ban);
+    if (classification.action !== "MINT") {
+      if (classification.action === "ALREADY_BOUND") {
+        return { status: "ALREADY_BOUND", banId: classification.banId };
+      }
+      if (classification.action === "CONFLICT") {
+        return { status: "CONFLICT", banId: classification.banId };
+      }
+      return { status: "REJECTED", reason: classification.reason };
+    }
+    const loaded = this.read(input.receiverId);
+    const transition = input.reduceClaim({
+      share,
+      ownerId,
+      receiver: { revision: loaded.revision, snapshot: loaded.snapshot },
+    });
+    if (transition.outcome !== "APPLIED") {
+      return { status: "NOT_APPLIED", transition };
+    }
+    const created = createdClaimBan(loaded.snapshot, transition.snapshot);
+    if (
+      !created ||
+      created.senderId !== ownerId ||
+      created.receiverId !== input.receiverId ||
+      created.boundViaTelegramShareLink !== true
+    ) {
+      throw new PersistenceError(
+        "INVARIANT",
+        "Template share claim did not create exactly one receiver-bound Ban",
+      );
+    }
+    const persisted = snapshotForReceiverClaimPersist(
+      loaded.snapshot,
+      transition.snapshot,
+      share.attemptId,
+    );
+    const written = this.writeUnlocked(input.receiverId, loaded.revision, persisted, false);
+    this.tables.upsertShare(ownerId, {
+      ...share,
+      status: "CONFIRMED",
+      createdBanId: created.id,
+    });
+    return {
+      status: "CLAIMED",
+      loadedRevision: written.revision,
+      loadedSnapshot: written.snapshot,
+      banId: created.id,
+      transition,
+    };
+  }
+
+  private async withShareLock<T>(token: string, fn: () => Promise<T> | T): Promise<T> {
+    const previous = this.shareLocks.get(token) ?? Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.shareLocks.set(
+      token,
+      previous.then(() => current),
+    );
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.shareLocks.get(token) === current) {
+        this.shareLocks.delete(token);
+      }
+    }
   }
 
   private async withUserLock<T>(userId: UserId, fn: () => T): Promise<T> {

@@ -131,6 +131,8 @@ describe("Stage 5 executeProductEvent", () => {
       saveRimProviderRuntime: (userId, expectedRevision, runtime) =>
         inner.saveRimProviderRuntime(userId, expectedRevision, runtime),
       persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
+      getShareByAttemptId: (attemptId) => inner.getShareByAttemptId(attemptId),
+      claimTemplateShare: (input) => inner.claimTemplateShare(input),
       markTelegramPersistentReentryBootstrapSent: (userId, claimToken) =>
         inner.markTelegramPersistentReentryBootstrapSent(userId, claimToken),
       claimTelegramPersistentReentryBootstrapDelivery: (userId, nowMs, leaseMs) =>
@@ -186,6 +188,8 @@ describe("Stage 5 executeProductEvent", () => {
       saveRimProviderRuntime: (userId, expectedRevision, runtime) =>
         inner.saveRimProviderRuntime(userId, expectedRevision, runtime),
       persistShareLinkResolved: (input) => inner.persistShareLinkResolved(input),
+      getShareByAttemptId: (attemptId) => inner.getShareByAttemptId(attemptId),
+      claimTemplateShare: (input) => inner.claimTemplateShare(input),
       markTelegramPersistentReentryBootstrapSent: (userId, claimToken) =>
         inner.markTelegramPersistentReentryBootstrapSent(userId, claimToken),
       claimTelegramPersistentReentryBootstrapDelivery: (userId, nowMs, leaseMs) =>

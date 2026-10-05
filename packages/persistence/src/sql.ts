@@ -226,6 +226,28 @@ WHERE token = $1
 ORDER BY attempt_id
 LIMIT 1
 `.trim(),
+  selectShareByTokenForUpdate: `
+SELECT attempt_id, owner_id, draft, token, status, created_ban_id
+FROM share_operations
+WHERE token = $1
+ORDER BY attempt_id
+LIMIT 1
+FOR UPDATE
+`.trim(),
+  selectShareByAttemptId: `
+SELECT attempt_id, owner_id, draft, token, status, created_ban_id
+FROM share_operations
+WHERE attempt_id = $1
+`.trim(),
+  confirmShareIfActive: `
+UPDATE share_operations
+SET status = 'CONFIRMED', created_ban_id = $2
+WHERE attempt_id = $1
+  AND owner_id = $3
+  AND status = 'ACTIVE'
+  AND created_ban_id IS NULL
+RETURNING attempt_id
+`.trim(),
   selectBanById: `
 SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
        bound_via_telegram_share_link, source_proposal_id, created_seq

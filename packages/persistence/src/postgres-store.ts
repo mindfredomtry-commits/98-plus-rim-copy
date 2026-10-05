@@ -20,6 +20,13 @@ import type {
 } from "@98plus/product-model";
 import { asInstant } from "@98plus/product-model";
 import {
+  classifyShareForClaim,
+  createdClaimBan,
+  snapshotForReceiverClaimPersist,
+  type ClaimTemplateShareInput,
+  type ClaimTemplateShareResult,
+} from "./claim-template-share.ts";
+import {
   assertCanonicalControlState,
   decodeNotificationItem,
   sessionFromSnapshot,
@@ -433,7 +440,101 @@ export class PostgresProductStore implements ProductStore {
 
   async findShareByToken(token: string): Promise<StoredShareLookup | null> {
     const result = await this.client.query<ShareSqlRow>(SQL.selectShareByToken, [token]);
-    const row = result.rows[0];
+    return this.shareLookupFromRow(result.rows[0]);
+  }
+
+  async getShareByAttemptId(attemptId: string): Promise<StoredShareLookup | null> {
+    const result = await this.client.query<ShareSqlRow>(SQL.selectShareByAttemptId, [attemptId]);
+    return this.shareLookupFromRow(result.rows[0]);
+  }
+
+  async claimTemplateShare(input: ClaimTemplateShareInput): Promise<ClaimTemplateShareResult> {
+    try {
+      return await this.client.transaction(async (tx) => {
+        const selected = await tx.query<ShareSqlRow>(SQL.selectShareByTokenForUpdate, [
+          input.token,
+        ]);
+        const lookup = this.shareLookupFromRow(selected.rows[0]);
+        if (!lookup) {
+          return { status: "REJECTED" as const, reason: "UNKNOWN_TOKEN" as const };
+        }
+        const existing = lookup.share.createdBanId
+          ? await tx.query<BanSqlRow>(SQL.selectBanById, [lookup.share.createdBanId])
+          : null;
+        const ban = existing?.rows[0] ? banFromRow(existing.rows[0]) : null;
+        const classification = classifyShareForClaim(
+          lookup.ownerId,
+          lookup.share,
+          input.receiverId,
+          ban,
+        );
+        if (classification.action === "ALREADY_BOUND") {
+          return { status: "ALREADY_BOUND" as const, banId: classification.banId };
+        }
+        if (classification.action === "CONFLICT") {
+          return { status: "CONFLICT" as const, banId: classification.banId };
+        }
+        if (classification.action === "REJECTED") {
+          return { status: "REJECTED" as const, reason: classification.reason };
+        }
+        const loaded = await this.read(tx, input.receiverId);
+        const transition = input.reduceClaim({
+          share: lookup.share,
+          ownerId: lookup.ownerId,
+          receiver: { revision: loaded.revision, snapshot: loaded.snapshot },
+        });
+        if (transition.outcome !== "APPLIED") {
+          return { status: "NOT_APPLIED" as const, transition };
+        }
+        const created = createdClaimBan(loaded.snapshot, transition.snapshot);
+        if (
+          !created ||
+          created.senderId !== lookup.ownerId ||
+          created.receiverId !== input.receiverId ||
+          created.boundViaTelegramShareLink !== true
+        ) {
+          throw new PersistenceError(
+            "INVARIANT",
+            "Template share claim did not create exactly one receiver-bound Ban",
+          );
+        }
+        const persisted = snapshotForReceiverClaimPersist(
+          loaded.snapshot,
+          transition.snapshot,
+          lookup.share.attemptId,
+        );
+        const written = await this.writeOn(tx, input.receiverId, loaded.revision, persisted, false);
+        const confirmed = await tx.query<{ attempt_id: string }>(SQL.confirmShareIfActive, [
+          lookup.share.attemptId,
+          created.id,
+          lookup.ownerId,
+        ]);
+        if (confirmed.rows.length !== 1) {
+          throw new PersistenceError(
+            "TRANSACTION_FAILED",
+            "Template share claim lost the ACTIVE compare-and-swap",
+          );
+        }
+        return {
+          status: "CLAIMED" as const,
+          loadedRevision: written.revision,
+          loadedSnapshot: written.snapshot,
+          banId: created.id,
+          transition,
+        };
+      });
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "template share claim transaction failed",
+      );
+    }
+  }
+
+  private shareLookupFromRow(row: ShareSqlRow | undefined): StoredShareLookup | null {
     if (!row) {
       return null;
     }

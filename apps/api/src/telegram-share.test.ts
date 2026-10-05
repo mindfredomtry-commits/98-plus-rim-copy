@@ -17,8 +17,8 @@ describe("Telegram Share adapter boundary", () => {
     );
   });
 
-  it("maps shareMessage outcomes to canonical E-12 / E-13 names only", () => {
-    expect(telegramShareOutcomeToEventName("CONFIRMED")).toBe("CREATE_BAN.SHARE_CONFIRMED");
+  it("does not map shareMessage completion to a Ban-mint event", () => {
+    expect(telegramShareOutcomeToEventName("CONFIRMED")).toBeNull();
     expect(telegramShareOutcomeToEventName("CANCELLED")).toBe("CREATE_BAN.SHARE_CANCELLED");
   });
 

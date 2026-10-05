@@ -1509,8 +1509,8 @@ describe("pending RIM AI recovery", () => {
 describe("DC-02 ambiguity transition", () => {
   it("keeps the frozen Product counts", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
   });
 
   it("does not switch a known response id off the retrieval path", async () => {

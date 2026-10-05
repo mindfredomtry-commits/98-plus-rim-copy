@@ -1,6 +1,6 @@
 import type { ApplicationExecutionResult, ProductEventInput } from "@98plus/application";
 import type { AuthenticatedContext } from "@98plus/identity";
-import type { ProductSnapshot, ShareAttemptId, ShareResult } from "@98plus/product-model";
+import type { ProductSnapshot, ShareAttemptId } from "@98plus/product-model";
 import { executeAuthenticatedEvent, type CreateBanContactRuntime } from "./runtime.ts";
 import {
   buildTemplateShareDeepLink,
@@ -85,7 +85,7 @@ export async function buildTelegramShareInvocation(
       botUsername,
     });
   } catch {
-    // Product transition already applied; do not invent E-12. Client stays on CB-09.
+    // Product transition already applied. A failed prepare must not mint a Ban.
     return {
       ...base,
       preparedMessageId: "",
@@ -101,19 +101,13 @@ export async function completeTelegramShare(
     outcome: "CONFIRMED" | "CANCELLED";
   }>,
   clientClaimedUserId?: string,
-): Promise<ApplicationExecutionResult> {
-  const event: ProductEventInput =
-    input.outcome === "CANCELLED"
-      ? {
-          name: "CREATE_BAN.SHARE_CANCELLED",
-          payload: { shareAttemptId: input.shareAttemptId as ShareAttemptId },
-        }
-      : {
-          name: "CREATE_BAN.SHARE_CONFIRMED",
-          payload: {
-            shareAttemptId: input.shareAttemptId as ShareAttemptId,
-            result: {} as ShareResult,
-          },
-        };
+): Promise<ApplicationExecutionResult | null> {
+  if (input.outcome !== "CANCELLED") {
+    return null;
+  }
+  const event: ProductEventInput = {
+    name: "CREATE_BAN.SHARE_CANCELLED",
+    payload: { shareAttemptId: input.shareAttemptId as ShareAttemptId },
+  };
   return executeAuthenticatedEvent(runtime, context, event, clientClaimedUserId);
 }

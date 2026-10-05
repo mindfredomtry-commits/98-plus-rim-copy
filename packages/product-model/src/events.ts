@@ -19,7 +19,6 @@ import type {
   Failure,
   ServerState,
   ShareLinkFailureReason,
-  ShareResult,
   TemplateContext,
 } from "./primitives.ts";
 import type { RelationshipContextData, ReplySource, RimAiResult } from "./entities.ts";
@@ -48,7 +47,6 @@ export type EventPayloadMap = {
   "CREATE_BAN.PRESS_FORBID_MORE": Record<string, never>;
   "CREATE_BAN.SEND_CONFIRMED": { operationId: OperationId; createdBanId: BanId };
   "CREATE_BAN.SEND_FAILED": { operationId: OperationId; failure: Failure };
-  "CREATE_BAN.SHARE_CONFIRMED": { shareAttemptId: ShareAttemptId; result: ShareResult };
   "CREATE_BAN.SHARE_CANCELLED": { shareAttemptId: ShareAttemptId };
   "NOTIFICATIONS.PRESS_REPLY_BAN": Record<string, never>;
   "NOTIFICATIONS.PRESS_OVERBOARD": Record<string, never>;
@@ -99,13 +97,18 @@ export type EventPayloadMap = {
   "NOTIFICATIONS.SELECT_NEXT": Record<string, never>;
   "TELEGRAM_SHARE_LINK.OPENED": {
     shareLinkId: ShareLinkId;
-    shareTargetBanId: BanId;
+    /** Null while the Template Ban does not exist yet. Pending identity is shareLinkId. */
+    shareTargetBanId: BanId | null;
     currentTelegramUserId: UserId;
   };
   "TELEGRAM_SHARE_LINK.RESOLVED": {
     targetBanId: BanId;
     receiverId: UserId;
     incomingBanItemId: NotificationItemId;
+    /** Present when E-45 mints the Template Ban from an ACTIVE ShareOperation. */
+    shareAttemptId?: ShareAttemptId;
+    /** Share owner. Required for the claim mint; ignored when the Ban already exists. */
+    shareOwnerId?: UserId;
   };
   "TELEGRAM_SHARE_LINK.REJECTED": { failureReason: ShareLinkFailureReason };
   "RIM.PRESS_START_CHAT": Record<string, never>;
@@ -165,7 +168,6 @@ export type CanonicalEventId =
   | "E-09"
   | "E-10"
   | "E-11"
-  | "E-12"
   | "E-13"
   | "E-14"
   | "E-15"
@@ -290,12 +292,6 @@ export const CANONICAL_EVENT_DEFINITIONS = [
     name: "CREATE_BAN.SEND_FAILED",
     source: "SERVER",
     references: refs("E-11 CREATE_BAN.SEND_FAILED"),
-  },
-  {
-    id: "E-12",
-    name: "CREATE_BAN.SHARE_CONFIRMED",
-    source: "TELEGRAM",
-    references: refs("E-12 CREATE_BAN.SHARE_CONFIRMED"),
   },
   {
     id: "E-13",
@@ -571,7 +567,7 @@ export const CANONICAL_EVENT_DEFINITIONS = [
   },
 ] as const satisfies readonly CanonicalEventDefinition[];
 
-export const CANONICAL_EVENT_COUNT = 59;
+export const CANONICAL_EVENT_COUNT = 58;
 
 export function isCanonicalEventId(value: string): value is CanonicalEventId {
   return CANONICAL_EVENT_DEFINITIONS.some((definition) => definition.id === value);

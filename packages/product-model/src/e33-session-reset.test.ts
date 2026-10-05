@@ -198,8 +198,8 @@ describe("E-33 Guard A session reset", () => {
 
   it("does not add a Matrix row", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     const e33 = MATRIX_CONTRACT_ROWS.filter((row) => row.eventId === "E-33");
     expect(e33.map((row) => row.branch)).toEqual([
       "normal-application-open",

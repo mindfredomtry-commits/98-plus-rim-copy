@@ -114,7 +114,6 @@ async function dispatch(
 }
 
 async function createTemplateBanWithToken(url: string): Promise<{
-  banId: string;
   token: string;
   attemptId: string;
 }> {
@@ -126,22 +125,16 @@ async function createTemplateBanWithToken(url: string): Promise<{
   await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_NEXT");
   const pending = (await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_FORBID")).diagnostics!;
   const share = (pending.shareOperations as Array<{ attemptId: string; token: string }>)[0]!;
-  const success = (
-    await dispatch(url, USER_A_TG, "CREATE_BAN.SHARE_CONFIRMED", {
-      shareAttemptId: share.attemptId,
-      result: {},
-    })
-  ).diagnostics!;
-  const ban = (success.bans as Array<{ id: string; receiverId: string | null }>)[0]!;
-  expect(ban.receiverId).toBeNull();
-  return { banId: ban.id, token: share.token, attemptId: share.attemptId };
+  expect(pending.bans).toEqual([]);
+  expect(pending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+  return { token: share.token, attemptId: share.attemptId };
 }
 
 describe("Stage 12 Telegram Share Link External Entry", () => {
   it("keeps frozen 30 / 59 / 359 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(TEMPLATE_CREATE_BAN_STAGE).toBe(11);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
@@ -153,7 +146,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     const app = await start();
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.EXTERNAL_ENTRY_STAGE).toBe(12);
-    expect(meta.MATRIX_RULE_COUNT).toBe(359);
+    expect(meta.MATRIX_RULE_COUNT).toBe(358);
   });
 
   it("parses start_param share_<token>", () => {
@@ -177,7 +170,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       banText: string;
     }>;
     expect(bans).toHaveLength(1);
-    expect(bans[0]?.id).toBe(created.banId);
+    expect(bans[0]?.id).toBeTruthy();
     expect(bans[0]?.banText).toBe(BAN_TEXT);
     const receiverUserId = userIdOf(app.runtime, USER_B_TG);
     expect(bans[0]?.receiverId).toBe(receiverUserId);
@@ -188,14 +181,14 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       kind: string;
     }>;
     expect(incoming).toHaveLength(1);
-    expect(incoming[0]?.banId).toBe(created.banId);
+    expect(incoming[0]?.banId).toBe(bans[0]?.id);
     expect(incoming[0]?.ownerId).toBe(receiverUserId);
     expect(incoming[0]?.kind).toBe("INCOMING_BAN");
     expect(receiver.diagnostics.activeNotificationItemId).toBe(incoming[0]?.id);
     expect(receiver.externalEntry).toMatchObject({
       outcome: "RESOLVED",
       token: created.token,
-      shareTargetBanId: created.banId,
+      shareTargetBanId: bans[0]?.id,
       bindStatus: "BOUND",
     });
   });
@@ -203,18 +196,20 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
   it("re-entry while Incoming unprocessed does not create a second Incoming", async () => {
     const app = await start();
     const created = await createTemplateBanWithToken(app.url);
-    await session(app.url, USER_B_TG, {
+    const first = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
+    const banId = (first.diagnostics.bans as Array<{ id: string }>)[0]?.id;
     const again = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
     expect(again.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(again.diagnostics.bans).toHaveLength(1);
     expect(
       (again.diagnostics.incomingItems as Array<{ banId: string }>).filter(
-        (item) => item.banId === created.banId,
+        (item) => item.banId === banId,
       ),
     ).toHaveLength(1);
   });
@@ -222,10 +217,11 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
   it("Guard B: processed Incoming + bound Ban stays without new Incoming", async () => {
     const app = await start();
     const created = await createTemplateBanWithToken(app.url);
-    await session(app.url, USER_B_TG, {
+    const opened = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
+    const banId = (opened.diagnostics.bans as Array<{ id: string }>)[0]?.id;
     const afterOverboard = (await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_OVERBOARD"))
       .diagnostics!;
     const statusState = afterOverboard.controlState;
@@ -239,7 +235,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(stayed.externalEntry).toMatchObject({ outcome: "RESOLVED" });
     expect(
       (stayed.diagnostics.incomingItems as Array<{ banId: string }>).filter(
-        (item) => item.banId === created.banId,
+        (item) => item.banId === banId,
       ),
     ).toHaveLength(1);
   });
@@ -260,14 +256,18 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
   it("does not recreate Ban; sender Ban count stays one after receiver bind", async () => {
     const app = await start();
     const created = await createTemplateBanWithToken(app.url);
-    await session(app.url, USER_B_TG, {
+    const opened = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    const sender = await session(app.url, USER_A_TG, { openIfNeeded: true });
-    expect(sender.diagnostics.bans).toHaveLength(1);
-    expect((sender.diagnostics.bans as Array<{ id: string }>)[0]?.id).toBe(created.banId);
-    expect((sender.diagnostics.bans as Array<{ receiverId: string | null }>)[0]?.receiverId).toBe(
+    const banId = (opened.diagnostics.bans as Array<{ id: string }>)[0]?.id;
+    const sender = await app.runtime.productStore.loadProductSnapshot(
+      userIdOf(app.runtime, USER_A_TG)!,
+    );
+    expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
+    expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.id).toBe(banId);
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.receiverId).toBe(
       userIdOf(app.runtime, USER_B_TG),
     );
   });
@@ -296,14 +296,12 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     });
     expect(offline.externalEntry).toMatchObject({ outcome: "PENDING" });
     expect(offline.diagnostics.pendingExternalEntry).not.toBeNull();
+    expect(offline.diagnostics.bans).toEqual([]);
 
     const restored = await dispatch(app.url, USER_B_TG, "CONNECTION.RESTORED");
     expect(restored.diagnostics?.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
-    expect(
-      (restored.diagnostics?.incomingItems as Array<{ banId: string }> | undefined)?.some(
-        (item) => item.banId === created.banId,
-      ),
-    ).toBe(true);
+    expect(restored.diagnostics?.bans).toHaveLength(1);
+    expect(restored.diagnostics?.incomingItems).toHaveLength(1);
   });
 
   it("E-41 TTL expiry clears pending External Entry and preserves established state", async () => {
@@ -345,6 +343,56 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(stolen.externalEntry).toMatchObject({ outcome: "REJECTED", bindStatus: "CONFLICT" });
     expect(stolen.diagnostics.controlState).toBe("RIM.LOBBY");
     expect(stolen.diagnostics.incomingItems).toEqual([]);
+  });
+
+  it("sender opening their own token is rejected and creates no Ban", async () => {
+    const app = await start();
+    const created = await createTemplateBanWithToken(app.url);
+    const sender = await session(app.url, USER_A_TG, {
+      openIfNeeded: false,
+      startParam: `share_${created.token}`,
+    });
+    expect(sender.externalEntry).toMatchObject({ outcome: "REJECTED" });
+    expect(sender.diagnostics.bans).toEqual([]);
+    expect(sender.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+  });
+
+  it("a CANCELLED token is rejected and creates no Ban", async () => {
+    const app = await start();
+    const created = await createTemplateBanWithToken(app.url);
+    await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CANCELLED", {
+      shareAttemptId: created.attemptId,
+    });
+    const receiver = await session(app.url, USER_B_TG, {
+      openIfNeeded: true,
+      startParam: `share_${created.token}`,
+    });
+    expect(receiver.externalEntry).toMatchObject({ outcome: "REJECTED" });
+    expect(receiver.diagnostics.bans).toEqual([]);
+    expect(receiver.diagnostics.incomingItems).toEqual([]);
+  });
+
+  it("two receivers racing the same token produce exactly one Ban", async () => {
+    const app = await start();
+    const created = await createTemplateBanWithToken(app.url);
+    const [first, second] = await Promise.all([
+      session(app.url, USER_B_TG, { openIfNeeded: true, startParam: `share_${created.token}` }),
+      session(app.url, USER_C_TG, { openIfNeeded: true, startParam: `share_${created.token}` }),
+    ]);
+    const outcomes = [first.externalEntry, second.externalEntry].map(
+      (entry) => (entry as { outcome?: string }).outcome,
+    );
+    expect(outcomes.filter((outcome) => outcome === "RESOLVED")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome === "REJECTED")).toHaveLength(1);
+    const sender = await app.runtime.productStore.loadProductSnapshot(
+      userIdOf(app.runtime, USER_A_TG)!,
+    );
+    expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
+    const winner = first.diagnostics.controlState === "NOTIFICATIONS.INCOMING_BAN" ? first : second;
+    const loser = winner === first ? second : first;
+    expect(winner.diagnostics.incomingItems).toHaveLength(1);
+    expect(loser.diagnostics.incomingItems).toEqual([]);
+    expect(loser.diagnostics.controlState).toBe("RIM.LOBBY");
   });
 
   it("transport rejects E-44 / E-45 / E-46 from TEST UI events", async () => {

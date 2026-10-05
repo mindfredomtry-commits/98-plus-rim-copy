@@ -1,11 +1,12 @@
 import type { ApplicationExecutionResult, ProductEventInput } from "@98plus/application";
-import { executeShareLinkResolved } from "@98plus/application";
+import { executeShareLinkResolved, executeTemplateShareClaim } from "@98plus/application";
 import type { AuthenticatedContext } from "@98plus/identity";
 import {
   PENDING_EXTERNAL_ENTRY_TTL_MS,
   type BanId,
   type NotificationItemId,
   type ProductSnapshot,
+  type ShareAttemptId,
   type ShareLinkFailureReason,
   type ShareLinkId,
   type UserId,
@@ -226,6 +227,139 @@ export async function applyPendingExternalEntryExpiry(
   );
 }
 
+async function openActiveTemplateShare(
+  runtime: CreateBanContactRuntime,
+  context: AuthenticatedContext,
+  clientClaimedUserId: string | undefined,
+  attemptId: string,
+  ownerId: UserId,
+  token: string,
+  base: Omit<ExternalEntryOrchestration, "outcome" | "steps">,
+): Promise<ExternalEntryExecution> {
+  const opened = await dispatch(
+    runtime,
+    context,
+    {
+      name: "TELEGRAM_SHARE_LINK.OPENED",
+      payload: {
+        shareLinkId: attemptId as ShareLinkId,
+        shareTargetBanId: null,
+        currentTelegramUserId: context.currentUserId,
+      },
+    },
+    clientClaimedUserId,
+  );
+  const openedBase = {
+    ...base,
+    shareAttemptId: attemptId,
+    shareTargetBanId: null,
+    incomingBanItemId: null,
+    bindStatus: null as ExternalEntryOrchestration["bindStatus"],
+  };
+  if (opened.status !== "APPLIED" || opened.snapshot.runtime.connection === "OFFLINE") {
+    return {
+      first: opened,
+      last: opened,
+      orchestration: { ...openedBase, outcome: "PENDING", steps: [stepOf(opened)] },
+    };
+  }
+
+  const claimed = await executeTemplateShareClaim(
+    {
+      context,
+      receiverId: context.currentUserId,
+      token,
+      shareAttemptId: attemptId as ShareAttemptId,
+      shareOwnerId: ownerId,
+      ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
+    },
+    executorDeps(runtime),
+  );
+
+  if (claimed.kind === "CLAIMED") {
+    return {
+      first: opened,
+      last: claimed.execution,
+      orchestration: {
+        ...openedBase,
+        shareTargetBanId: claimed.banId,
+        incomingBanItemId: linkedIncomingItemId(
+          claimed.execution.snapshot,
+          claimed.banId,
+          context.currentUserId,
+        ),
+        bindStatus: "BOUND",
+        outcome: "RESOLVED",
+        steps: [stepOf(opened), stepOf(claimed.execution)],
+      },
+    };
+  }
+
+  if (claimed.kind === "ALREADY_BOUND") {
+    const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
+    const incomingBanItemId =
+      linkedIncomingItemId(loaded.snapshot, claimed.banId, context.currentUserId) ??
+      (runtime.allocateId("notification") as NotificationItemId);
+    const resolved = await dispatchShareResolved(
+      runtime,
+      context,
+      {
+        targetBanId: claimed.banId,
+        receiverId: context.currentUserId,
+        incomingBanItemId,
+      },
+      clientClaimedUserId,
+    );
+    if (resolved.bindStatus === "MISSING" || resolved.bindStatus === "CONFLICT") {
+      return rejectExternalEntry(
+        runtime,
+        context,
+        {} as ShareLinkFailureReason,
+        clientClaimedUserId,
+        { ...openedBase, shareTargetBanId: claimed.banId, bindStatus: resolved.bindStatus },
+        [opened],
+      );
+    }
+    return {
+      first: opened,
+      last: resolved,
+      orchestration: {
+        ...openedBase,
+        shareTargetBanId: claimed.banId,
+        incomingBanItemId,
+        bindStatus: resolved.bindStatus,
+        outcome: resolved.status === "APPLIED" ? "RESOLVED" : "PENDING",
+        steps: [stepOf(opened), stepOf(resolved)],
+      },
+    };
+  }
+
+  if (claimed.kind === "FAILED") {
+    return {
+      first: opened,
+      last: claimed.execution,
+      orchestration: {
+        ...openedBase,
+        outcome: "PENDING",
+        steps: [stepOf(opened), stepOf(claimed.execution)],
+      },
+    };
+  }
+
+  return rejectExternalEntry(
+    runtime,
+    context,
+    {} as ShareLinkFailureReason,
+    clientClaimedUserId,
+    {
+      ...openedBase,
+      shareTargetBanId: claimed.kind === "CONFLICT" ? claimed.banId : null,
+      bindStatus: claimed.kind === "CONFLICT" ? "CONFLICT" : null,
+    },
+    [opened],
+  );
+}
+
 /**
  * Resolve a Telegram Share Link External Entry for the authenticated receiver.
  * Dispatches canonical E-44 then E-45 (online) or leaves pending (offline); E-46 on rejection.
@@ -273,7 +407,52 @@ export async function resolveTelegramShareExternalEntry(
     shareTargetBanId: lookup?.share.createdBanId ?? null,
   };
 
-  if (!lookup || lookup.share.status !== "CONFIRMED" || !lookup.share.createdBanId) {
+  if (!lookup) {
+    return rejectExternalEntry(
+      runtime,
+      context,
+      {} as ShareLinkFailureReason,
+      clientClaimedUserId,
+      base,
+      [],
+    );
+  }
+
+  if (lookup.ownerId === context.currentUserId) {
+    return rejectExternalEntry(
+      runtime,
+      context,
+      {} as ShareLinkFailureReason,
+      clientClaimedUserId,
+      base,
+      [],
+    );
+  }
+
+  if (lookup.share.status === "CANCELLED" || lookup.share.status === "INVALIDATED") {
+    return rejectExternalEntry(
+      runtime,
+      context,
+      {} as ShareLinkFailureReason,
+      clientClaimedUserId,
+      base,
+      [],
+    );
+  }
+
+  if (lookup.share.status === "ACTIVE" && lookup.share.createdBanId === null) {
+    return openActiveTemplateShare(
+      runtime,
+      context,
+      clientClaimedUserId,
+      lookup.share.attemptId,
+      lookup.ownerId,
+      parsed.token,
+      base,
+    );
+  }
+
+  if (lookup.share.status !== "CONFIRMED" || !lookup.share.createdBanId) {
     return rejectExternalEntry(
       runtime,
       context,
@@ -429,7 +608,118 @@ export async function resolvePendingExternalEntryIfOnline(
     return null;
   }
 
-  const banId = entry.shareTargetBanId;
+  let banId = entry.shareTargetBanId;
+  if (banId === null) {
+    const pendingShare = await runtime.productStore.getShareByAttemptId(String(entry.shareLinkId));
+    if (
+      !pendingShare ||
+      pendingShare.ownerId === context.currentUserId ||
+      pendingShare.share.status === "CANCELLED" ||
+      pendingShare.share.status === "INVALIDATED"
+    ) {
+      return rejectExternalEntry(
+        runtime,
+        context,
+        {} as ShareLinkFailureReason,
+        clientClaimedUserId,
+        {
+          startParam: null,
+          token: pendingShare ? String(pendingShare.share.token) : null,
+          shareAttemptId: String(entry.shareLinkId),
+          shareTargetBanId: null,
+          incomingBanItemId: null,
+          bindStatus: null,
+        },
+        [],
+      );
+    }
+    if (pendingShare.share.status === "ACTIVE" && pendingShare.share.createdBanId === null) {
+      const claimed = await executeTemplateShareClaim(
+        {
+          context,
+          receiverId: context.currentUserId,
+          token: String(pendingShare.share.token),
+          shareAttemptId: pendingShare.share.attemptId,
+          shareOwnerId: pendingShare.ownerId,
+          ...(clientClaimedUserId === undefined ? {} : { clientClaimedUserId }),
+        },
+        executorDeps(runtime),
+      );
+      if (claimed.kind === "CLAIMED") {
+        return {
+          first: claimed.execution,
+          last: claimed.execution,
+          orchestration: {
+            startParam: null,
+            token: String(pendingShare.share.token),
+            shareAttemptId: String(entry.shareLinkId),
+            shareTargetBanId: claimed.banId,
+            incomingBanItemId: linkedIncomingItemId(
+              claimed.execution.snapshot,
+              claimed.banId,
+              context.currentUserId,
+            ),
+            bindStatus: "BOUND",
+            outcome: "RESOLVED",
+            steps: [stepOf(claimed.execution)],
+          },
+        };
+      }
+      if (claimed.kind === "FAILED") {
+        return {
+          first: claimed.execution,
+          last: claimed.execution,
+          orchestration: {
+            startParam: null,
+            token: String(pendingShare.share.token),
+            shareAttemptId: String(entry.shareLinkId),
+            shareTargetBanId: null,
+            incomingBanItemId: null,
+            bindStatus: null,
+            outcome: "PENDING",
+            steps: [stepOf(claimed.execution)],
+          },
+        };
+      }
+      if (claimed.kind === "ALREADY_BOUND") {
+        banId = claimed.banId;
+      } else {
+        return rejectExternalEntry(
+          runtime,
+          context,
+          {} as ShareLinkFailureReason,
+          clientClaimedUserId,
+          {
+            startParam: null,
+            token: String(pendingShare.share.token),
+            shareAttemptId: String(entry.shareLinkId),
+            shareTargetBanId: claimed.kind === "CONFLICT" ? claimed.banId : null,
+            incomingBanItemId: null,
+            bindStatus: claimed.kind === "CONFLICT" ? "CONFLICT" : null,
+          },
+          [],
+        );
+      }
+    } else if (pendingShare.share.createdBanId) {
+      banId = pendingShare.share.createdBanId;
+    } else {
+      return rejectExternalEntry(
+        runtime,
+        context,
+        {} as ShareLinkFailureReason,
+        clientClaimedUserId,
+        {
+          startParam: null,
+          token: String(pendingShare.share.token),
+          shareAttemptId: String(entry.shareLinkId),
+          shareTargetBanId: null,
+          incomingBanItemId: null,
+          bindStatus: null,
+        },
+        [],
+      );
+    }
+  }
   const ban = await runtime.productStore.getBanById(banId);
   if (!ban) {
     return rejectExternalEntry(

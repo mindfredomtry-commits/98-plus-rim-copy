@@ -438,7 +438,8 @@ export class MemorySqlClient implements PersistenceSqlClient {
           })),
         );
       }
-      case SQL.selectShareByToken: {
+      case SQL.selectShareByToken:
+      case SQL.selectShareByTokenForUpdate: {
         const share = this.tables.findShareByToken(String(params[0]));
         if (!share) {
           return rows([]);
@@ -453,6 +454,41 @@ export class MemorySqlClient implements PersistenceSqlClient {
             created_ban_id: share.createdBanId,
           },
         ]);
+      }
+      case SQL.selectShareByAttemptId: {
+        const share = this.tables.getShare(String(params[0]));
+        if (!share) {
+          return rows([]);
+        }
+        return rows([
+          {
+            attempt_id: share.attemptId,
+            owner_id: share.ownerId,
+            draft: share.draft,
+            token: share.token,
+            status: share.status,
+            created_ban_id: share.createdBanId,
+          },
+        ]);
+      }
+      case SQL.confirmShareIfActive: {
+        const current = this.tables.getShare(String(params[0]));
+        if (
+          !current ||
+          current.ownerId !== params[2] ||
+          current.status !== "ACTIVE" ||
+          current.createdBanId !== null
+        ) {
+          return rows([]);
+        }
+        this.tables.upsertShare(current.ownerId, {
+          attemptId: current.attemptId,
+          draft: current.draft,
+          token: current.token,
+          status: "CONFIRMED",
+          createdBanId: params[1] as ShareOperation["createdBanId"],
+        });
+        return rows([{ attempt_id: current.attemptId }]);
       }
       case SQL.selectBanById: {
         const ban = this.tables.getBan(String(params[0]));

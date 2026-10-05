@@ -1483,33 +1483,10 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
   matrixRow({
     kind: "LOCAL",
     state: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
-    eventId: "E-12",
-    eventName: "CREATE_BAN.SHARE_CONFIRMED",
-    branch: "matching-share-attempt",
-    guardsText: "matching Share attempt",
-    nextStateText: "CB-10 SUCCESS",
-    nextState: "CREATE_BAN.SUCCESS",
-    effectsText:
-      "При matching valid active Share operation Template Ban создаётся exactly once; successful Share result связывается с этой operation и созданным Ban; operation больше не может создать второй Ban.",
-    effects: [
-      { type: "UPSERT_BAN" },
-      { type: "MARK_OPERATION_RESULT_APPLIED" },
-      { type: "SET_CONTROL_STATE" },
-    ],
-    result: "TRANSITION",
-    source: {
-      section: "CB-09 — CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
-      locator: "line 316",
-      extractedLines: "316",
-    },
-  }),
-  matrixRow({
-    kind: "LOCAL",
-    state: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
     eventId: "E-13",
     eventName: "CREATE_BAN.SHARE_CANCELLED",
     branch: "closed-without-send",
-    guardsText: "Share закрыт без отправки",
+    guardsText: "matching Share attempt is still ACTIVE",
     nextStateText: "CB-07 CONFIRM.TEMPLATE",
     nextState: "CREATE_BAN.CONFIRM.TEMPLATE",
     effectsText:

@@ -33,7 +33,7 @@ export type BanAcceptance = "PENDING" | "ACCEPTED";
 export type Ban = Readonly<{
   id: BanId;
   senderId: UserId;
-  /** CONTACT: existing registered UserId. Template: null until future External Entry binding. */
+  /** CONTACT: existing registered UserId. Template: null until authenticated recipient claim. */
   receiverId: UserId | null;
   banText: string;
   durationMinutes: DurationMinutes;
@@ -280,7 +280,8 @@ export type ReplySource =
     };
 
 /**
- * Kernel writes ACTIVE, CONFIRMED, and CANCELLED (E-12 / E-13 / E-32).
+ * Kernel writes ACTIVE, CONFIRMED, and CANCELLED (E-45 claim / E-13 / E-32).
+ * CONFIRMED means the authenticated recipient claim committed, not a client share callback.
  * INVALIDATED remains on the contract because MVP5 describes cancelled/terminated Share
  * as unable to create a Ban; no accepted path currently emits INVALIDATED.
  * Stage 4 must not persist INVALIDATED unless a later accepted kernel path produces it.

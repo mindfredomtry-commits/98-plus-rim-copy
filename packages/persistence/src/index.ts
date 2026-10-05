@@ -1,3 +1,13 @@
+export {
+  classifyShareForClaim,
+  createdClaimBan,
+  snapshotForReceiverClaimPersist,
+} from "./claim-template-share.ts";
+export type {
+  ClaimTemplateShareInput,
+  ClaimTemplateShareResult,
+  TemplateShareClaimContext,
+} from "./claim-template-share.ts";
 export { SNAPSHOT_FIELD_CLASSIFICATION } from "./classification.ts";
 export type { SnapshotFieldClass } from "./classification.ts";
 export { PersistenceError } from "./errors.ts";

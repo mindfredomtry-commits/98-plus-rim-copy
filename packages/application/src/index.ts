@@ -6,7 +6,12 @@ export { ApplicationError } from "./errors.ts";
 export type { ApplicationErrorCode } from "./errors.ts";
 export { toCanonicalEvent } from "./event.ts";
 export type { ProductEventInput } from "./event.ts";
-export { executeProductEvent, executeShareLinkResolved } from "./execute.ts";
+export {
+  executeProductEvent,
+  executeShareLinkResolved,
+  executeTemplateShareClaim,
+} from "./execute.ts";
+export type { ExecuteTemplateShareClaimInput, TemplateShareClaimExecution } from "./execute.ts";
 export type {
   ApplicationExecutionResult,
   ApplicationExecutionStatus,

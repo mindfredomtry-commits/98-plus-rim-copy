@@ -32,7 +32,8 @@ export type EntityState = Readonly<{
 
 export type PendingExternalEntry = Readonly<{
   shareLinkId: ShareLinkId;
-  shareTargetBanId: BanId;
+  /** Null until recipient claim allocates the Template Ban. Pending identity is shareLinkId. */
+  shareTargetBanId: BanId | null;
   currentTelegramUserId: UserId;
   entryTimestamp: Instant;
   firstLaunch: boolean;

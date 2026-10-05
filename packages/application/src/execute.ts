@@ -15,9 +15,12 @@ import {
   type Effect,
   type KernelError,
   type MatrixResult,
+  type NotificationItemId,
   type ProductControlState,
   type ProductSnapshot,
   type RimChatId,
+  type ShareAttemptId,
+  type ShareOperation,
   type TransitionOutcome,
   type TransitionResult,
   type UserId,
@@ -476,6 +479,189 @@ export async function executeShareLinkResolved(
     throw new ApplicationError(
       "INFRASTRUCTURE_FAILURE",
       error instanceof Error ? error.message : "application infrastructure failure",
+      error,
+    );
+  }
+}
+
+function withHydratedShare(snapshot: ProductSnapshot, share: ShareOperation): ProductSnapshot {
+  return {
+    ...snapshot,
+    extended: {
+      ...snapshot.extended,
+      entities: {
+        ...snapshot.extended.entities,
+        shareOperations: {
+          ...snapshot.extended.entities.shareOperations,
+          [share.attemptId]: share,
+        },
+      },
+    },
+  };
+}
+
+export type ExecuteTemplateShareClaimInput = Readonly<{
+  context: AuthenticatedContext;
+  receiverId: UserId;
+  token: string;
+  shareAttemptId: ShareAttemptId;
+  shareOwnerId: UserId;
+  incomingBanItemId?: NotificationItemId;
+  clientClaimedUserId?: string;
+}>;
+
+export type TemplateShareClaimExecution =
+  | { kind: "CLAIMED"; banId: BanId; execution: ShareLinkResolvedExecution }
+  | { kind: "ALREADY_BOUND"; banId: BanId }
+  | { kind: "CONFLICT"; banId: BanId | null }
+  | { kind: "REJECTED"; reason: "UNKNOWN_TOKEN" | "SENDER" | "CANCELLED" | "MALFORMED" }
+  | { kind: "FAILED"; execution: ShareLinkResolvedExecution };
+
+/**
+ * E-45 claim mint. Runs inside ProductStore.claimTemplateShare so the Ban,
+ * Incoming item, and sender-owned ACTIVE → CONFIRMED update commit together.
+ * Does not change the sender Product Control State.
+ * Sender Success after claim is deferred to Pass C (DC-SHARE-06).
+ */
+export async function executeTemplateShareClaim(
+  input: ExecuteTemplateShareClaimInput,
+  deps: ProductExecutorDependencies,
+): Promise<TemplateShareClaimExecution> {
+  const currentUserId = callerUserId(input.context, input.clientClaimedUserId);
+  if (currentUserId !== input.receiverId) {
+    return { kind: "REJECTED", reason: "MALFORMED" };
+  }
+  let claimedEvent: CanonicalEvent | null = null;
+  let claimedTransition: TransitionResult | null = null;
+  try {
+    const claimed = await deps.store.claimTemplateShare({
+      receiverId: input.receiverId,
+      token: input.token,
+      reduceClaim: (context) => {
+        const banId = deps.allocateId("ban") as BanId;
+        const incomingBanItemId =
+          input.incomingBanItemId ?? (deps.allocateId("notification") as NotificationItemId);
+        const event = toCanonicalEvent({
+          name: "TELEGRAM_SHARE_LINK.RESOLVED",
+          payload: {
+            targetBanId: banId,
+            receiverId: input.receiverId,
+            incomingBanItemId,
+            shareAttemptId: input.shareAttemptId,
+            shareOwnerId: input.shareOwnerId,
+          },
+        });
+        claimedEvent = event;
+        const transition = reduce(
+          withHydratedShare(context.receiver.snapshot, context.share),
+          event,
+          {
+            now: asInstant(deps.clock.nowMs()),
+            currentUserId,
+            allocateId: deps.allocateId,
+          },
+        );
+        claimedTransition = transition;
+        return transition;
+      },
+    });
+    if (claimed.status === "ALREADY_BOUND") {
+      return { kind: "ALREADY_BOUND", banId: claimed.banId };
+    }
+    if (claimed.status === "CONFLICT") {
+      return { kind: "CONFLICT", banId: claimed.banId };
+    }
+    if (claimed.status === "REJECTED") {
+      return { kind: "REJECTED", reason: claimed.reason };
+    }
+    const event = claimedEvent;
+    if (!event) {
+      return { kind: "REJECTED", reason: "MALFORMED" };
+    }
+    if (claimed.status === "NOT_APPLIED") {
+      return {
+        kind: "FAILED",
+        execution: {
+          ...executionResult({
+            status:
+              claimed.transition.outcome === "KERNEL_INVARIANT"
+                ? "KERNEL_INVARIANT"
+                : "NOT_APPLIED",
+            currentUserId,
+            event,
+            transition: claimed.transition,
+            snapshot: claimed.transition.snapshot,
+            revision: 0,
+            persisted: false,
+            error:
+              claimed.transition.outcome === "KERNEL_INVARIANT"
+                ? new ApplicationError(
+                    "KERNEL_INVARIANT",
+                    claimed.transition.error?.message ?? "Product Kernel invariant failed",
+                    claimed.transition.error,
+                  )
+                : null,
+          }),
+          bindStatus: null,
+        },
+      };
+    }
+    return {
+      kind: "CLAIMED",
+      banId: claimed.banId,
+      execution: {
+        ...executionResult({
+          status: "APPLIED",
+          currentUserId,
+          event,
+          transition: claimed.transition,
+          snapshot: claimed.loadedSnapshot,
+          revision: claimed.loadedRevision,
+          persisted: true,
+          error: null,
+        }),
+        bindStatus: "BOUND",
+      },
+    };
+  } catch (error) {
+    if (error instanceof PersistenceError) {
+      const durable = await deps.store.loadProductSnapshot(currentUserId);
+      const event =
+        claimedEvent ??
+        toCanonicalEvent({
+          name: "TELEGRAM_SHARE_LINK.RESOLVED",
+          payload: {
+            targetBanId: deps.allocateId("ban") as BanId,
+            receiverId: input.receiverId,
+            incomingBanItemId:
+              input.incomingBanItemId ?? (deps.allocateId("notification") as NotificationItemId),
+            shareAttemptId: input.shareAttemptId,
+            shareOwnerId: input.shareOwnerId,
+          },
+        });
+      return {
+        kind: "FAILED",
+        execution: {
+          ...executionResult({
+            status: error.code === "REVISION_CONFLICT" ? "REVISION_CONFLICT" : "PERSISTENCE_ERROR",
+            currentUserId,
+            event,
+            transition: claimedTransition,
+            snapshot: durable.snapshot,
+            revision: durable.revision,
+            persisted: false,
+            error: persistenceApplicationError(error),
+          }),
+          bindStatus: null,
+        },
+      };
+    }
+    if (error instanceof ApplicationError) {
+      throw error;
+    }
+    throw new ApplicationError(
+      "INFRASTRUCTURE_FAILURE",
+      error instanceof Error ? error.message : "template share claim failed",
       error,
     );
   }

@@ -6,6 +6,7 @@ import type {
   BanId,
   DurationMinutes,
   ExecutionProbability,
+  NotificationItemId,
   ProposalId,
   RimChatId,
 } from "./ids.ts";
@@ -622,10 +623,16 @@ describe("MVP14 Pass 3 canonical proposal attribution", () => {
     expect(contact.snapshot.extended.rimChat).toEqual(contactChat);
 
     const template = run(
-      withEntities(withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING"), {
+      withEntities(withControlState(emptySnapshot(), "RIM.LOBBY"), {
         shareOperations: { [SHARE_ATTEMPT_ID]: shareOp() },
       }),
-      defaultEvent("CREATE_BAN.SHARE_CONFIRMED"),
+      eventOf("TELEGRAM_SHARE_LINK.RESOLVED", {
+        targetBanId: BAN_ID,
+        receiverId: USER_ID,
+        incomingBanItemId: branded<NotificationItemId>("incoming-template"),
+        shareAttemptId: SHARE_ATTEMPT_ID,
+        shareOwnerId: CONTACT_A,
+      }),
     );
     expect(template.outcome).toBe("APPLIED");
     expect(

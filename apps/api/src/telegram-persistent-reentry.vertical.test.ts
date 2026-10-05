@@ -152,21 +152,14 @@ async function createShareBoundBan(
     share,
     JSON.stringify({ state: pending.controlState, ops: pending.shareOperations }),
   ).toBeTruthy();
-  const success = (
-    await dispatch(url, senderTg, "CREATE_BAN.SHARE_CONFIRMED", {
-      shareAttemptId: share!.attemptId,
-      result: {},
-    })
-  ).diagnostics!;
-  expect(success.controlState).toBe("CREATE_BAN.SUCCESS");
-  const confirmed = (
-    success.shareOperations as Array<{
-      attemptId: string;
-      createdBanId: string | null;
-    }>
-  ).find((operation) => operation.attemptId === share!.attemptId);
-  expect(confirmed?.createdBanId).toBeTruthy();
-  return { banId: confirmed!.createdBanId!, token: share!.token };
+  const receiver = await session(url, USER_B_TG, {
+    openIfNeeded: true,
+    startParam: `share_${share!.token}`,
+  });
+  expect(receiver.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+  const ban = (receiver.bans as Array<{ id: string }>)[0];
+  expect(ban?.id).toBeTruthy();
+  return { banId: ban!.id, token: share!.token };
 }
 
 async function openShareAsReceiver(url: string, token: string): Promise<TestUiDiagnostics> {
@@ -186,8 +179,8 @@ async function qualifyViaOverboard(url: string): Promise<TestUiDiagnostics> {
 describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
   it("keeps frozen 30 / 59 / 359 and TELEGRAM_PERSISTENT_REENTRY_STAGE = 13A", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
     expect(TELEGRAM_PERSISTENT_REENTRY_STAGE).toBe("13A");
@@ -198,8 +191,8 @@ describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
     const app = await start();
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.TELEGRAM_PERSISTENT_REENTRY_STAGE).toBe("13A");
-    expect(meta.CANONICAL_EVENT_COUNT).toBe(59);
-    expect(meta.MATRIX_RULE_COUNT).toBe(359);
+    expect(meta.CANONICAL_EVENT_COUNT).toBe(58);
+    expect(meta.MATRIX_RULE_COUNT).toBe(358);
   });
 
   it("E-45 alone leaves eligible false", async () => {

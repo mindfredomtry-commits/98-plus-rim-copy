@@ -580,12 +580,8 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
         validCurrentCheckAnswerResult(input) &&
         (input.event.payload as { resultingStatus?: string }).resultingStatus === "FAIR_ENOUGH"
       );
-    case "E-12:matching-share-attempt": {
-      const share = matchingShare(input);
-      return share?.status === "ACTIVE";
-    }
     case "E-13:closed-without-send":
-      return matchingShare(input) !== null;
+      return matchingShare(input)?.status === "ACTIVE";
     case "E-42:eligible-ban":
       return expiredBanEligible(input);
     case "E-42:other-eligible-ban":

@@ -93,7 +93,6 @@ export const TEST_UI_USER_EVENT_NAMES = [
   "CREATE_BAN.PRESS_BACK",
   "CREATE_BAN.PRESS_FORBID",
   "CREATE_BAN.PRESS_FORBID_MORE",
-  "CREATE_BAN.SHARE_CONFIRMED",
   "CREATE_BAN.SHARE_CANCELLED",
   "RIM.PRESS_NOTIFICATIONS",
   "NOTIFICATIONS.PRESS_OVERBOARD",
@@ -521,7 +520,7 @@ function confirmTemplateScreen(
       `<p>Duration: <span data-template-duration="${escapeAttr(String(draft.durationMinutes ?? "(none)"))}">${escapeHtml(String(draft.durationMinutes ?? "(none)"))}</span></p>`,
       "<p>Receiver: not set until Share Link resolution (External Entry).</p>",
       sending
-        ? "<p>Opening Telegram Share… Ban is not created until CREATE_BAN.SHARE_CONFIRMED.</p>"
+        ? "<p>Opening Telegram Share… Ban is not created until the recipient opens it.</p>"
         : "",
       actionButton("BACK", "CREATE_BAN.PRESS_BACK"),
       `<div class="row"><button type="button" data-event="CREATE_BAN.PRESS_FORBID"${forbidDisabled}>FORBID / SHARE</button></div>`,
@@ -544,8 +543,8 @@ function sharePendingScreen(diagnostics: TestUiScreenDiagnostics): ProductScreen
       share?.shareUrl
         ? `<p>Share URL: <code data-share-url="${escapeAttr(share.shareUrl)}">${escapeHtml(share.shareUrl)}</code></p>`
         : "",
-      '<p class="dev-label">DEV ONLY — isolated share outcome (not a product CTA). Prefer Telegram.WebApp.shareMessage callback.</p>',
-      `<div class="row"><button type="button" data-event="CREATE_BAN.SHARE_CONFIRMED" data-share-attempt-id="${escapeAttr(String(attemptId))}" data-dev-only="share-outcome">DEV: SHARE_CONFIRMED</button></div>`,
+      "<p>Telegram share completion does not create a Ban. The Ban is created when the recipient opens the link. Sender may remain on this screen after that claim.</p>",
+      '<p class="dev-label">DEV ONLY — explicit cancel while the share is still ACTIVE. This does not mint a Ban.</p>',
       `<div class="row"><button type="button" data-event="CREATE_BAN.SHARE_CANCELLED" data-share-attempt-id="${escapeAttr(String(attemptId))}" data-dev-only="share-outcome">DEV: SHARE_CANCELLED</button></div>`,
     ].join(""),
   );

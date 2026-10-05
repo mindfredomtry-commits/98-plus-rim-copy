@@ -1630,7 +1630,8 @@ describe("Stage 11 TEST UI Template Create Ban screens", () => {
     );
     expect(pending.html).toContain("Ban is not created yet");
     expect(pending.html).toContain('data-share-attempt="share-1"');
-    expect(pending.html).toContain("DEV: SHARE_CONFIRMED");
+    expect(pending.html).not.toContain("DEV: SHARE_CONFIRMED");
+    expect(pending.html).toContain("DEV: SHARE_CANCELLED");
     expect(pending.html).toContain("data-dev-only");
   });
 });

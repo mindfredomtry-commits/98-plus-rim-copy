@@ -222,10 +222,6 @@ describe("MVP10 corrective Pass 1 — begin CTA opportunity boundary", () => {
     const share = (
       pending.shareOperations as Array<{ attemptId: string; token: string; status: string }>
     ).find((operation) => operation.status === "ACTIVE")!;
-    await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CONFIRMED", {
-      shareAttemptId: share.attemptId,
-      result: {},
-    });
     await session(app.url, USER_TG, { openIfNeeded: true, startParam: `share_${share.token}` });
     const qualified = (await dispatch(app.url, USER_TG, "NOTIFICATIONS.PRESS_OVERBOARD"))
       .diagnostics!;

@@ -6,7 +6,6 @@ import {
   MATRIX_CONTRACT_ROWS,
   PRODUCT_CONTROL_STATE_COUNT,
   PRODUCT_SPECIFICATION_SOURCE,
-  type BanId,
 } from "@98plus/product-model";
 import { CONTACT_RELATIONSHIP_STAGE, STAGE_13B_EXCLUDES } from "./stage.ts";
 import { listenCreateBanContactServer } from "./http.ts";
@@ -134,36 +133,25 @@ async function createTemplateShare(url: string, telegramUserId: string) {
   expect(forbid.diagnostics?.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
   const attemptId = forbid.diagnostics?.activeShareAttemptId;
   expect(attemptId).toBeTruthy();
-  const confirmed = await dispatch(url, telegramUserId, "CREATE_BAN.SHARE_CONFIRMED", {
-    shareAttemptId: attemptId,
-    result: {},
-  });
-  expect(confirmed.diagnostics?.controlState).toBe("CREATE_BAN.SUCCESS");
-  const share =
-    (
-      confirmed.diagnostics?.shareOperations as Array<{
-        token: string;
-        createdBanId: string | null;
-        status?: string;
-      }>
-    )?.find((item) => item.status === "CONFIRMED" && item.createdBanId) ??
-    (
-      confirmed.diagnostics?.shareOperations as Array<{
-        token: string;
-        createdBanId: string | null;
-      }>
-    )?.[0];
+  expect(forbid.diagnostics?.bans).toEqual([]);
+  const share = (
+    forbid.diagnostics?.shareOperations as Array<{
+      token: string;
+      createdBanId: string | null;
+      status?: string;
+    }>
+  )?.find((item) => item.status === "ACTIVE" && item.createdBanId === null);
   expect(share?.token).toBeTruthy();
-  expect(share?.createdBanId).toBeTruthy();
-  return { token: share!.token, banId: share!.createdBanId! };
+  expect(share?.createdBanId).toBeNull();
+  return { token: share!.token };
 }
 
 describe("Stage 13B MVP8 Contact relationship", () => {
   it("keeps frozen 30 / 59 / 359 under MVP10 authority", () => {
     expect(PRODUCT_SPECIFICATION_SOURCE.revision).toBe("10");
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(CANONICAL_EVENT_COUNT).toBe(58);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     expect(ABSENT_EVENT_IDS).toEqual(["E-36", "E-37", "E-38", "E-39", "E-40"]);
     expect(CONTACT_RELATIONSHIP_STAGE).toBe(13);
     expect(STAGE_13B_EXCLUDES).toContain("rim-ai");
@@ -226,8 +214,10 @@ describe("Stage 13B MVP8 Contact relationship", () => {
 
     const created = await createTemplateShare(app.url, USER_A_TG);
     expect(
-      (await app.runtime.productStore.getBanById(created.banId as BanId))?.receiverId,
-    ).toBeNull();
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+      ),
+    ).toEqual([]);
 
     await dispatch(app.url, USER_B_TG, "CONNECTION.LOST");
     const opened = await session(app.url, USER_B_TG, {
@@ -241,50 +231,30 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     });
     expect(opened.diagnostics.pendingExternalEntry).not.toBeNull();
     expect(
-      (await app.runtime.productStore.getBanById(created.banId as BanId))?.receiverId,
-    ).toBeNull();
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+      ),
+    ).toEqual([]);
     expect(contactIds(opened.diagnostics)).toEqual([]);
     expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([]);
 
-    // Leave CREATE_BAN.SUCCESS so WHO / RIM.SELECT_CONTACT are reachable for A.
-    let aState = (await session(app.url, USER_A_TG)).diagnostics;
-    if (aState.controlState === "CREATE_BAN.SUCCESS") {
-      aState = (await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_FORBID_MORE")).diagnostics!;
-    }
-    if (aState.controlState !== "RIM.LOBBY") {
-      aState = (await session(app.url, USER_A_TG, { openIfNeeded: true })).diagnostics;
-    }
-    expect(aState.controlState).toBe("RIM.LOBBY");
-
-    const aWhoAfterE44 = (await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"))
-      .diagnostics!;
-    expect(aWhoAfterE44.controlState).toBe("CREATE_BAN.WHO");
-    expect(contactIds(aWhoAfterE44)).toEqual([]);
-    await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_BACK");
-    await dispatch(app.url, USER_A_TG, "RIM.PRESS_START_CHAT");
-    const aRimAfterE44 = (await dispatch(app.url, USER_A_TG, "RIM.PRESS_SELECT_CONTACT"))
-      .diagnostics!;
-    expect(aRimAfterE44.controlState).toBe("RIM.SELECT_CONTACT");
-    expect(contactIds(aRimAfterE44)).toEqual([]);
-    await dispatch(app.url, USER_A_TG, "RIM.PRESS_BACK"); // SELECT_CONTACT → CHAT
-    await dispatch(app.url, USER_A_TG, "RIM.PRESS_BACK"); // CHAT → LOBBY
+    // Sender Success after claim is Pass C. FULL_CLOSE here would cancel the still-ACTIVE share.
+    const senderPending = (await session(app.url, USER_A_TG, { openIfNeeded: false })).diagnostics;
+    expect(senderPending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(contactIds(senderPending)).toEqual([]);
 
     const restored = await dispatch(app.url, USER_B_TG, "CONNECTION.RESTORED");
     expect(restored.diagnostics?.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
-    expect((await app.runtime.productStore.getBanById(created.banId as BanId))?.receiverId).toBe(
-      bId,
+    const bound = Object.values(
+      (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
     );
+    expect(bound).toHaveLength(1);
+    expect(bound[0]?.receiverId).toBe(bId);
     expect(contactIds(restored.diagnostics!)).toEqual([aId]);
-    expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([bId]);
-
-    const aWho = (await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START")).diagnostics!;
-    expect(aWho.controlState).toBe("CREATE_BAN.WHO");
-    expect(contactIds(aWho)).toEqual([bId]);
-    await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_BACK");
-    await dispatch(app.url, USER_A_TG, "RIM.PRESS_START_CHAT");
-    const aRim = (await dispatch(app.url, USER_A_TG, "RIM.PRESS_SELECT_CONTACT")).diagnostics!;
-    expect(aRim.controlState).toBe("RIM.SELECT_CONTACT");
-    expect(contactIds(aRim)).toEqual([bId]);
+    const senderAfterClaim = (await session(app.url, USER_A_TG, { openIfNeeded: false }))
+      .diagnostics;
+    expect(senderAfterClaim.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(contactIds(senderAfterClaim)).toEqual([bId]);
 
     expect(contactIds((await session(app.url, USER_B_TG)).diagnostics)).toEqual([aId]);
     await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_TO_BANS");
@@ -310,15 +280,22 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const aId = userIdOf(app.runtime, USER_A_TG)!;
     const bId = userIdOf(app.runtime, USER_B_TG)!;
     const created = await createTemplateShare(app.url, USER_A_TG);
-    const banId = created.banId as BanId;
-    expect((await app.runtime.productStore.getBanById(banId))?.receiverId).toBeNull();
+    expect(
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+      ),
+    ).toEqual([]);
 
     asPostgresStore(app.runtime).failNextWriteAfterBans();
     const failed = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect((await app.runtime.productStore.getBanById(banId))?.receiverId).toBeNull();
+    expect(
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+      ),
+    ).toEqual([]);
     expect(contactIds(failed.diagnostics)).toEqual([]);
     expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([]);
     expect(failed.diagnostics.incomingItems).toEqual([]);
@@ -343,23 +320,26 @@ describe("Stage 13B MVP8 Contact relationship", () => {
       startParam: `share_${created.token}`,
     });
     expect(resolved.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
-    expect((await app.runtime.productStore.getBanById(banId))?.receiverId).toBe(bId);
+    const bound = Object.values(
+      (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+    );
+    expect(bound).toHaveLength(1);
+    expect(bound[0]?.receiverId).toBe(bId);
     expect(contactIds(resolved.diagnostics)).toEqual([aId]);
-    expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([bId]);
     expect(
-      (resolved.diagnostics.incomingItems as Array<{ banId: string }>).some(
-        (item) => item.banId === created.banId,
-      ),
-    ).toBe(true);
+      contactIds((await session(app.url, USER_A_TG, { openIfNeeded: false })).diagnostics),
+    ).toEqual([bId]);
+    expect(resolved.diagnostics.incomingItems).toHaveLength(1);
 
     const again = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
     expect(contactIds(again.diagnostics)).toEqual([aId]);
+    expect(again.diagnostics.incomingItems).toHaveLength(1);
     expect(
-      (again.diagnostics.incomingItems as Array<{ banId: string }>).filter(
-        (item) => item.banId === created.banId,
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
       ),
     ).toHaveLength(1);
   });
@@ -371,7 +351,6 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const aId = userIdOf(app.runtime, USER_A_TG)!;
     const bId = userIdOf(app.runtime, USER_B_TG)!;
     const created = await createTemplateShare(app.url, USER_A_TG);
-    const banId = created.banId as BanId;
 
     await dispatch(app.url, USER_B_TG, "CONNECTION.LOST");
     const opened = await session(app.url, USER_B_TG, {
@@ -379,23 +358,37 @@ describe("Stage 13B MVP8 Contact relationship", () => {
       startParam: `share_${created.token}`,
     });
     expect(opened.externalEntry).toMatchObject({ outcome: "PENDING" });
-    expect((await app.runtime.productStore.getBanById(banId))?.receiverId).toBeNull();
+    expect(
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+      ),
+    ).toEqual([]);
     expect(contactIds(opened.diagnostics)).toEqual([]);
 
     asPostgresStore(app.runtime).failNextWriteAfterBans();
     const failedRestore = await dispatch(app.url, USER_B_TG, "CONNECTION.RESTORED");
-    expect((await app.runtime.productStore.getBanById(banId))?.receiverId).toBeNull();
+    expect(
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+      ),
+    ).toEqual([]);
     expect(contactIds(failedRestore.diagnostics!)).toEqual([]);
-    expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([]);
+    expect(
+      contactIds((await session(app.url, USER_A_TG, { openIfNeeded: false })).diagnostics),
+    ).toEqual([]);
 
     const restored = await dispatch(app.url, USER_B_TG, "CONNECTION.RESTORED");
     expect(restored.diagnostics?.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
-    expect((await app.runtime.productStore.getBanById(banId))?.receiverId).toBe(bId);
+    const bound = Object.values(
+      (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+    );
+    expect(bound).toHaveLength(1);
+    expect(bound[0]?.receiverId).toBe(bId);
     expect(contactIds(restored.diagnostics!)).toEqual([aId]);
     expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([bId]);
   });
 
-  it("E-12 Template does not create Contact; E-45 does; duplicates stay one", async () => {
+  it("template share does not create Contact until recipient claim; repeat open stays one", async () => {
     const app = await start();
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
@@ -421,16 +414,11 @@ describe("Stage 13B MVP8 Contact relationship", () => {
       startParam: `share_${created.token}`,
     });
     expect(contactIds(again.diagnostics)).toEqual([aId]);
-
-    const second = await createTemplateShare(app.url, USER_A_TG);
-    await session(app.url, USER_B_TG, {
-      openIfNeeded: true,
-      startParam: `share_${second.token}`,
-    });
-    const aFinal = await session(app.url, USER_A_TG);
-    const bFinal = await session(app.url, USER_B_TG);
-    expect(contactIds(aFinal.diagnostics)).toEqual([bId]);
-    expect(contactIds(bFinal.diagnostics)).toEqual([aId]);
+    expect(
+      Object.keys(
+        (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
+      ),
+    ).toHaveLength(1);
   });
 
   it("E-08 does not establish Contact; CONTACT E-10 does not duplicate", async () => {
