@@ -101,6 +101,12 @@
       <pre id="machine"></pre>
     </section>
 
+    <section id="share-signal-log">
+      <h2>SHARE SIGNAL LOG</h2>
+      <p>Observation only. These lines do not change Product state and do not mint a Ban.</p>
+      <pre id="share-signals">(no share signals yet)</pre>
+    </section>
+
     <section id="raw-diagnostics">
       <h2>RAW DIAGNOSTICS</h2>
       <details>
@@ -112,10 +118,17 @@
     <script type="module">
       import { renderProductScreen } from "/test-ui/product-screens.js";
       import { formatMachineDiagnostics } from "/test-ui/machine-diagnostics.js";
+      import {
+        createShareSignalLog,
+        shareMessageFailedSignal,
+        visibilityChangedSignal,
+      } from "/test-ui/telegram-share-signal-log.js";
 
       const productEl = document.getElementById("product-screen");
       const machineEl = document.getElementById("machine");
       const rawEl = document.getElementById("raw");
+      const shareSignalsEl = document.getElementById("share-signals");
+      const shareSignalLog = createShareSignalLog();
       const telegramEl = document.getElementById("telegramUserId");
       const secretEl = document.getElementById("secret");
       const switchEl = document.getElementById("switchUser");
@@ -126,6 +139,52 @@
 
       function telegramWebApp() {
         return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+      }
+
+      function paintShareSignals() {
+        if (shareSignalsEl) {
+          shareSignalsEl.textContent = shareSignalLog.format();
+        }
+      }
+
+      function installShareSignalObservers() {
+        document.addEventListener("visibilitychange", () => {
+          shareSignalLog.record(`document.visibilitychange:${document.visibilityState}`);
+          paintShareSignals();
+        });
+        window.addEventListener("focus", () => {
+          shareSignalLog.record("window.focus");
+          paintShareSignals();
+        });
+        window.addEventListener("blur", () => {
+          shareSignalLog.record("window.blur");
+          paintShareSignals();
+        });
+        const webApp = telegramWebApp();
+        if (!webApp || typeof webApp.onEvent !== "function") {
+          shareSignalLog.record("telegram-events:onEvent-unavailable");
+          paintShareSignals();
+          return;
+        }
+        const listen = (name, formatPayload) => {
+          try {
+            webApp.onEvent(name, (payload) => {
+              shareSignalLog.record(formatPayload ? formatPayload(payload) : name);
+              paintShareSignals();
+            });
+          } catch (_error) {
+            shareSignalLog.record(`listener-install-failed:${name}`);
+            paintShareSignals();
+          }
+        };
+        listen("shareMessageSent");
+        listen("shareMessageFailed", shareMessageFailedSignal);
+        listen("activated");
+        listen("deactivated");
+        listen("visibilityChanged", (payload) => visibilityChangedSignal(payload));
+        listen("visibility_changed", (payload) =>
+          visibilityChangedSignal(payload, "visibility_changed"),
+        );
       }
 
       function telegramInitData() {
@@ -362,8 +421,12 @@
           render();
           return;
         }
+        shareSignalLog.beginAttempt(share.attemptId);
+        paintShareSignals();
         await new Promise((resolve) => {
           webApp.shareMessage(share.preparedMessageId, (success) => {
+            shareSignalLog.record(success ? "callback:true" : "callback:false");
+            paintShareSignals();
             if (!success) {
               void sendEvent("CREATE_BAN.SHARE_CANCELLED", {
                 shareAttemptId: share.attemptId,
@@ -477,6 +540,8 @@
       switchEl.addEventListener("change", () => {
         telegramEl.value = switchEl.value;
       });
+      installShareSignalObservers();
+      paintShareSignals();
       syncAuthChrome();
       render();
       if (inTelegramRuntime()) {
