@@ -688,6 +688,16 @@ export function applyEffects(
         }
         break;
       }
+      case "SET_SUCCESSFUL_BAN_ID": {
+        const existing = next.extended.entities.bans[effect.banId];
+        if (existing) {
+          next = {
+            ...next,
+            extended: { ...next.extended, successfulBanId: effect.banId },
+          };
+        }
+        break;
+      }
       case "UPSERT_BAN": {
         const isNew = next.extended.entities.bans[effect.ban.id] === undefined;
         next = {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MATRIX_CONTRACT_ROWS, isCanonicalEventName, reduce } from "./index.ts";
+import {
+  CANONICAL_EVENT_DEFINITIONS,
+  MATRIX_CONTRACT_ROWS,
+  isCanonicalEventName,
+  reduce,
+} from "./index.ts";
 import type { Ban, CheckPair } from "./entities.ts";
 import type { CanonicalEvent } from "./events.ts";
 import type { ProductSnapshot } from "./extended-state.ts";
@@ -956,6 +961,98 @@ describe("Stage 2 semantic effect audit", () => {
     );
     expect(opened.outcome).toBe("APPLIED");
     expect(Object.keys(opened.snapshot.extended.entities.bans)).toEqual([]);
+  });
+
+  it("E-65 observes the existing canonical Ban and never mints", () => {
+    expect(
+      CANONICAL_EVENT_DEFINITIONS.find(
+        (definition) => definition.name === "CREATE_BAN.CLAIM_OBSERVED",
+      ),
+    ).toMatchObject({ id: "E-65", source: "SERVER" });
+    let snapshot = withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    snapshot = withEntities(snapshot, {
+      bans: {
+        [BAN_ID]: makeBan({
+          acceptance: "PENDING",
+          status: null,
+          boundViaTelegramShareLink: true,
+        }),
+      },
+      shareOperations: {
+        [SHARE_ATTEMPT_ID]: shareOp({ status: "CONFIRMED", createdBanId: BAN_ID }),
+      },
+    });
+    const observed = eventOf("CREATE_BAN.CLAIM_OBSERVED", {
+      shareAttemptId: SHARE_ATTEMPT_ID,
+      targetBanId: BAN_ID,
+    });
+    const first = applied(snapshot, observed);
+    expect(first.outcome).toBe("APPLIED");
+    expect(first.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(first.snapshot.extended.successfulBanId).toBe(BAN_ID);
+    expect(first.snapshot.extended.entities.bans[BAN_ID]).toEqual(
+      snapshot.extended.entities.bans[BAN_ID],
+    );
+    expect(Object.keys(first.snapshot.extended.entities.bans)).toEqual([BAN_ID]);
+    expect(Object.keys(first.snapshot.extended.entities.notificationItems)).toEqual([]);
+    expect(first.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]).toEqual(
+      snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID],
+    );
+    const second = applied(first.snapshot, observed);
+    expect(second.outcome).toBe("UNDEFINED");
+    expect(Object.keys(second.snapshot.extended.entities.bans)).toEqual([BAN_ID]);
+
+    const activeShare = withEntities(snapshot, {
+      shareOperations: {
+        [SHARE_ATTEMPT_ID]: shareOp({ status: "ACTIVE", createdBanId: null }),
+      },
+    });
+    const denied = applied(activeShare, observed);
+    expect(denied.outcome).toBe("KERNEL_INVARIANT");
+    expect(denied.error?.code).toBe("NO_BRANCH_MATCHED");
+    expect(Object.keys(denied.snapshot.extended.entities.bans)).toEqual([BAN_ID]);
+    expect(denied.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+
+    const missingBan = applied(withEntities(snapshot, { bans: {} }), observed);
+    expect(missingBan.outcome).toBe("KERNEL_INVARIANT");
+    expect(Object.keys(missingBan.snapshot.extended.entities.bans)).toEqual([]);
+
+    const unbound = applied(
+      withEntities(snapshot, {
+        bans: {
+          [BAN_ID]: makeBan({
+            receiverId: null,
+            acceptance: "PENDING",
+            status: null,
+            boundViaTelegramShareLink: false,
+          }),
+        },
+      }),
+      observed,
+    );
+    expect(unbound.outcome).toBe("KERNEL_INVARIANT");
+    expect(unbound.snapshot.extended.entities.bans[BAN_ID]?.receiverId).toBeNull();
+
+    const wrongSender = applied(
+      withEntities(snapshot, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: OTHER_USER,
+            receiverId: USER_ID,
+            acceptance: "PENDING",
+            status: null,
+            boundViaTelegramShareLink: true,
+          }),
+        },
+      }),
+      observed,
+    );
+    expect(wrongSender.outcome).toBe("KERNEL_INVARIANT");
+    expect(Object.keys(wrongSender.snapshot.extended.entities.bans)).toEqual([BAN_ID]);
+
+    const lobby = applied(withControlState(emptySnapshot(), "RIM.LOBBY"), observed);
+    expect(lobby.outcome).toBe("UNDEFINED");
+    expect(Object.keys(lobby.snapshot.extended.entities.bans)).toEqual([]);
   });
 
   it("E-32 processes the Timer Notification Item and leaves the domain Timer unchanged", () => {
@@ -1958,6 +2055,6 @@ describe("Stage 2 semantic effect audit", () => {
 
 describe("Stage 2 semantic audit inventory", () => {
   it("keeps every Matrix row identity available for the reachability suite", () => {
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
   });
 });

@@ -150,8 +150,8 @@ describe("Stage 13B MVP8 Contact relationship", () => {
   it("keeps frozen 30 / 59 / 359 under MVP10 authority", () => {
     expect(PRODUCT_SPECIFICATION_SOURCE.revision).toBe("10");
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
     expect(ABSENT_EVENT_IDS).toEqual(["E-36", "E-37", "E-38", "E-39", "E-40"]);
     expect(CONTACT_RELATIONSHIP_STAGE).toBe(13);
     expect(STAGE_13B_EXCLUDES).toContain("rim-ai");
@@ -238,7 +238,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     expect(contactIds(opened.diagnostics)).toEqual([]);
     expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([]);
 
-    // Sender Success after claim is Pass C. FULL_CLOSE here would cancel the still-ACTIVE share.
+    // FULL_CLOSE here would cancel the still-ACTIVE share before the recipient claims.
     const senderPending = (await session(app.url, USER_A_TG, { openIfNeeded: false })).diagnostics;
     expect(senderPending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(contactIds(senderPending)).toEqual([]);
@@ -253,7 +253,8 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     expect(contactIds(restored.diagnostics!)).toEqual([aId]);
     const senderAfterClaim = (await session(app.url, USER_A_TG, { openIfNeeded: false }))
       .diagnostics;
-    expect(senderAfterClaim.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(senderAfterClaim.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(senderAfterClaim.successfulBanId).toBe(bound[0]?.id);
     expect(contactIds(senderAfterClaim)).toEqual([bId]);
 
     expect(contactIds((await session(app.url, USER_B_TG)).diagnostics)).toEqual([aId]);

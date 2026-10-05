@@ -16,6 +16,16 @@ export type TemplateShareClaimContext = Readonly<{
   }>;
 }>;
 
+export type SenderClaimObservationContext = Readonly<{
+  ownerId: UserId;
+  share: ShareOperation;
+  ban: Ban;
+  sender: Readonly<{
+    revision: number;
+    snapshot: ProductSnapshot;
+  }>;
+}>;
+
 export type ClaimTemplateShareInput = Readonly<{
   receiverId: UserId;
   token: string;
@@ -24,6 +34,12 @@ export type ClaimTemplateShareInput = Readonly<{
    * Must be synchronous. A non-APPLIED result writes nothing.
    */
   reduceClaim: (context: TemplateShareClaimContext) => TransitionResult;
+  /**
+   * Runs after the canonical Ban exists and the sender-owned share is CONFIRMED,
+   * still inside the same claim transaction. Return null to leave the sender
+   * control state unchanged. A non-APPLIED result aborts the whole claim.
+   */
+  observeSender?: (context: SenderClaimObservationContext) => TransitionResult | null;
 }>;
 
 export type ClaimTemplateShareResult =

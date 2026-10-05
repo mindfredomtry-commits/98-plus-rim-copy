@@ -45,7 +45,7 @@ describe("pre-Stage 4 persistence-boundary contracts", () => {
 
   it("keeps 30 states, 59 events, and 359 Matrix rules", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
   });
 });

@@ -10,6 +10,7 @@ import {
   type ProposalId,
   type TransitionResult,
 } from "@98plus/product-model";
+import type { SenderClaimObservationContext } from "./claim-template-share.ts";
 import {
   BAN_ID,
   CHECK_ITEM_ID,
@@ -542,14 +543,29 @@ describe("Stage 4 product persistence", () => {
     expect(loaded.snapshot.runtime.pendingOperations[OP_ID]?.resultApplied).toBe(true);
   });
 
-  it("R. recipient claim confirms the sender-owned share and survives reload", async () => {
-    const { kit, store } = await setup();
-    let world = withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+  function observePendingTemplateSender(
+    context: SenderClaimObservationContext,
+  ): TransitionResult | null {
+    if (context.sender.snapshot.controlState !== "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING") {
+      return null;
+    }
+    return reduce(
+      context.sender.snapshot,
+      eventOf("CREATE_BAN.CLAIM_OBSERVED", {
+        shareAttemptId: context.share.attemptId,
+        targetBanId: context.ban.id,
+      }),
+      { ...kernelContext(), currentUserId: context.ownerId },
+    );
+  }
+
+  function templateShareWorld(controlState: ProductSnapshot["controlState"]): ProductSnapshot {
+    let world = withControlState(emptySnapshot(), controlState);
     world = {
       ...world,
       extended: { ...world.extended, createBanDraft: validCreateDraft("TEMPLATE") },
     };
-    world = withEntities(world, {
+    return withEntities(world, {
       shareOperations: {
         [SHARE_ATTEMPT_ID]: shareOp({
           draft: {
@@ -562,7 +578,14 @@ describe("Stage 4 product persistence", () => {
         }),
       },
     });
-    const seeded = await kit.installFixtureSnapshot(USER_ID, world);
+  }
+
+  it("R. recipient claim confirms the sender-owned share and survives reload", async () => {
+    const { kit, store, memory } = await setup();
+    const seeded = await kit.installFixtureSnapshot(
+      USER_ID,
+      templateShareWorld("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING"),
+    );
     await kit.installFixtureSnapshot(OTHER_USER, withControlState(emptySnapshot(), "RIM.LOBBY"));
     const claimed = await store.claimTemplateShare({
       receiverId: OTHER_USER,
@@ -581,11 +604,14 @@ describe("Stage 4 product persistence", () => {
           }),
           { ...kernelContext(), currentUserId: OTHER_USER },
         ),
+      observeSender: observePendingTemplateSender,
     });
     expect(claimed.status).toBe("CLAIMED");
     const sender = await store.loadProductSnapshot(USER_ID);
-    expect(sender.revision).toBe(seeded.revision);
-    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.revision).toBe(seeded.revision + 1);
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(sender.snapshot.extended.successfulBanId).toBe(BAN_ID);
+    expect(sender.snapshot.extended.createBanDraft?.origin).toBe("TEMPLATE");
     expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
       "CONFIRMED",
     );
@@ -601,6 +627,167 @@ describe("Stage 4 product persistence", () => {
       acceptance: "PENDING",
       status: null,
     });
+    expect(memory.inspect().countBans()).toBe(1);
+    expect(
+      Object.values(receiver.snapshot.extended.entities.notificationItems).filter(
+        (item) => item.kind === "INCOMING_BAN",
+      ),
+    ).toHaveLength(1);
+    const repeated = await store.claimTemplateShare({
+      receiverId: OTHER_USER,
+      token: String(shareOp().token),
+      reduceClaim: () => {
+        throw new Error("repeat claim must not reduce");
+      },
+      observeSender: () => {
+        throw new Error("repeat claim must not observe the sender");
+      },
+    });
+    expect(repeated.status).toBe("ALREADY_BOUND");
+    const senderAfterRepeat = await store.loadProductSnapshot(USER_ID);
+    expect(senderAfterRepeat.revision).toBe(sender.revision);
+    expect(senderAfterRepeat.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(senderAfterRepeat.snapshot.extended.successfulBanId).toBe(BAN_ID);
+    expect(memory.inspect().countBans()).toBe(1);
+  });
+
+  it("R2. a sender who left SHARE_PENDING is not rewound when the recipient claims", async () => {
+    const { kit, store, memory } = await setup();
+    const seeded = await kit.installFixtureSnapshot(USER_ID, templateShareWorld("RIM.LOBBY"));
+    await kit.installFixtureSnapshot(OTHER_USER, withControlState(emptySnapshot(), "RIM.LOBBY"));
+    const claimed = await store.claimTemplateShare({
+      receiverId: OTHER_USER,
+      token: String(shareOp().token),
+      reduceClaim: (context) =>
+        reduce(
+          withEntities(context.receiver.snapshot, {
+            shareOperations: { [context.share.attemptId]: context.share },
+          }),
+          eventOf("TELEGRAM_SHARE_LINK.RESOLVED", {
+            targetBanId: BAN_ID,
+            receiverId: OTHER_USER,
+            incomingBanItemId: INCOMING_ITEM_ID,
+            shareAttemptId: SHARE_ATTEMPT_ID,
+            shareOwnerId: context.ownerId,
+          }),
+          { ...kernelContext(), currentUserId: OTHER_USER },
+        ),
+      observeSender: observePendingTemplateSender,
+    });
+    expect(claimed.status).toBe("CLAIMED");
+    const sender = await store.loadProductSnapshot(USER_ID);
+    expect(sender.revision).toBe(seeded.revision);
+    expect(sender.snapshot.controlState).toBe("RIM.LOBBY");
+    expect(sender.snapshot.extended.successfulBanId).toBeNull();
+    expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
+      "CONFIRMED",
+    );
+    expect(memory.inspect().countBans()).toBe(1);
+    const receiver = await store.loadProductSnapshot(OTHER_USER);
+    expect(receiver.snapshot.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+  });
+
+  it("R3. a failed sender observation rolls the claim back", async () => {
+    const { kit, store, memory } = await setup();
+    const seeded = await kit.installFixtureSnapshot(
+      USER_ID,
+      templateShareWorld("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING"),
+    );
+    await kit.installFixtureSnapshot(OTHER_USER, withControlState(emptySnapshot(), "RIM.LOBBY"));
+    await expect(
+      store.claimTemplateShare({
+        receiverId: OTHER_USER,
+        token: String(shareOp().token),
+        reduceClaim: (context) =>
+          reduce(
+            withEntities(context.receiver.snapshot, {
+              shareOperations: { [context.share.attemptId]: context.share },
+            }),
+            eventOf("TELEGRAM_SHARE_LINK.RESOLVED", {
+              targetBanId: BAN_ID,
+              receiverId: OTHER_USER,
+              incomingBanItemId: INCOMING_ITEM_ID,
+              shareAttemptId: SHARE_ATTEMPT_ID,
+              shareOwnerId: context.ownerId,
+            }),
+            { ...kernelContext(), currentUserId: OTHER_USER },
+          ),
+        observeSender: () =>
+          reduce(
+            withControlState(emptySnapshot(), "RIM.LOBBY"),
+            eventOf("CREATE_BAN.CLAIM_OBSERVED", {
+              shareAttemptId: SHARE_ATTEMPT_ID,
+              targetBanId: BAN_ID,
+            }),
+            kernelContext(),
+          ),
+      }),
+    ).rejects.toMatchObject({ code: "INVARIANT" });
+    const sender = await store.loadProductSnapshot(USER_ID);
+    expect(sender.revision).toBe(seeded.revision);
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
+      "ACTIVE",
+    );
+    expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.createdBanId).toBe(
+      null,
+    );
+    expect(memory.inspect().countBans()).toBe(0);
+    const receiver = await store.loadProductSnapshot(OTHER_USER);
+    expect(receiver.snapshot.controlState).toBe("RIM.LOBBY");
+    expect(Object.keys(receiver.snapshot.extended.entities.notificationItems)).toEqual([]);
+  });
+
+  it("R4. Postgres claim rolls back when sender observation does not apply", async () => {
+    const kit = PersistenceTestKit.postgres();
+    await users(kit);
+    const seeded = await kit.installFixtureSnapshot(
+      USER_ID,
+      templateShareWorld("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING"),
+    );
+    await kit.installFixtureSnapshot(OTHER_USER, withControlState(emptySnapshot(), "RIM.LOBBY"));
+    await expect(
+      kit.store.claimTemplateShare({
+        receiverId: OTHER_USER,
+        token: String(shareOp().token),
+        reduceClaim: (context) =>
+          reduce(
+            withEntities(context.receiver.snapshot, {
+              shareOperations: { [context.share.attemptId]: context.share },
+            }),
+            eventOf("TELEGRAM_SHARE_LINK.RESOLVED", {
+              targetBanId: BAN_ID,
+              receiverId: OTHER_USER,
+              incomingBanItemId: INCOMING_ITEM_ID,
+              shareAttemptId: SHARE_ATTEMPT_ID,
+              shareOwnerId: context.ownerId,
+            }),
+            { ...kernelContext(), currentUserId: OTHER_USER },
+          ),
+        observeSender: () =>
+          reduce(
+            withControlState(emptySnapshot(), "RIM.LOBBY"),
+            eventOf("CREATE_BAN.CLAIM_OBSERVED", {
+              shareAttemptId: SHARE_ATTEMPT_ID,
+              targetBanId: BAN_ID,
+            }),
+            kernelContext(),
+          ),
+      }),
+    ).rejects.toMatchObject({ code: "INVARIANT" });
+    const sender = await kit.store.loadProductSnapshot(USER_ID);
+    expect(sender.revision).toBe(seeded.revision);
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
+      "ACTIVE",
+    );
+    expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.createdBanId).toBe(
+      null,
+    );
+    expect(kit.sqlClient?.tables.snapshot().bans.size).toBe(0);
+    const receiver = await kit.store.loadProductSnapshot(OTHER_USER);
+    expect(receiver.snapshot.controlState).toBe("RIM.LOBBY");
+    expect(Object.keys(receiver.snapshot.extended.entities.notificationItems)).toEqual([]);
   });
 
   it("S. Share CANCELLED cannot later produce a second persisted Ban", async () => {

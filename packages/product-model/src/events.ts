@@ -111,6 +111,14 @@ export type EventPayloadMap = {
     shareOwnerId?: UserId;
   };
   "TELEGRAM_SHARE_LINK.REJECTED": { failureReason: ShareLinkFailureReason };
+  /**
+   * Server observation that a sender-owned Template share is already claimed.
+   * The canonical Ban already exists. This event must not mint another one.
+   */
+  "CREATE_BAN.CLAIM_OBSERVED": {
+    shareAttemptId: ShareAttemptId;
+    targetBanId: BanId;
+  };
   "RIM.PRESS_START_CHAT": Record<string, never>;
   "RIM.PRESS_SELECT_CONTACT": Record<string, never>;
   "RIM.SELECT_CONTACT": { contactId: UserId };
@@ -214,7 +222,8 @@ export type CanonicalEventId =
   | "E-61"
   | "E-62"
   | "E-63"
-  | "E-64";
+  | "E-64"
+  | "E-65";
 
 export const ABSENT_EVENT_IDS = ["E-36", "E-37", "E-38", "E-39", "E-40"] as const;
 export type AbsentEventId = (typeof ABSENT_EVENT_IDS)[number];
@@ -565,9 +574,15 @@ export const CANONICAL_EVENT_DEFINITIONS = [
     source: "SERVER",
     references: refs("E-64 RIM.INITIALIZATION_UNRECOVERABLE"),
   },
+  {
+    id: "E-65",
+    name: "CREATE_BAN.CLAIM_OBSERVED",
+    source: "SERVER",
+    references: refs("E-65 CREATE_BAN.CLAIM_OBSERVED"),
+  },
 ] as const satisfies readonly CanonicalEventDefinition[];
 
-export const CANONICAL_EVENT_COUNT = 58;
+export const CANONICAL_EVENT_COUNT = 59;
 
 export function isCanonicalEventId(value: string): value is CanonicalEventId {
   return CANONICAL_EVENT_DEFINITIONS.some((definition) => definition.id === value);

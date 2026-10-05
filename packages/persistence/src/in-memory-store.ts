@@ -245,11 +245,15 @@ export class InMemoryProductStore implements ProductStore {
   }
 
   async claimTemplateShare(input: ClaimTemplateShareInput): Promise<ClaimTemplateShareResult> {
-    return this.withShareLock(input.token, () =>
-      this.withUserLock(input.receiverId, () =>
+    return this.withShareLock(input.token, async () => {
+      const stored = this.tables.findShareByToken(input.token);
+      if (!stored) {
+        return { status: "REJECTED" as const, reason: "UNKNOWN_TOKEN" as const };
+      }
+      return this.withOrderedUserLocks([stored.ownerId, input.receiverId], () =>
         this.tables.transaction(() => this.claimTemplateShareUnlocked(input)),
-      ),
-    );
+      );
+    });
   }
 
   async getBanById(banId: BanId): Promise<Ban | null> {
@@ -335,11 +339,28 @@ export class InMemoryProductStore implements ProductStore {
       share.attemptId,
     );
     const written = this.writeUnlocked(input.receiverId, loaded.revision, persisted, false);
-    this.tables.upsertShare(ownerId, {
+    const confirmedShare = {
       ...share,
-      status: "CONFIRMED",
+      status: "CONFIRMED" as const,
       createdBanId: created.id,
+    };
+    this.tables.upsertShare(ownerId, confirmedShare);
+    const sender = this.read(ownerId);
+    const observation = input.observeSender?.({
+      ownerId,
+      share: confirmedShare,
+      ban: created,
+      sender: { revision: sender.revision, snapshot: sender.snapshot },
     });
+    if (observation) {
+      if (observation.outcome !== "APPLIED") {
+        throw new PersistenceError(
+          "INVARIANT",
+          "CREATE_BAN.CLAIM_OBSERVED did not apply for the pending sender",
+        );
+      }
+      this.writeUnlocked(ownerId, sender.revision, observation.snapshot, false);
+    }
     return {
       status: "CLAIMED",
       loadedRevision: written.revision,
@@ -366,6 +387,32 @@ export class InMemoryProductStore implements ProductStore {
       release();
       if (this.shareLocks.get(token) === current) {
         this.shareLocks.delete(token);
+      }
+    }
+  }
+
+  private async withOrderedUserLocks<T>(userIds: readonly UserId[], fn: () => T): Promise<T> {
+    const ordered = [...new Set(userIds)].sort();
+    const acquired: Array<{ userId: UserId; release: () => void; gate: Promise<void> }> = [];
+    try {
+      for (const userId of ordered) {
+        const previous = this.userLocks.get(userId) ?? Promise.resolve();
+        let release: () => void = () => undefined;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const gate = previous.then(() => held);
+        this.userLocks.set(userId, gate);
+        await previous;
+        acquired.push({ userId, release, gate });
+      }
+      return fn();
+    } finally {
+      for (const lock of acquired.reverse()) {
+        lock.release();
+        if (this.userLocks.get(lock.userId) === lock.gate) {
+          this.userLocks.delete(lock.userId);
+        }
       }
     }
   }

@@ -199,8 +199,8 @@ async function reachSharePending(url: string): Promise<TestUiDiagnostics> {
 describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
   it("keeps frozen contracts and exposes TEMPLATE_CREATE_BAN_STAGE = 11", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PERSISTENCE_STAGE).toBe(4);
@@ -335,7 +335,8 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     const sender = await app.runtime.productStore.loadProductSnapshot(
       userIdOf(app.runtime, USER_A_TG)!,
     );
-    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(sender.snapshot.extended.successfulBanId).toBe(created[0]?.id);
     expect(
       sender.snapshot.extended.entities.shareOperations[attemptId as ShareAttemptId]?.status,
     ).toBe("CONFIRMED");

@@ -519,9 +519,9 @@ export type TemplateShareClaimExecution =
 
 /**
  * E-45 claim mint. Runs inside ProductStore.claimTemplateShare so the Ban,
- * Incoming item, and sender-owned ACTIVE → CONFIRMED update commit together.
- * Does not change the sender Product Control State.
- * Sender Success after claim is deferred to Pass C (DC-SHARE-06).
+ * Incoming item, sender-owned ACTIVE → CONFIRMED update, and — when the sender
+ * is still CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING for that share — the
+ * CREATE_BAN.CLAIM_OBSERVED transition commit together.
  */
 export async function executeTemplateShareClaim(
   input: ExecuteTemplateShareClaimInput,
@@ -563,6 +563,32 @@ export async function executeTemplateShareClaim(
         );
         claimedTransition = transition;
         return transition;
+      },
+      observeSender: (context) => {
+        if (context.sender.snapshot.controlState !== "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING") {
+          return null;
+        }
+        const anotherShareStillActive = Object.values(
+          context.sender.snapshot.extended.entities.shareOperations,
+        ).some((share) => share.status === "ACTIVE" && share.attemptId !== context.share.attemptId);
+        if (anotherShareStillActive) {
+          return null;
+        }
+        return reduce(
+          context.sender.snapshot,
+          toCanonicalEvent({
+            name: "CREATE_BAN.CLAIM_OBSERVED",
+            payload: {
+              shareAttemptId: context.share.attemptId,
+              targetBanId: context.ban.id,
+            },
+          }),
+          {
+            now: asInstant(deps.clock.nowMs()),
+            currentUserId: context.ownerId,
+            allocateId: deps.allocateId,
+          },
+        );
       },
     });
     if (claimed.status === "ALREADY_BOUND") {

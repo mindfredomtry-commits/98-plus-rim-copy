@@ -1483,6 +1483,26 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
   matrixRow({
     kind: "LOCAL",
     state: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    eventId: "E-65",
+    eventName: "CREATE_BAN.CLAIM_OBSERVED",
+    branch: "confirmed-canonical-ban",
+    guardsText:
+      "sender-owned Share is CONFIRMED; createdBanId matches the existing canonical Ban; Ban.senderId is the current sender; Ban.receiverId is set; boundViaTelegramShareLink is true",
+    nextStateText: "CB-10 CREATE_BAN.SUCCESS",
+    nextState: "CREATE_BAN.SUCCESS",
+    effectsText:
+      "Observe the already-created canonical Ban. Set successfulBanId to that Ban id. Do not allocate a Ban, do not create Incoming, do not change the Ban, the receiver, or the confirmed Share.",
+    effects: [{ type: "SET_SUCCESSFUL_BAN_ID" }, { type: "SET_CONTROL_STATE" }],
+    result: "TRANSITION",
+    source: {
+      section: "CB-09 — CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+      locator: "Pass C sender claim observation",
+      extractedLines: "Pass C",
+    },
+  }),
+  matrixRow({
+    kind: "LOCAL",
+    state: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
     eventId: "E-13",
     eventName: "CREATE_BAN.SHARE_CANCELLED",
     branch: "closed-without-send",

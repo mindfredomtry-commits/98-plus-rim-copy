@@ -18,6 +18,7 @@ import {
   formatMachineDiagnostics,
   type MachineDiagnosticsInput,
 } from "../../miniapp/src/test-ui/machine-diagnostics.ts";
+import { TEST_UI_USER_EVENT_NAMES } from "../../miniapp/src/test-ui/product-screens.ts";
 import { listenCreateBanContactServer } from "./http.ts";
 import {
   createCreateBanContactRuntime,
@@ -152,8 +153,8 @@ async function createTemplateBanWithToken(url: string): Promise<{
 describe("Stage 12 Telegram Share Link External Entry", () => {
   it("keeps frozen 30 / 59 / 359 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(TEMPLATE_CREATE_BAN_STAGE).toBe(11);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
@@ -165,7 +166,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     const app = await start();
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.EXTERNAL_ENTRY_STAGE).toBe(12);
-    expect(meta.MATRIX_RULE_COUNT).toBe(358);
+    expect(meta.MATRIX_RULE_COUNT).toBe(359);
   });
 
   it("parses start_param share_<token>", () => {
@@ -285,7 +286,8 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     );
     expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
     expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.id).toBe(banId);
-    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(sender.snapshot.extended.successfulBanId).toBe(banId);
     expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.receiverId).toBe(
       userIdOf(app.runtime, USER_B_TG),
     );
@@ -407,6 +409,10 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       userIdOf(app.runtime, USER_A_TG)!,
     );
     expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(sender.snapshot.extended.successfulBanId).toBe(
+      Object.values(sender.snapshot.extended.entities.bans)[0]?.id,
+    );
     const winner = first.diagnostics.controlState === "NOTIFICATIONS.INCOMING_BAN" ? first : second;
     const loser = winner === first ? second : first;
     expect(winner.diagnostics.incomingItems).toHaveLength(1);
@@ -517,9 +523,9 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(senderSessionBans[0]?.senderId).toBe(senderUserId);
     expect(senderSessionBans[0]?.receiverId).toBe(receiverUserId);
     expect(senderSnapshotBans[0]).toEqual(senderSessionBans[0]);
-    expect(senderSession.diagnostics.controlState).toBe(
-      "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
-    );
+    expect(senderSession.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(senderSession.diagnostics.successfulBanId).toBe(banId);
+    expect(senderSnapshot.diagnostics.successfulBanId).toBe(banId);
     expect(senderSnapshot.diagnostics.controlState).toBe(senderSession.diagnostics.controlState);
     const senderShare = (
       senderSession.diagnostics.shareOperations as Array<{
@@ -545,7 +551,8 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(machineLine(receiverSession.diagnostics)).toContain("BANS: 1");
   });
 
-  it("transport rejects E-44 / E-45 / E-46 from TEST UI events", async () => {
+  it("transport rejects E-44 / E-45 / E-46 / E-65 from TEST UI events", async () => {
+    expect(TEST_UI_USER_EVENT_NAMES).not.toContain("CREATE_BAN.CLAIM_OBSERVED");
     const app = await start();
     await session(app.url, USER_B_TG, { openIfNeeded: true });
     for (const name of [
@@ -553,6 +560,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       "TELEGRAM_SHARE_LINK.RESOLVED",
       "TELEGRAM_SHARE_LINK.REJECTED",
       "EXTERNAL_ENTRY.PENDING_EXPIRED",
+      "CREATE_BAN.CLAIM_OBSERVED",
     ]) {
       const blocked = await dispatch(app.url, USER_B_TG, name, {});
       expect(blocked.httpStatus).toBe(400);

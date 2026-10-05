@@ -582,6 +582,23 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
       );
     case "E-13:closed-without-send":
       return matchingShare(input)?.status === "ACTIVE";
+    case "E-65:confirmed-canonical-ban": {
+      const share = matchingShare(input);
+      const banId =
+        "targetBanId" in input.event.payload
+          ? (input.event.payload as { targetBanId?: string }).targetBanId
+          : undefined;
+      const ban = banId ? input.snapshot.extended.entities.bans[banId] : undefined;
+      return (
+        !!share &&
+        share.status === "CONFIRMED" &&
+        share.createdBanId === banId &&
+        !!ban &&
+        ban.senderId === input.context.currentUserId &&
+        ban.receiverId !== null &&
+        ban.boundViaTelegramShareLink === true
+      );
+    }
     case "E-42:eligible-ban":
       return expiredBanEligible(input);
     case "E-42:other-eligible-ban":

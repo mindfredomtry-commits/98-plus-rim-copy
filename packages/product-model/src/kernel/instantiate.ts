@@ -912,6 +912,14 @@ export function instantiateEffects(
       }
       case "UPSERT_SHARE_OPERATION":
         break;
+      case "SET_SUCCESSFUL_BAN_ID": {
+        const banId = eventField<BanId>(event, "targetBanId");
+        if (!banId || !snapshot.extended.entities.bans[banId]) {
+          return missing(row, "CREATE_BAN.CLAIM_OBSERVED requires the existing canonical Ban");
+        }
+        effects.push({ type: "SET_SUCCESSFUL_BAN_ID", banId });
+        break;
+      }
       case "UPSERT_BAN": {
         const created = instantiateCreatedBan(row, input);
         if (!created.ok) {

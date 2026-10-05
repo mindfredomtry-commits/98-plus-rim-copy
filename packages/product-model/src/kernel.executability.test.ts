@@ -10,7 +10,7 @@ import { fixtureForRow, kernelContext } from "./kernel.fixtures.ts";
  */
 describe("Stage 2 Matrix row selection (359-row reachability, not semantic proof)", () => {
   it("can select and resolve every authoritative Matrix branch under a valid fixture", () => {
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
     const failures: string[] = [];
     for (const row of MATRIX_CONTRACT_ROWS) {
       const { snapshot, event } = fixtureForRow(row);

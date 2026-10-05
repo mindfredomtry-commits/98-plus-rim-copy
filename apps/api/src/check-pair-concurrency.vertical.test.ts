@@ -193,8 +193,8 @@ async function reachBothChecks(now: { value: number }, sql: MemorySqlClient) {
 describe("Stage 9 CheckPair shared-backend concurrency", () => {
   it("keeps frozen 30 / 59 / 359", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PERSISTENCE_STAGE).toBe(4);

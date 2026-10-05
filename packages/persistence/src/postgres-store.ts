@@ -477,6 +477,9 @@ export class PostgresProductStore implements ProductStore {
         if (classification.action === "REJECTED") {
           return { status: "REJECTED" as const, reason: classification.reason };
         }
+        for (const userId of [lookup.ownerId, input.receiverId].sort()) {
+          await tx.query(SQL.selectSessionForUpdate, [userId]);
+        }
         const loaded = await this.read(tx, input.receiverId);
         const transition = input.reduceClaim({
           share: lookup.share,
@@ -513,6 +516,33 @@ export class PostgresProductStore implements ProductStore {
           throw new PersistenceError(
             "TRANSACTION_FAILED",
             "Template share claim lost the ACTIVE compare-and-swap",
+          );
+        }
+        const confirmedShare = {
+          ...lookup.share,
+          status: "CONFIRMED" as const,
+          createdBanId: created.id,
+        };
+        const senderLoaded = await this.read(tx, lookup.ownerId);
+        const observation = input.observeSender?.({
+          ownerId: lookup.ownerId,
+          share: confirmedShare,
+          ban: created,
+          sender: { revision: senderLoaded.revision, snapshot: senderLoaded.snapshot },
+        });
+        if (observation) {
+          if (observation.outcome !== "APPLIED") {
+            throw new PersistenceError(
+              "INVARIANT",
+              "CREATE_BAN.CLAIM_OBSERVED did not apply for the pending sender",
+            );
+          }
+          await this.writeOn(
+            tx,
+            lookup.ownerId,
+            senderLoaded.revision,
+            observation.snapshot,
+            false,
           );
         }
         return {

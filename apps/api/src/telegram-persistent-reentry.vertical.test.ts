@@ -179,8 +179,8 @@ async function qualifyViaOverboard(url: string): Promise<TestUiDiagnostics> {
 describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
   it("keeps frozen 30 / 59 / 359 and TELEGRAM_PERSISTENT_REENTRY_STAGE = 13A", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(58);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
     expect(TELEGRAM_PERSISTENT_REENTRY_STAGE).toBe("13A");
@@ -191,8 +191,8 @@ describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
     const app = await start();
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.TELEGRAM_PERSISTENT_REENTRY_STAGE).toBe("13A");
-    expect(meta.CANONICAL_EVENT_COUNT).toBe(58);
-    expect(meta.MATRIX_RULE_COUNT).toBe(358);
+    expect(meta.CANONICAL_EVENT_COUNT).toBe(59);
+    expect(meta.MATRIX_RULE_COUNT).toBe(359);
   });
 
   it("E-45 alone leaves eligible false", async () => {

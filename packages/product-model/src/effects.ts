@@ -32,6 +32,8 @@ export type Effect =
   | { type: "END_SESSION" }
   | { type: "SET_CONNECTION"; connection: ConnectionState }
   | { type: "UPSERT_BAN"; ban: Ban }
+  /** Points at a Ban that already exists. Does not insert or modify that Ban. */
+  | { type: "SET_SUCCESSFUL_BAN_ID"; banId: Ban["id"] }
   | { type: "UPSERT_CHECK_PAIR"; pair: CheckPair }
   | { type: "UPSERT_NOTIFICATION_ITEM"; item: NotificationItem }
   | { type: "UPSERT_DOMAIN_TIMER"; timer: DomainTimer }
