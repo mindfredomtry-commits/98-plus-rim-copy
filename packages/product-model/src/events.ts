@@ -105,9 +105,9 @@ export type EventPayloadMap = {
     targetBanId: BanId;
     receiverId: UserId;
     incomingBanItemId: NotificationItemId;
-    /** Present when E-45 mints the Template Ban from an ACTIVE ShareOperation. */
+    /** Identifies the existing ShareOperation to mark CONFIRMED. E-45 binds that Ban and does not create one. */
     shareAttemptId?: ShareAttemptId;
-    /** Share owner. Required for the claim mint; ignored when the Ban already exists. */
+    /** Share owner. Used only to confirm the existing ShareOperation. */
     shareOwnerId?: UserId;
   };
   "TELEGRAM_SHARE_LINK.REJECTED": { failureReason: ShareLinkFailureReason };
