@@ -29,7 +29,7 @@ export function shouldOpenTelegramShare(execution: ApplicationExecutionResult): 
   return (
     execution.event.name === "CREATE_BAN.PRESS_FORBID" &&
     execution.status === "APPLIED" &&
-    execution.snapshot.controlState === "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING" &&
+    execution.snapshot.controlState === "CREATE_BAN.SUCCESS" &&
     execution.snapshot.extended.createBanDraft?.origin === "TEMPLATE" &&
     activeTemplateShareOperation(execution.snapshot) !== null &&
     execution.pendingExternalEffects.some((item) => item.effect.type === "OPEN_TELEGRAM_SHARE")
@@ -85,7 +85,7 @@ export async function buildTelegramShareInvocation(
       botUsername,
     });
   } catch {
-    // Product transition already applied. A failed prepare must not mint a Ban.
+    // Product Success and the Ban are already committed. A failed prepare must not roll them back.
     return {
       ...base,
       preparedMessageId: "",

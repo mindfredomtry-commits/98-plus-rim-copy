@@ -221,9 +221,9 @@ describe("TEST UI Telegram share signal log", () => {
     expect(originalCalls).toBe(1);
   });
 
-  it("keeps frozen 30 / 59 / 359", () => {
+  it("keeps frozen 30 / 59 / 358", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
   });
 });

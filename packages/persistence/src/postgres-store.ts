@@ -20,8 +20,10 @@ import type {
 } from "@98plus/product-model";
 import { asInstant } from "@98plus/product-model";
 import {
+  boundExistingClaimBan,
   classifyShareForClaim,
-  createdClaimBan,
+  newClaimIncomingCount,
+  receiverSnapshotForClaim,
   snapshotForReceiverClaimPersist,
   type ClaimTemplateShareInput,
   type ClaimTemplateShareResult,
@@ -480,25 +482,48 @@ export class PostgresProductStore implements ProductStore {
         for (const userId of [lookup.ownerId, input.receiverId].sort()) {
           await tx.query(SQL.selectSessionForUpdate, [userId]);
         }
+        const bound = await this.bindBanReceiverOn(tx, classification.banId, input.receiverId);
+        if (bound.status === "ALREADY_BOUND") {
+          return { status: "ALREADY_BOUND" as const, banId: classification.banId };
+        }
+        if (bound.status === "CONFLICT") {
+          return { status: "CONFLICT" as const, banId: classification.banId };
+        }
+        if (bound.status !== "BOUND" || !ban) {
+          return { status: "REJECTED" as const, reason: "MALFORMED" as const };
+        }
         const loaded = await this.read(tx, input.receiverId);
         const transition = input.reduceClaim({
           share: lookup.share,
           ownerId: lookup.ownerId,
-          receiver: { revision: loaded.revision, snapshot: loaded.snapshot },
+          ban,
+          receiver: {
+            revision: loaded.revision,
+            snapshot: receiverSnapshotForClaim(loaded.snapshot, lookup.share, ban),
+          },
         });
         if (transition.outcome !== "APPLIED") {
           return { status: "NOT_APPLIED" as const, transition };
         }
-        const created = createdClaimBan(loaded.snapshot, transition.snapshot);
+        const created = boundExistingClaimBan(
+          loaded.snapshot,
+          transition.snapshot,
+          classification.banId,
+          input.receiverId,
+          lookup.ownerId,
+        );
         if (
           !created ||
-          created.senderId !== lookup.ownerId ||
-          created.receiverId !== input.receiverId ||
-          created.boundViaTelegramShareLink !== true
+          newClaimIncomingCount(
+            loaded.snapshot,
+            transition.snapshot,
+            classification.banId,
+            input.receiverId,
+          ) !== 1
         ) {
           throw new PersistenceError(
             "INVARIANT",
-            "Template share claim did not create exactly one receiver-bound Ban",
+            "Template share claim did not bind the existing Ban and create exactly one Incoming",
           );
         }
         const persisted = snapshotForReceiverClaimPersist(

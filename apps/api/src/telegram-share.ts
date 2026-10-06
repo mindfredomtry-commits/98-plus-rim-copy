@@ -4,8 +4,9 @@
  * Product path (Bot API 8.0+):
  * 1. Server prepares a message via Bot API `savePreparedInlineMessage` (requires TELEGRAM_BOT_TOKEN).
  * 2. Client invokes `Telegram.WebApp.shareMessage(preparedMessageId, callback)`.
- * 3. callback(true) is not a Product fact and must not mint a Ban
- *    callback(false) → dispatch CREATE_BAN.SHARE_CANCELLED (E-13)
+ * 3. callback(true) and callback(false) are diagnostic only.
+ *    Neither callback creates a Ban, cancels a Ban, or dispatches E-13.
+ *    E-13 remains only the legacy unresolved SHARE_PENDING path whose createdBanId is null.
  *
  * Do NOT use `shareURL` / `t.me/share/url` as Ban-mint authority —
  * those APIs do not provide a reliable success vs cancel distinction.

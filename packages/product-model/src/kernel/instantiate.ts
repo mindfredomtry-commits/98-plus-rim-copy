@@ -897,7 +897,23 @@ export function instantiateEffects(
           return missing(row, "OPEN_TELEGRAM_SHARE requires a valid Create Ban draft");
         }
         const attemptId = context.allocateId("share") as ShareAttemptId;
+        const banId = context.allocateId("ban") as BanId;
+        const duration = draft.durationMinutes;
         effects.push({ type: "OPEN_TELEGRAM_SHARE", attemptId });
+        effects.push({
+          type: "UPSERT_BAN",
+          ban: {
+            id: banId,
+            senderId: context.currentUserId,
+            receiverId: null,
+            banText: draft.banText,
+            durationMinutes: duration,
+            acceptance: "PENDING",
+            status: null,
+            boundViaTelegramShareLink: false,
+            sourceProposalId: null,
+          },
+        });
         effects.push({
           type: "UPSERT_SHARE_OPERATION",
           operation: {
@@ -905,7 +921,7 @@ export function instantiateEffects(
             draft,
             token: context.allocateId("share-token") as unknown as ShareToken,
             status: "ACTIVE",
-            createdBanId: null,
+            createdBanId: banId,
           },
         });
         break;
@@ -1284,39 +1300,8 @@ export function instantiateEffects(
     const share = shareAttemptId
       ? snapshot.extended.entities.shareOperations[shareAttemptId]
       : undefined;
-    let ban = banId ? snapshot.extended.entities.bans[banId] : undefined;
-    const draft = share?.draft;
+    const ban = banId ? snapshot.extended.entities.bans[banId] : undefined;
     if (
-      !ban &&
-      banId &&
-      share &&
-      share.status === "ACTIVE" &&
-      share.createdBanId === null &&
-      shareOwnerId &&
-      receiverId === context.currentUserId &&
-      shareOwnerId !== receiverId &&
-      draft &&
-      isValidBanText(draft.banText) &&
-      draft.durationMinutes !== null &&
-      isValidDurationMinutes(draft.durationMinutes)
-    ) {
-      ban = {
-        id: banId,
-        senderId: shareOwnerId,
-        receiverId,
-        banText: draft.banText,
-        durationMinutes: draft.durationMinutes,
-        acceptance: "PENDING",
-        status: null,
-        boundViaTelegramShareLink: true,
-        sourceProposalId: null,
-      };
-      effects.push({ type: "UPSERT_BAN", ban });
-      effects.push({
-        type: "UPSERT_SHARE_OPERATION",
-        operation: { ...share, status: "CONFIRMED", createdBanId: banId },
-      });
-    } else if (
       ban &&
       receiverId &&
       receiverId === context.currentUserId &&
@@ -1326,6 +1311,18 @@ export function instantiateEffects(
         type: "UPSERT_BAN",
         ban: { ...ban, receiverId, boundViaTelegramShareLink: true },
       });
+      if (
+        share &&
+        share.status === "ACTIVE" &&
+        share.createdBanId === ban.id &&
+        shareOwnerId &&
+        shareOwnerId !== receiverId
+      ) {
+        effects.push({
+          type: "UPSERT_SHARE_OPERATION",
+          operation: { ...share, status: "CONFIRMED", createdBanId: ban.id },
+        });
+      }
     }
     // Bootstrap first-launch Matrix omits UPSERT_NOTIFICATION_ITEM; Guard A still requires
     // exactly one linked Incoming Ban Item for the target Ban.
@@ -1382,7 +1379,7 @@ export function instantiateEffects(
   }
   if (row.eventId === "E-13") {
     const share = matchingShare(input);
-    if (share && share.status === "ACTIVE") {
+    if (share && share.status === "ACTIVE" && share.createdBanId === null) {
       effects.push({
         type: "UPSERT_SHARE_OPERATION",
         operation: { ...share, status: "CANCELLED" },
@@ -1391,7 +1388,7 @@ export function instantiateEffects(
   }
   if (row.eventId === "E-32" && row.branch === "share-unresolved") {
     for (const share of Object.values(snapshot.extended.entities.shareOperations)) {
-      if (share.status === "ACTIVE") {
+      if (share.status === "ACTIVE" && share.createdBanId === null) {
         effects.push({
           type: "UPSERT_SHARE_OPERATION",
           operation: { ...share, status: "CANCELLED" },

@@ -518,10 +518,8 @@ function confirmTemplateScreen(
     [
       `<p>Ban: <span data-template-text="${escapeAttr(String(draft.banText ?? ""))}">${escapeHtml(JSON.stringify(draft.banText ?? ""))}</span></p>`,
       `<p>Duration: <span data-template-duration="${escapeAttr(String(draft.durationMinutes ?? "(none)"))}">${escapeHtml(String(draft.durationMinutes ?? "(none)"))}</span></p>`,
-      "<p>Receiver: not set until Share Link resolution (External Entry).</p>",
-      sending
-        ? "<p>Opening Telegram Share… Ban is not created until the recipient opens it.</p>"
-        : "",
+      "<p>Receiver: not set. FORBID creates the Ban before Telegram Share opens.</p>",
+      sending ? "<p>Opening Telegram Share… The Ban is already created.</p>" : "",
       actionButton("BACK", "CREATE_BAN.PRESS_BACK"),
       `<div class="row"><button type="button" data-event="CREATE_BAN.PRESS_FORBID"${forbidDisabled}>FORBID / SHARE</button></div>`,
     ].join(""),
@@ -535,7 +533,7 @@ function sharePendingScreen(diagnostics: TestUiScreenDiagnostics): ProductScreen
     "CreateBanSharePendingTestScreen",
     "CREATE BAN — SHARE PENDING",
     [
-      "<p>Active Telegram Share attempt. Product Ban is not created yet.</p>",
+      "<p>Legacy unresolved share. This screen is only for an ACTIVE share that has no Ban yet.</p>",
       `<p>Share attempt: <code data-share-attempt="${escapeAttr(String(attemptId))}">${escapeHtml(String(attemptId))}</code></p>`,
       share?.preparedMessageId
         ? `<p>Prepared message: <code data-prepared-message="${escapeAttr(share.preparedMessageId)}">${escapeHtml(share.preparedMessageId)}</code></p>`
@@ -543,7 +541,7 @@ function sharePendingScreen(diagnostics: TestUiScreenDiagnostics): ProductScreen
       share?.shareUrl
         ? `<p>Share URL: <code data-share-url="${escapeAttr(share.shareUrl)}">${escapeHtml(share.shareUrl)}</code></p>`
         : "",
-      "<p>Telegram share completion does not create a Ban. The Ban is created when the recipient opens the link. Sender may remain on this screen after that claim.</p>",
+      "<p>Telegram share completion does not create or cancel a Ban. FORBID creates the Ban. Opening the link binds the recipient to that Ban.</p>",
       '<p class="dev-label">DEV ONLY — explicit cancel while the share is still ACTIVE. This does not mint a Ban.</p>',
       `<div class="row"><button type="button" data-event="CREATE_BAN.SHARE_CANCELLED" data-share-attempt-id="${escapeAttr(String(attemptId))}" data-dev-only="share-outcome">DEV: SHARE_CANCELLED</button></div>`,
     ].join(""),
@@ -614,7 +612,7 @@ function successScreen(diagnostics: TestUiScreenDiagnostics): ProductScreenRende
     "CreateBanSuccessTestScreen",
     "SUCCESS",
     [
-      "<p>Ban sent.</p>",
+      "<p>Запрет создан</p>",
       `<p>Receiver: <code data-success-receiver="${escapeAttr(receiver)}">${escapeHtml(receiver)}</code></p>`,
       `<p>Ban: <span data-success-text="${escapeAttr(banText)}">${escapeHtml(JSON.stringify(banText))}</span></p>`,
       `<p>Duration: <span data-success-duration="${escapeAttr(String(duration))}">${escapeHtml(String(duration))}</span></p>`,

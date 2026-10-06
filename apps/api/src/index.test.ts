@@ -41,7 +41,7 @@ describe("api Stage 5 application execution", () => {
     expect(STAGE_6_EXCLUDES).toContain("full-notifications-ui");
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
   });
 
   it("does not accept development authentication when production env is loaded", async () => {

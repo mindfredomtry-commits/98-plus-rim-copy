@@ -1,6 +1,8 @@
 export {
+  boundExistingClaimBan,
   classifyShareForClaim,
-  createdClaimBan,
+  newClaimIncomingCount,
+  receiverSnapshotForClaim,
   snapshotForReceiverClaimPersist,
 } from "./claim-template-share.ts";
 export type {

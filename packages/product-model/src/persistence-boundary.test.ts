@@ -43,9 +43,9 @@ describe("pre-Stage 4 persistence-boundary contracts", () => {
     expect(readSrc("kernel/instantiate.ts")).toContain("receiverId: draft.selectedContactId");
   });
 
-  it("keeps 30 states, 59 events, and 359 Matrix rules", () => {
+  it("keeps 30 states, 59 events, and 358 Matrix rules", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
   });
 });

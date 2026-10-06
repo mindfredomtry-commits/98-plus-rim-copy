@@ -624,7 +624,17 @@ describe("MVP14 Pass 3 canonical proposal attribution", () => {
 
     const template = run(
       withEntities(withControlState(emptySnapshot(), "RIM.LOBBY"), {
-        shareOperations: { [SHARE_ATTEMPT_ID]: shareOp() },
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: CONTACT_A,
+            receiverId: null,
+            acceptance: "PENDING",
+            status: null,
+            boundViaTelegramShareLink: false,
+            sourceProposalId: null,
+          }),
+        },
+        shareOperations: { [SHARE_ATTEMPT_ID]: shareOp({ createdBanId: BAN_ID }) },
       }),
       eventOf("TELEGRAM_SHARE_LINK.RESOLVED", {
         targetBanId: BAN_ID,

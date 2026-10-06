@@ -30,12 +30,14 @@ describe("Stage 5 representative product flows", () => {
     await sender(eventOf("CREATE_BAN.PRESS_NEXT"));
     const share = await sender(eventOf("CREATE_BAN.PRESS_FORBID"));
     expect(share.status).toBe("APPLIED");
-    expect(share.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(share.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(share.pendingExternalEffects.map((item) => item.effect.type)).toEqual([
       "OPEN_TELEGRAM_SHARE",
     ]);
     expect(share.pendingExternalEffects[0]?.completed).toBe(false);
-    expect(Object.keys(share.snapshot.extended.entities.bans)).toEqual([]);
+    const bans = Object.values(share.snapshot.extended.entities.bans);
+    expect(bans).toHaveLength(1);
+    expect(bans[0]?.receiverId).toBeNull();
   });
 
   it("orchestrates OVERBOARD without creating a DomainTimer", async () => {

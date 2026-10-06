@@ -280,10 +280,10 @@ export type ReplySource =
     };
 
 /**
- * Kernel writes ACTIVE, CONFIRMED, and CANCELLED (E-45 claim / E-13 / E-32).
- * CONFIRMED means the authenticated recipient claim committed, not a client share callback.
- * INVALIDATED remains on the contract because MVP5 describes cancelled/terminated Share
- * as unable to create a Ban; no accepted path currently emits INVALIDATED.
+ * ACTIVE means the token exists and the existing Ban is still unclaimed.
+ * CONFIRMED means an authenticated recipient bound that existing Ban.
+ * CANCELLED is only the legacy unresolved share whose createdBanId is null.
+ * INVALIDATED remains unused. No accepted path emits it.
  * Stage 4 must not persist INVALIDATED unless a later accepted kernel path produces it.
  */
 export type ShareOperationStatus = "ACTIVE" | "CONFIRMED" | "CANCELLED" | "INVALIDATED";

@@ -144,17 +144,26 @@ async function createTemplateBanWithToken(url: string): Promise<{
   await dispatch(url, USER_A_TG, "CREATE_BAN.CHANGE_DURATION", { durationMinutes: 10 });
   await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_NEXT");
   const pending = (await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_FORBID")).diagnostics!;
-  const share = (pending.shareOperations as Array<{ attemptId: string; token: string }>)[0]!;
-  expect(pending.bans).toEqual([]);
-  expect(pending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+  const share = (
+    pending.shareOperations as Array<{
+      attemptId: string;
+      token: string;
+      createdBanId: string | null;
+    }>
+  )[0]!;
+  const bans = pending.bans as Array<{ id: string; receiverId: string | null }>;
+  expect(bans).toHaveLength(1);
+  expect(bans[0]?.receiverId).toBeNull();
+  expect(pending.controlState).toBe("CREATE_BAN.SUCCESS");
+  expect(share.createdBanId).toBe(bans[0]?.id);
   return { token: share.token, attemptId: share.attemptId };
 }
 
 describe("Stage 12 Telegram Share Link External Entry", () => {
-  it("keeps frozen 30 / 59 / 359 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
+  it("keeps frozen 30 / 59 / 358 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(TEMPLATE_CREATE_BAN_STAGE).toBe(11);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
@@ -166,7 +175,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     const app = await start();
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.EXTERNAL_ENTRY_STAGE).toBe(12);
-    expect(meta.MATRIX_RULE_COUNT).toBe(359);
+    expect(meta.MATRIX_RULE_COUNT).toBe(358);
   });
 
   it("parses start_param share_<token>", () => {
@@ -374,23 +383,28 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       startParam: `share_${created.token}`,
     });
     expect(sender.externalEntry).toMatchObject({ outcome: "REJECTED" });
-    expect(sender.diagnostics.bans).toEqual([]);
-    expect(sender.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.diagnostics.bans).toHaveLength(1);
+    expect((sender.diagnostics.bans as Array<{ receiverId: string | null }>)[0]?.receiverId).toBe(
+      null,
+    );
+    expect(sender.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
   });
 
-  it("a CANCELLED token is rejected and creates no Ban", async () => {
+  it("E-13 after SUCCESS does not invalidate the claimable token", async () => {
     const app = await start();
     const created = await createTemplateBanWithToken(app.url);
-    await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CANCELLED", {
+    const cancelled = await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CANCELLED", {
       shareAttemptId: created.attemptId,
     });
+    expect(cancelled.httpStatus).toBe(200);
+    expect(cancelled.executionStatus).not.toBe("APPLIED");
     const receiver = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect(receiver.externalEntry).toMatchObject({ outcome: "REJECTED" });
-    expect(receiver.diagnostics.bans).toEqual([]);
-    expect(receiver.diagnostics.incomingItems).toEqual([]);
+    expect(receiver.externalEntry).toMatchObject({ outcome: "RESOLVED" });
+    expect(receiver.diagnostics.bans).toHaveLength(1);
+    expect(receiver.diagnostics.incomingItems).toHaveLength(1);
   });
 
   it("two receivers racing the same token produce exactly one Ban", async () => {
@@ -443,10 +457,10 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
         createdBanId: string | null;
       }>
     )[0]!;
-    expect(prepared.bans).toEqual([]);
-    expect(prepared.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(prepared.bans).toHaveLength(1);
+    expect(prepared.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(preparedShare.status).toBe("ACTIVE");
-    expect(preparedShare.createdBanId).toBeNull();
+    expect(preparedShare.createdBanId).toBe((prepared.bans as Array<{ id: string }>)[0]?.id);
     const token = preparedShare.token;
 
     const claimed = await session(app.url, USER_B_TG, {

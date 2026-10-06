@@ -10,6 +10,8 @@ import type { BanId } from "@98plus/product-model";
 export type TemplateShareClaimContext = Readonly<{
   share: ShareOperation;
   ownerId: UserId;
+  /** Existing unbound canonical Ban. Claim binds it and must not allocate another. */
+  ban: Ban;
   receiver: Readonly<{
     revision: number;
     snapshot: ProductSnapshot;
@@ -35,9 +37,9 @@ export type ClaimTemplateShareInput = Readonly<{
    */
   reduceClaim: (context: TemplateShareClaimContext) => TransitionResult;
   /**
-   * Runs after the canonical Ban exists and the sender-owned share is CONFIRMED,
-   * still inside the same claim transaction. Return null to leave the sender
-   * control state unchanged. A non-APPLIED result aborts the whole claim.
+   * Optional same-transaction sender write. The product claim path does not
+   * pass this and does not emit CREATE_BAN.CLAIM_OBSERVED. A non-APPLIED
+   * result still aborts the whole claim.
    */
   observeSender?: (context: SenderClaimObservationContext) => TransitionResult | null;
 }>;
@@ -64,7 +66,7 @@ export function classifyShareForClaim(
   receiverId: UserId,
   ban: Ban | null,
 ):
-  | { action: "MINT" }
+  | { action: "BIND"; banId: BanId }
   | { action: "ALREADY_BOUND"; banId: BanId }
   | { action: "CONFLICT"; banId: BanId | null }
   | { action: "REJECTED"; reason: "SENDER" | "CANCELLED" | "MALFORMED" } {
@@ -74,32 +76,87 @@ export function classifyShareForClaim(
   if (share.status === "CANCELLED") {
     return { action: "REJECTED", reason: "CANCELLED" };
   }
-  if (share.status === "CONFIRMED") {
-    if (!share.createdBanId || !ban) {
+  if (share.status === "CONFIRMED" || share.status === "ACTIVE") {
+    if (!share.createdBanId || !ban || ban.id !== share.createdBanId || ban.senderId !== ownerId) {
       return { action: "REJECTED", reason: "MALFORMED" };
+    }
+    if (ban.receiverId === null) {
+      if (share.status !== "ACTIVE") {
+        return { action: "REJECTED", reason: "MALFORMED" };
+      }
+      return { action: "BIND", banId: share.createdBanId };
     }
     if (ban.receiverId === receiverId) {
       return { action: "ALREADY_BOUND", banId: share.createdBanId };
     }
-    if (ban.receiverId !== null) {
-      return { action: "CONFLICT", banId: share.createdBanId };
-    }
-    return { action: "REJECTED", reason: "MALFORMED" };
-  }
-  if (share.status === "ACTIVE" && share.createdBanId === null) {
-    return { action: "MINT" };
+    return { action: "CONFLICT", banId: share.createdBanId };
   }
   return { action: "REJECTED", reason: "MALFORMED" };
 }
 
-export function createdClaimBan(before: ProductSnapshot, after: ProductSnapshot): Ban | null {
-  const prior = new Set(Object.keys(before.extended.entities.bans));
-  const created = Object.values(after.extended.entities.bans).filter((ban) => !prior.has(ban.id));
-  return created.length === 1 ? (created[0] ?? null) : null;
+export function receiverSnapshotForClaim(
+  snapshot: ProductSnapshot,
+  share: ShareOperation,
+  ban: Ban,
+): ProductSnapshot {
+  return {
+    ...snapshot,
+    extended: {
+      ...snapshot.extended,
+      entities: {
+        ...snapshot.extended.entities,
+        bans: { ...snapshot.extended.entities.bans, [ban.id]: ban },
+        shareOperations: {
+          ...snapshot.extended.entities.shareOperations,
+          [share.attemptId]: share,
+        },
+      },
+    },
+  };
+}
+
+/** The existing Ban is bound to this recipient and no second Ban id appeared. */
+export function boundExistingClaimBan(
+  before: ProductSnapshot,
+  after: ProductSnapshot,
+  banId: BanId,
+  receiverId: UserId,
+  ownerId: UserId,
+): Ban | null {
+  const extra = Object.keys(after.extended.entities.bans).filter(
+    (id) => id !== banId && !(id in before.extended.entities.bans),
+  );
+  if (extra.length > 0) {
+    return null;
+  }
+  const afterBan = after.extended.entities.bans[banId];
+  if (!afterBan || afterBan.senderId !== ownerId || afterBan.receiverId !== receiverId) {
+    return null;
+  }
+  if (afterBan.boundViaTelegramShareLink !== true) {
+    return null;
+  }
+  return afterBan;
+}
+
+export function newClaimIncomingCount(
+  before: ProductSnapshot,
+  after: ProductSnapshot,
+  banId: BanId,
+  receiverId: UserId,
+): number {
+  const prior = new Set(Object.keys(before.extended.entities.notificationItems));
+  return Object.values(after.extended.entities.notificationItems).filter(
+    (item) =>
+      !prior.has(item.id) &&
+      item.kind === "INCOMING_BAN" &&
+      item.banId === banId &&
+      item.ownerId === receiverId,
+  ).length;
 }
 
 /**
- * Receiver persist must not adopt the sender-owned share or record the minted Ban
+ * Receiver persist must not adopt the sender-owned share or record the bound Ban
  * as the receiver's successfulBanId.
  */
 export function snapshotForReceiverClaimPersist(

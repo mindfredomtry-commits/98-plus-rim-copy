@@ -477,7 +477,7 @@ export class MemorySqlClient implements PersistenceSqlClient {
           !current ||
           current.ownerId !== params[2] ||
           current.status !== "ACTIVE" ||
-          current.createdBanId !== null
+          current.createdBanId !== params[1]
         ) {
           return rows([]);
         }

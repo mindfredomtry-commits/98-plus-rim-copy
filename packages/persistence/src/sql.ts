@@ -245,7 +245,7 @@ SET status = 'CONFIRMED', created_ban_id = $2
 WHERE attempt_id = $1
   AND owner_id = $3
   AND status = 'ACTIVE'
-  AND created_ban_id IS NULL
+  AND created_ban_id = $2
 RETURNING attempt_id
 `.trim(),
   selectBanById: `

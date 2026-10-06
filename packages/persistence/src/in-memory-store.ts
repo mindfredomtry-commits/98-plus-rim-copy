@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { Ban, ProductSnapshot, TransitionResult, UserId } from "@98plus/product-model";
 import type { BanId } from "@98plus/product-model";
 import {
+  boundExistingClaimBan,
   classifyShareForClaim,
-  createdClaimBan,
+  newClaimIncomingCount,
+  receiverSnapshotForClaim,
   snapshotForReceiverClaimPersist,
   type ClaimTemplateShareInput,
   type ClaimTemplateShareResult,
@@ -303,34 +305,57 @@ export class InMemoryProductStore implements ProductStore {
     const existingBan = share.createdBanId ? this.tables.getBan(share.createdBanId) : undefined;
     const ban = existingBan ? (({ createdSeq: _createdSeq, ...rest }) => rest)(existingBan) : null;
     const classification = classifyShareForClaim(ownerId, share, input.receiverId, ban);
-    if (classification.action !== "MINT") {
-      if (classification.action === "ALREADY_BOUND") {
-        return { status: "ALREADY_BOUND", banId: classification.banId };
-      }
-      if (classification.action === "CONFLICT") {
-        return { status: "CONFLICT", banId: classification.banId };
-      }
+    if (classification.action === "ALREADY_BOUND") {
+      return { status: "ALREADY_BOUND", banId: classification.banId };
+    }
+    if (classification.action === "CONFLICT") {
+      return { status: "CONFLICT", banId: classification.banId };
+    }
+    if (classification.action === "REJECTED") {
       return { status: "REJECTED", reason: classification.reason };
+    }
+    const cas = this.tables.bindBanReceiver(classification.banId, input.receiverId);
+    if (cas.status === "ALREADY_BOUND") {
+      return { status: "ALREADY_BOUND", banId: classification.banId };
+    }
+    if (cas.status === "CONFLICT") {
+      return { status: "CONFLICT", banId: classification.banId };
+    }
+    if (cas.status !== "BOUND" || !ban) {
+      return { status: "REJECTED", reason: "MALFORMED" };
     }
     const loaded = this.read(input.receiverId);
     const transition = input.reduceClaim({
       share,
       ownerId,
-      receiver: { revision: loaded.revision, snapshot: loaded.snapshot },
+      ban,
+      receiver: {
+        revision: loaded.revision,
+        snapshot: receiverSnapshotForClaim(loaded.snapshot, share, ban),
+      },
     });
     if (transition.outcome !== "APPLIED") {
       return { status: "NOT_APPLIED", transition };
     }
-    const created = createdClaimBan(loaded.snapshot, transition.snapshot);
+    const created = boundExistingClaimBan(
+      loaded.snapshot,
+      transition.snapshot,
+      classification.banId,
+      input.receiverId,
+      ownerId,
+    );
     if (
       !created ||
-      created.senderId !== ownerId ||
-      created.receiverId !== input.receiverId ||
-      created.boundViaTelegramShareLink !== true
+      newClaimIncomingCount(
+        loaded.snapshot,
+        transition.snapshot,
+        classification.banId,
+        input.receiverId,
+      ) !== 1
     ) {
       throw new PersistenceError(
         "INVARIANT",
-        "Template share claim did not create exactly one receiver-bound Ban",
+        "Template share claim did not bind the existing Ban and create exactly one Incoming",
       );
     }
     const persisted = snapshotForReceiverClaimPersist(

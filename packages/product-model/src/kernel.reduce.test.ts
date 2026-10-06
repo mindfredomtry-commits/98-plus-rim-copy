@@ -474,7 +474,7 @@ describe("Stage 2 Product Kernel", () => {
     expect(confirmed.controlState).toBe("CREATE_BAN.SUCCESS");
   });
 
-  it("walks a representative Create Ban TEMPLATE flow into SHARE_PENDING", () => {
+  it("walks a representative Create Ban TEMPLATE flow into SUCCESS", () => {
     let snapshot = withControlState(emptySnapshot(), "CREATE_BAN.WHO");
     snapshot = applied(snapshot, defaultEvent("CREATE_BAN.SELECT_TEMPLATE")).snapshot;
     expect(snapshot.controlState).toBe("CREATE_BAN.WHAT.TEMPLATE");
@@ -489,8 +489,9 @@ describe("Stage 2 Product Kernel", () => {
     snapshot = applied(snapshot, defaultEvent("CREATE_BAN.PRESS_NEXT")).snapshot;
     expect(snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE");
     const share = applied(snapshot, defaultEvent("CREATE_BAN.PRESS_FORBID"));
-    expect(share.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(share.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(share.effects.some((effect) => effect.type === "OPEN_TELEGRAM_SHARE")).toBe(true);
+    expect(Object.values(share.snapshot.extended.entities.bans)).toHaveLength(1);
   });
 
   it("walks a representative Create Ban RIM flow and restores frozen chat on Back", () => {

@@ -255,7 +255,9 @@ describe("Stage 6 TEST UI product screens", () => {
     );
     expect(screen.screenId).toBe("CreateBanSuccessTestScreen");
     expect(screen.title).toBe("SUCCESS");
-    expect(screen.html).toContain("Ban sent.");
+    expect(screen.html).toContain("Запрет создан");
+    expect(screen.html).not.toContain("Ban sent.");
+    expect(screen.html).not.toContain("Запрет отправлен");
     expect(screen.html).toContain(">FORBID AGAIN</button>");
     expect(screen.html).toContain('data-event="CREATE_BAN.PRESS_FORBID_MORE"');
     expect(TEST_UI_USER_EVENT_NAMES).toContain("CREATE_BAN.PRESS_FORBID_MORE");
@@ -1607,7 +1609,7 @@ describe("Stage 11 TEST UI Template Create Ban screens", () => {
         },
       }),
     );
-    expect(confirm.html).toContain("not set until Share Link resolution");
+    expect(confirm.html).toContain("Receiver: not set.");
     expect(confirm.html).toContain('data-event="CREATE_BAN.PRESS_FORBID"');
 
     const pending = renderProductScreen(
@@ -1628,7 +1630,8 @@ describe("Stage 11 TEST UI Template Create Ban screens", () => {
         },
       }),
     );
-    expect(pending.html).toContain("Ban is not created yet");
+    expect(pending.html).toContain("Legacy unresolved share");
+    expect(pending.html).not.toContain("when the recipient opens");
     expect(pending.html).toContain('data-share-attempt="share-1"');
     expect(pending.html).not.toContain("DEV: SHARE_CONFIRMED");
     expect(pending.html).toContain("DEV: SHARE_CANCELLED");

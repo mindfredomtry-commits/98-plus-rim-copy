@@ -518,10 +518,10 @@ export type TemplateShareClaimExecution =
   | { kind: "FAILED"; execution: ShareLinkResolvedExecution };
 
 /**
- * E-45 claim mint. Runs inside ProductStore.claimTemplateShare so the Ban,
- * Incoming item, sender-owned ACTIVE → CONFIRMED update, and — when the sender
- * is still CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING for that share — the
- * CREATE_BAN.CLAIM_OBSERVED transition commit together.
+ * E-45 binds the Ban already created by E-08. Runs inside
+ * ProductStore.claimTemplateShare so the receiver binding, exactly one
+ * Incoming item, and sender-owned ACTIVE → CONFIRMED update commit together.
+ * Claim does not allocate a Ban and does not emit CREATE_BAN.CLAIM_OBSERVED.
  */
 export async function executeTemplateShareClaim(
   input: ExecuteTemplateShareClaimInput,
@@ -538,13 +538,12 @@ export async function executeTemplateShareClaim(
       receiverId: input.receiverId,
       token: input.token,
       reduceClaim: (context) => {
-        const banId = deps.allocateId("ban") as BanId;
         const incomingBanItemId =
           input.incomingBanItemId ?? (deps.allocateId("notification") as NotificationItemId);
         const event = toCanonicalEvent({
           name: "TELEGRAM_SHARE_LINK.RESOLVED",
           payload: {
-            targetBanId: banId,
+            targetBanId: context.ban.id,
             receiverId: input.receiverId,
             incomingBanItemId,
             shareAttemptId: input.shareAttemptId,
@@ -563,32 +562,6 @@ export async function executeTemplateShareClaim(
         );
         claimedTransition = transition;
         return transition;
-      },
-      observeSender: (context) => {
-        if (context.sender.snapshot.controlState !== "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING") {
-          return null;
-        }
-        const anotherShareStillActive = Object.values(
-          context.sender.snapshot.extended.entities.shareOperations,
-        ).some((share) => share.status === "ACTIVE" && share.attemptId !== context.share.attemptId);
-        if (anotherShareStillActive) {
-          return null;
-        }
-        return reduce(
-          context.sender.snapshot,
-          toCanonicalEvent({
-            name: "CREATE_BAN.CLAIM_OBSERVED",
-            payload: {
-              shareAttemptId: context.share.attemptId,
-              targetBanId: context.ban.id,
-            },
-          }),
-          {
-            now: asInstant(deps.clock.nowMs()),
-            currentUserId: context.ownerId,
-            allocateId: deps.allocateId,
-          },
-        );
       },
     });
     if (claimed.status === "ALREADY_BOUND") {

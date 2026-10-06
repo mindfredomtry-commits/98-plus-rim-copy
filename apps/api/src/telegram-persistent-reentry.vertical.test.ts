@@ -140,7 +140,7 @@ async function createShareBoundBan(
   await dispatch(url, senderTg, "CREATE_BAN.CHANGE_DURATION", { durationMinutes: 10 });
   await dispatch(url, senderTg, "CREATE_BAN.PRESS_NEXT");
   const pending = (await dispatch(url, senderTg, "CREATE_BAN.PRESS_FORBID")).diagnostics!;
-  expect(pending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+  expect(pending.controlState).toBe("CREATE_BAN.SUCCESS");
   const share = (
     pending.shareOperations as Array<{
       attemptId: string;
@@ -177,10 +177,10 @@ async function qualifyViaOverboard(url: string): Promise<TestUiDiagnostics> {
 }
 
 describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
-  it("keeps frozen 30 / 59 / 359 and TELEGRAM_PERSISTENT_REENTRY_STAGE = 13A", async () => {
+  it("keeps frozen 30 / 59 / 358 and TELEGRAM_PERSISTENT_REENTRY_STAGE = 13A", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
     expect(TELEGRAM_PERSISTENT_REENTRY_STAGE).toBe("13A");
@@ -192,7 +192,7 @@ describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.TELEGRAM_PERSISTENT_REENTRY_STAGE).toBe("13A");
     expect(meta.CANONICAL_EVENT_COUNT).toBe(59);
-    expect(meta.MATRIX_RULE_COUNT).toBe(359);
+    expect(meta.MATRIX_RULE_COUNT).toBe(358);
   });
 
   it("E-45 alone leaves eligible false", async () => {

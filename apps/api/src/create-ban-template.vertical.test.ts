@@ -200,7 +200,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
   it("keeps frozen contracts and exposes TEMPLATE_CREATE_BAN_STAGE = 11", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PERSISTENCE_STAGE).toBe(4);
@@ -282,20 +282,25 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(back.createBanDraft?.durationMinutes).toBe(12);
   });
 
-  it("10–12. E-08 creates Share op + OPEN_TELEGRAM_SHARE, no Ban, telegramShare attached", async () => {
+  it("10–12. E-08 creates one unbound Ban, ACTIVE share, SUCCESS, and OPEN_TELEGRAM_SHARE", async () => {
     const app = await start();
     await reachConfirmTemplate(app.url);
     const pending = requireDiagnostics(
       await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_FORBID"),
     );
-    expect(pending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
-    expect(bansOf(pending)).toEqual([]);
+    expect(pending.controlState).toBe("CREATE_BAN.SUCCESS");
+    const bans = bansOf(pending);
+    expect(bans).toHaveLength(1);
+    expect(bans[0]?.receiverId).toBeNull();
+    expect(bans[0]?.senderId).toBe(userIdOf(app.runtime, USER_A_TG));
+    expect(bans[0]?.boundViaTelegramShareLink).toBe(false);
+    expect(pending.successfulBanId).toBe(bans[0]?.id);
     expect(pending.effects).toContain("OPEN_TELEGRAM_SHARE");
     expect(pending.pendingExternalEffects).toContain("OPEN_TELEGRAM_SHARE");
     const shares = sharesOf(pending);
     expect(shares).toHaveLength(1);
     expect(shares[0]?.status).toBe("ACTIVE");
-    expect(shares[0]?.createdBanId).toBeNull();
+    expect(shares[0]?.createdBanId).toBe(bans[0]?.id);
     expect(shares[0]?.draft.banText).toBe(BAN_TEXT);
     expect(shares[0]?.draft.selectedContactId).toBeNull();
     expect(pending.telegramShare?.api).toBe("shareMessage");
@@ -304,12 +309,13 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(pending.activeShareAttemptId).toBe(shares[0]?.attemptId);
   });
 
-  it("13–16. share callback cannot mint; recipient claim creates exactly one Ban", async () => {
+  it("13–16. share callback cannot mint; recipient claim binds the existing Ban", async () => {
     const app = await start();
     const pending = await reachSharePending(app.url);
     const attemptId = pending.activeShareAttemptId!;
     const token = sharesOf(pending)[0]?.token;
-    expect(bansOf(pending)).toEqual([]);
+    const createdId = bansOf(pending)[0]?.id;
+    expect(bansOf(pending)).toHaveLength(1);
     const callback = await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CONFIRMED", {
       shareAttemptId: attemptId,
       result: {},
@@ -317,8 +323,9 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(callback.httpStatus).toBe(400);
     expect(callback.error?.code).toBe("INVALID_EVENT");
     const senderAfterCallback = await session(app.url, USER_A_TG, { openIfNeeded: false });
-    expect(bansOf(senderAfterCallback)).toEqual([]);
-    expect(senderAfterCallback.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(bansOf(senderAfterCallback)).toHaveLength(1);
+    expect(bansOf(senderAfterCallback)[0]?.id).toBe(createdId);
+    expect(senderAfterCallback.controlState).toBe("CREATE_BAN.SUCCESS");
 
     const receiver = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
@@ -326,6 +333,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     });
     const created = bansOf(receiver);
     expect(created).toHaveLength(1);
+    expect(created[0]?.id).toBe(createdId);
     expect(created[0]?.banText).toBe(BAN_TEXT);
     expect(created[0]?.senderId).toBe(userIdOf(app.runtime, USER_A_TG));
     expect(created[0]?.receiverId).toBe(userIdOf(app.runtime, USER_B_TG));
@@ -349,36 +357,28 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(again.incomingItems).toHaveLength(1);
   });
 
-  it("17–19. E-13 creates no Ban, returns CB-07 with draft; late E-12 creates no Ban", async () => {
+  it("17–19. callback false / E-13 does not cancel the created Ban or share", async () => {
     const app = await start();
     const pending = await reachSharePending(app.url);
     const attemptId = pending.activeShareAttemptId!;
-    const cancelled = requireDiagnostics(
-      await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CANCELLED", {
-        shareAttemptId: attemptId,
-      }),
-    );
-    expect(cancelled.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE");
-    expect(bansOf(cancelled)).toEqual([]);
-    expect(cancelled.createBanDraft?.banText).toBe(BAN_TEXT);
-    expect(cancelled.createBanDraft?.durationMinutes).toBe(10);
-    expect(sharesOf(cancelled).find((s) => s.attemptId === attemptId)?.status).toBe("CANCELLED");
-
-    const late = await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CONFIRMED", {
+    const banId = bansOf(pending)[0]?.id;
+    const cancelled = await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CANCELLED", {
       shareAttemptId: attemptId,
-      result: {},
     });
-    expect(late.httpStatus).toBe(400);
-    expect(late.error?.code).toBe("INVALID_EVENT");
+    expect(cancelled.httpStatus).toBe(200);
+    expect(cancelled.executionStatus).toBe("NOT_APPLIED");
     const durable = await session(app.url, USER_A_TG, { openIfNeeded: false });
-    expect(durable.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE");
-    expect(bansOf(durable)).toEqual([]);
+    expect(durable.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(bansOf(durable)[0]?.id).toBe(banId);
+    expect(sharesOf(durable).find((s) => s.attemptId === attemptId)?.status).toBe("ACTIVE");
+    expect(sharesOf(durable).find((s) => s.attemptId === attemptId)?.createdBanId).toBe(banId);
   });
 
-  it("20–21. E-32 during CB-09 creates no Ban; late E-12 creates no Ban", async () => {
+  it("20–21. closing from SUCCESS preserves the Ban and claimable token", async () => {
     const app = await start();
     const pending = await reachSharePending(app.url);
     const attemptId = pending.activeShareAttemptId!;
+    const banId = bansOf(pending)[0]?.id;
     const context = await authenticateRuntime(app.runtime, {
       method: "development",
       secret: DEV_SECRET,
@@ -390,18 +390,15 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     });
     expect(closed.status).toBe("APPLIED");
     expect(closed.snapshot.controlState).toBeNull();
-    expect(closed.snapshot.extended.createBanDraft).toBeNull();
-    expect(Object.keys(closed.snapshot.extended.entities.bans)).toEqual([]);
+    expect(Object.keys(closed.snapshot.extended.entities.bans)).toEqual([banId]);
     const share = closed.snapshot.extended.entities.shareOperations[attemptId as ShareAttemptId];
-    expect(share?.status).toBe("CANCELLED");
-
-    const late = await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CONFIRMED", {
-      shareAttemptId: attemptId,
-      result: {},
-    });
-    expect(late.httpStatus).toBe(400);
+    expect(share?.status).toBe("ACTIVE");
+    expect(share?.createdBanId).toBe(banId);
     const durable = await app.runtime.productStore.loadProductSnapshot(context.currentUserId);
-    expect(Object.keys(durable.snapshot.extended.entities.bans)).toEqual([]);
+    expect(Object.keys(durable.snapshot.extended.entities.bans)).toEqual([banId]);
+    expect(
+      durable.snapshot.extended.entities.shareOperations[attemptId as ShareAttemptId]?.status,
+    ).toBe("ACTIVE");
   });
 
   it("22–23. E-45 Guard A supersedes CB-09; late E-12 creates no Template Ban", () => {
@@ -510,8 +507,8 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(first.httpStatus).toBe(400);
     expect(second.httpStatus).toBe(400);
     const durable = await session(app.url, USER_A_TG, { openIfNeeded: false });
-    expect(durable.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
-    expect(bansOf(durable)).toEqual([]);
+    expect(durable.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(bansOf(durable)).toHaveLength(1);
   });
 
   it("28–29. CONTACT E-10 still reaches SUCCESS; E-09 follows the notification queue", async () => {
@@ -585,11 +582,13 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(next.activeNotificationItemId).not.toBeNull();
   });
 
-  it("30. E-08 creates no Ban; claim binds the authenticated opener", async () => {
+  it("30. E-08 creates an unbound Ban; claim binds the authenticated opener", async () => {
     const app = await start();
     const pending = await reachSharePending(app.url);
-    expect(bansOf(pending)).toEqual([]);
+    expect(bansOf(pending)).toHaveLength(1);
+    expect(bansOf(pending)[0]?.receiverId).toBeNull();
     expect(sharesOf(pending)[0]?.draft.selectedContactId).toBeNull();
+    expect(sharesOf(pending)[0]?.createdBanId).toBe(bansOf(pending)[0]?.id);
     const token = sharesOf(pending)[0]?.token;
     const receiver = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
@@ -685,20 +684,17 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(disk).toContain("CREATE_BAN.SHARE_CANCELLED");
   });
 
-  it("new Share attempt after cancel uses a fresh attempt id", async () => {
+  it("a repeated FORBID after SUCCESS does not create another Ban", async () => {
     const app = await start();
     const first = await reachSharePending(app.url);
-    const firstId = first.activeShareAttemptId!;
-    requireDiagnostics(
-      await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_CANCELLED", {
-        shareAttemptId: firstId,
-      }),
-    );
-    const second = requireDiagnostics(
-      await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_FORBID"),
-    );
-    expect(second.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
-    expect(second.activeShareAttemptId).not.toBe(firstId);
-    expect(sharesOf(second).filter((s) => s.status === "ACTIVE")).toHaveLength(1);
+    const firstId = bansOf(first)[0]?.id;
+    const second = await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_FORBID");
+    expect(second.httpStatus).toBe(200);
+    expect(second.executionStatus).toBe("NOT_APPLIED");
+    const durable = await session(app.url, USER_A_TG, { openIfNeeded: false });
+    expect(durable.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(bansOf(durable)).toHaveLength(1);
+    expect(bansOf(durable)[0]?.id).toBe(firstId);
+    expect(sharesOf(durable).filter((s) => s.status === "ACTIVE")).toHaveLength(1);
   });
 });

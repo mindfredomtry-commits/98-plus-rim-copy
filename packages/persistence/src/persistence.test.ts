@@ -563,11 +563,27 @@ describe("Stage 4 product persistence", () => {
     let world = withControlState(emptySnapshot(), controlState);
     world = {
       ...world,
-      extended: { ...world.extended, createBanDraft: validCreateDraft("TEMPLATE") },
+      extended: {
+        ...world.extended,
+        createBanDraft: validCreateDraft("TEMPLATE"),
+        successfulBanId: controlState === "CREATE_BAN.SUCCESS" ? BAN_ID : null,
+      },
     };
     return withEntities(world, {
+      bans: {
+        [BAN_ID]: makeBan({
+          senderId: USER_ID,
+          receiverId: null,
+          banText: "share ban",
+          durationMinutes: 21 as DurationMinutes,
+          acceptance: "PENDING",
+          status: null,
+          boundViaTelegramShareLink: false,
+        }),
+      },
       shareOperations: {
         [SHARE_ATTEMPT_ID]: shareOp({
+          createdBanId: BAN_ID,
           draft: {
             origin: "TEMPLATE",
             selectedContactId: null,
@@ -584,7 +600,7 @@ describe("Stage 4 product persistence", () => {
     const { kit, store, memory } = await setup();
     const seeded = await kit.installFixtureSnapshot(
       USER_ID,
-      templateShareWorld("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING"),
+      templateShareWorld("CREATE_BAN.SUCCESS"),
     );
     await kit.installFixtureSnapshot(OTHER_USER, withControlState(emptySnapshot(), "RIM.LOBBY"));
     const claimed = await store.claimTemplateShare({
@@ -604,11 +620,10 @@ describe("Stage 4 product persistence", () => {
           }),
           { ...kernelContext(), currentUserId: OTHER_USER },
         ),
-      observeSender: observePendingTemplateSender,
     });
     expect(claimed.status).toBe("CLAIMED");
     const sender = await store.loadProductSnapshot(USER_ID);
-    expect(sender.revision).toBe(seeded.revision + 1);
+    expect(sender.revision).toBe(seeded.revision);
     expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(sender.snapshot.extended.successfulBanId).toBe(BAN_ID);
     expect(sender.snapshot.extended.createBanDraft?.origin).toBe("TEMPLATE");
@@ -730,9 +745,10 @@ describe("Stage 4 product persistence", () => {
       "ACTIVE",
     );
     expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.createdBanId).toBe(
-      null,
+      BAN_ID,
     );
-    expect(memory.inspect().countBans()).toBe(0);
+    expect(sender.snapshot.extended.entities.bans[BAN_ID]?.receiverId).toBeNull();
+    expect(memory.inspect().countBans()).toBe(1);
     const receiver = await store.loadProductSnapshot(OTHER_USER);
     expect(receiver.snapshot.controlState).toBe("RIM.LOBBY");
     expect(Object.keys(receiver.snapshot.extended.entities.notificationItems)).toEqual([]);
@@ -782,9 +798,10 @@ describe("Stage 4 product persistence", () => {
       "ACTIVE",
     );
     expect(sender.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.createdBanId).toBe(
-      null,
+      BAN_ID,
     );
-    expect(kit.sqlClient?.tables.snapshot().bans.size).toBe(0);
+    expect(sender.snapshot.extended.entities.bans[BAN_ID]?.receiverId).toBeNull();
+    expect(kit.sqlClient?.tables.snapshot().bans.size).toBe(1);
     const receiver = await kit.store.loadProductSnapshot(OTHER_USER);
     expect(receiver.snapshot.controlState).toBe("RIM.LOBBY");
     expect(Object.keys(receiver.snapshot.extended.entities.notificationItems)).toEqual([]);

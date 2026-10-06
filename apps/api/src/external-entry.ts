@@ -234,6 +234,7 @@ async function openActiveTemplateShare(
   attemptId: string,
   ownerId: UserId,
   token: string,
+  banId: BanId,
   base: Omit<ExternalEntryOrchestration, "outcome" | "steps">,
 ): Promise<ExternalEntryExecution> {
   const opened = await dispatch(
@@ -243,7 +244,7 @@ async function openActiveTemplateShare(
       name: "TELEGRAM_SHARE_LINK.OPENED",
       payload: {
         shareLinkId: attemptId as ShareLinkId,
-        shareTargetBanId: null,
+        shareTargetBanId: banId,
         currentTelegramUserId: context.currentUserId,
       },
     },
@@ -252,7 +253,7 @@ async function openActiveTemplateShare(
   const openedBase = {
     ...base,
     shareAttemptId: attemptId,
-    shareTargetBanId: null,
+    shareTargetBanId: banId,
     incomingBanItemId: null,
     bindStatus: null as ExternalEntryOrchestration["bindStatus"],
   };
@@ -441,6 +442,17 @@ export async function resolveTelegramShareExternalEntry(
   }
 
   if (lookup.share.status === "ACTIVE" && lookup.share.createdBanId === null) {
+    return rejectExternalEntry(
+      runtime,
+      context,
+      {} as ShareLinkFailureReason,
+      clientClaimedUserId,
+      base,
+      [],
+    );
+  }
+
+  if (lookup.share.status === "ACTIVE" && lookup.share.createdBanId) {
     return openActiveTemplateShare(
       runtime,
       context,
@@ -448,6 +460,7 @@ export async function resolveTelegramShareExternalEntry(
       lookup.share.attemptId,
       lookup.ownerId,
       parsed.token,
+      lookup.share.createdBanId,
       base,
     );
   }

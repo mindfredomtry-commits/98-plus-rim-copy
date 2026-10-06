@@ -226,7 +226,7 @@ describe("DC-01 conversation initialization", () => {
   it("keeps the frozen Product counts", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
   });
 
   it("stores one conversation after E-56 and does not call respond", async () => {

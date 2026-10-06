@@ -414,7 +414,7 @@
             error: {
               code: "TELEGRAM_SHARE_PREPARE_MISSING",
               message:
-                "preparedMessageId missing — savePreparedInlineMessage did not succeed; a Ban was not created.",
+                "preparedMessageId missing — savePreparedInlineMessage did not succeed. The Ban stays created.",
             },
           };
           render();
@@ -427,7 +427,7 @@
             error: {
               code: "TELEGRAM_SHARE_UNAVAILABLE",
               message:
-                "Telegram.WebApp.shareMessage is unavailable in this runtime. A Ban was not created. Stay on SHARE_PENDING.",
+                "Telegram.WebApp.shareMessage is unavailable in this runtime. The Ban stays created.",
             },
           };
           render();
@@ -439,12 +439,6 @@
           webApp.shareMessage(share.preparedMessageId, (success) => {
             shareSignalLog.record(success ? "callback:true" : "callback:false");
             paintShareSignals();
-            if (!success) {
-              void sendEvent("CREATE_BAN.SHARE_CANCELLED", {
-                shareAttemptId: share.attemptId,
-              }).finally(resolve);
-              return;
-            }
             resolve(undefined);
           });
         });

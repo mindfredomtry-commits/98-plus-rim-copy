@@ -159,7 +159,7 @@ describe("Feature 8 RIM vertical", () => {
   it("keeps the frozen engine counts", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
     expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
   });
 
   it("runs lobby, context, fake AI, proposal, restore, and successful Ban", async () => {

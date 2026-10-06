@@ -27,7 +27,7 @@ describe("Stage 4 boundary", () => {
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(359);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
     expect(STAGE_4_EXCLUDES).toContain("external-entry");
     expect(STAGE_4_EXCLUDES).toContain("openai");
     expect(STAGE_4_EXCLUDES).toContain("ui-screens");
