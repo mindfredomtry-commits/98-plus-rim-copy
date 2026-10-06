@@ -1386,16 +1386,6 @@ export function instantiateEffects(
       });
     }
   }
-  if (row.eventId === "E-32" && row.branch === "share-unresolved") {
-    for (const share of Object.values(snapshot.extended.entities.shareOperations)) {
-      if (share.status === "ACTIVE" && share.createdBanId === null) {
-        effects.push({
-          type: "UPSERT_SHARE_OPERATION",
-          operation: { ...share, status: "CANCELLED" },
-        });
-      }
-    }
-  }
   if (row.eventId === "E-20" || row.eventId === "E-22" || row.eventId === "E-23") {
     const operation = correlatedPendingOperation(input);
     if (operation && !operation.resultApplied) {

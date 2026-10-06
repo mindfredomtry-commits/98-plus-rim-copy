@@ -1545,11 +1545,11 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     eventId: "E-32",
     eventName: "APP.FULL_CLOSE",
     branch: "share-unresolved",
-    guardsText: "Share unresolved",
+    guardsText: "createdBanId != null",
     nextStateText: "—",
     nextState: null,
     effectsText:
-      "Session ends and the Create Ban draft is cleared. An ACTIVE share with createdBanId null is cancelled. A share whose Ban already exists stays claimable and is not invalidated.",
+      "Session ends and the template draft is cleared. The already-created Ban, ShareOperation, and token stay claimable and are not cancelled or invalidated.",
     effects: [{ type: "SET_CREATE_BAN_DRAFT" }, { type: "END_SESSION" }],
     result: "SESSION_END",
     source: {

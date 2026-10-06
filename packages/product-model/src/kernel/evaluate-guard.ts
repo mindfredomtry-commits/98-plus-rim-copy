@@ -664,7 +664,9 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
     case "E-32:timer-unprocessed":
       return true;
     case "E-32:share-unresolved":
-      return true;
+      return Object.values(input.snapshot.extended.entities.shareOperations).some(
+        (share) => share.createdBanId !== null,
+      );
     case "E-32:local":
       return true;
     case "E-45:guard-a":

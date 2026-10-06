@@ -1188,6 +1188,54 @@ describe("Stage 2 semantic effect audit", () => {
     );
   });
 
+  it("E-32 preserves a created Template Ban and does not cancel a share with no Ban", () => {
+    let created = withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    created = withEntities(created, {
+      bans: {
+        [BAN_ID]: makeBan({
+          receiverId: null,
+          acceptance: "PENDING",
+          status: null,
+          boundViaTelegramShareLink: false,
+        }),
+      },
+      shareOperations: {
+        [SHARE_ATTEMPT_ID]: shareOp({ createdBanId: BAN_ID }),
+      },
+    });
+    const closed = applied(created, defaultEvent("APP.FULL_CLOSE"));
+    expect(closed.outcome).toBe("APPLIED");
+    expect(closed.result).toBe("SESSION_END");
+    expect(closed.snapshot.controlState).toBeNull();
+    expect(closed.snapshot.extended.entities.bans[BAN_ID]?.id).toBe(BAN_ID);
+    expect(closed.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
+      "ACTIVE",
+    );
+    expect(
+      closed.traces.some(
+        (trace) =>
+          trace.identity ===
+          "LOCAL:CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING:E-32:share-unresolved",
+      ),
+    ).toBe(true);
+
+    let legacy = withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    legacy = withEntities(legacy, {
+      shareOperations: { [SHARE_ATTEMPT_ID]: shareOp({ createdBanId: null }) },
+    });
+    const unmatched = applied(legacy, defaultEvent("APP.FULL_CLOSE"));
+    expect(unmatched.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
+      "ACTIVE",
+    );
+    expect(
+      unmatched.traces.some(
+        (trace) =>
+          trace.identity ===
+          "LOCAL:CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING:E-32:share-unresolved",
+      ),
+    ).toBe(false);
+  });
+
   it("E-32 processes the Timer Notification Item and leaves the domain Timer unchanged", () => {
     const timer = makeTimer();
     let snapshot = withControlState(emptySnapshot(), "NOTIFICATIONS.TIMER");
