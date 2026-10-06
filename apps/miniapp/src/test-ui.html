@@ -103,7 +103,10 @@
 
     <section id="share-signal-log">
       <h2>SHARE SIGNAL LOG</h2>
-      <p>Observation only. These lines do not change Product state and do not mint a Ban.</p>
+      <p>
+        Observation only. These lines do not change Product state and do not mint a Ban.
+        RAW_TELEGRAM_EVENT lines are WebView ingress during an active share attempt.
+      </p>
       <pre id="share-signals">(no share signals yet)</pre>
     </section>
 
@@ -120,6 +123,7 @@
       import { formatMachineDiagnostics } from "/test-ui/machine-diagnostics.js";
       import {
         createShareSignalLog,
+        installRawTelegramIngressObserver,
         shareMessageFailedSignal,
         visibilityChangedSignal,
       } from "/test-ui/telegram-share-signal-log.js";
@@ -160,6 +164,14 @@
           shareSignalLog.record("window.blur");
           paintShareSignals();
         });
+        const rawIngress = installRawTelegramIngressObserver(window, (eventType, eventData) => {
+          shareSignalLog.recordRaw(eventType, eventData);
+          paintShareSignals();
+        });
+        if (rawIngress === "unavailable") {
+          shareSignalLog.record("raw-telegram-ingress:unavailable");
+          paintShareSignals();
+        }
         const webApp = telegramWebApp();
         if (!webApp || typeof webApp.onEvent !== "function") {
           shareSignalLog.record("telegram-events:onEvent-unavailable");
