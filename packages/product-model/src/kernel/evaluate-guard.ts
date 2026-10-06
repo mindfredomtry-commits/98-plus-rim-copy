@@ -584,6 +584,22 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
       const share = matchingShare(input);
       return share?.status === "ACTIVE" && share.createdBanId === null;
     }
+    case "E-13:created-ban-exists": {
+      const share = matchingShare(input);
+      return !!share && share.createdBanId !== null;
+    }
+    case "E-66:share-ui-returned": {
+      const share = matchingShare(input);
+      if (
+        !share ||
+        (share.status !== "ACTIVE" && share.status !== "CONFIRMED") ||
+        !share.createdBanId
+      ) {
+        return false;
+      }
+      const ban = input.snapshot.extended.entities.bans[share.createdBanId];
+      return !!ban && ban.senderId === input.context.currentUserId;
+    }
     case "E-65:confirmed-canonical-ban": {
       const share = matchingShare(input);
       const banId =

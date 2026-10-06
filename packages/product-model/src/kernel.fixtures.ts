@@ -143,6 +143,8 @@ export function defaultEvent(name: CanonicalEventName): CanonicalEvent {
       return eventOf(name, { operationId: OP_ID, failure: {} as Failure });
     case "CREATE_BAN.SHARE_CANCELLED":
       return eventOf(name, { shareAttemptId: SHARE_ATTEMPT_ID });
+    case "CREATE_BAN.SHARE_RETURNED":
+      return eventOf(name, { shareAttemptId: SHARE_ATTEMPT_ID });
     case "CREATE_BAN.CLAIM_OBSERVED":
       return eventOf(name, { shareAttemptId: SHARE_ATTEMPT_ID, targetBanId: BAN_ID });
     case "NOTIFICATIONS.OVERBOARD_CONFIRMED":
@@ -1102,6 +1104,22 @@ function prepareBranchSnapshot(
     case "E-13:closed-without-send":
     case "E-32:share-unresolved":
       next = withEntities(next, { shareOperations: { [SHARE_ATTEMPT_ID]: shareOp() } });
+      break;
+    case "E-13:created-ban-exists":
+    case "E-66:share-ui-returned":
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({
+            receiverId: null,
+            acceptance: "PENDING",
+            status: null,
+            boundViaTelegramShareLink: false,
+          }),
+        },
+        shareOperations: {
+          [SHARE_ATTEMPT_ID]: shareOp({ createdBanId: BAN_ID }),
+        },
+      });
       break;
     case "E-65:confirmed-canonical-ban":
       next = withEntities(next, {

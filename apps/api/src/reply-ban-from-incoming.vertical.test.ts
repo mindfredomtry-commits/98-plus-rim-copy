@@ -330,10 +330,10 @@ function replyConfirmWorld(): ProductSnapshot {
 }
 
 describe("Stage 8 Reply Ban FROM_INCOMING_BAN vertical", () => {
-  it("keeps frozen 30 / 59 / 358 and adds REPLY_BAN_FROM_INCOMING_STAGE = 8 only", () => {
+  it("keeps frozen 30 / 60 / 360 and adds REPLY_BAN_FROM_INCOMING_STAGE = 8 only", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(60);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(360);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(IDENTITY_STAGE).toBe(3);
     expect(PERSISTENCE_STAGE).toBe(4);

@@ -197,7 +197,7 @@ describe("provider-ready semantic artifacts", () => {
 
   it("preserves the frozen product counts", () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(60);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(360);
   });
 });

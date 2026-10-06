@@ -119,6 +119,12 @@ export type EventPayloadMap = {
     shareAttemptId: ShareAttemptId;
     targetBanId: BanId;
   };
+  /**
+   * Control returned from this native Telegram Share invocation, or the
+   * invocation failed before the sheet could be entered.
+   * It does not mean sent, delivered, cancelled, or claimed.
+   */
+  "CREATE_BAN.SHARE_RETURNED": { shareAttemptId: ShareAttemptId };
   "RIM.PRESS_START_CHAT": Record<string, never>;
   "RIM.PRESS_SELECT_CONTACT": Record<string, never>;
   "RIM.SELECT_CONTACT": { contactId: UserId };
@@ -223,7 +229,8 @@ export type CanonicalEventId =
   | "E-62"
   | "E-63"
   | "E-64"
-  | "E-65";
+  | "E-65"
+  | "E-66";
 
 export const ABSENT_EVENT_IDS = ["E-36", "E-37", "E-38", "E-39", "E-40"] as const;
 export type AbsentEventId = (typeof ABSENT_EVENT_IDS)[number];
@@ -580,9 +587,15 @@ export const CANONICAL_EVENT_DEFINITIONS = [
     source: "SERVER",
     references: refs("E-65 CREATE_BAN.CLAIM_OBSERVED"),
   },
+  {
+    id: "E-66",
+    name: "CREATE_BAN.SHARE_RETURNED",
+    source: "LIFECYCLE",
+    references: refs("E-66 CREATE_BAN.SHARE_RETURNED"),
+  },
 ] as const satisfies readonly CanonicalEventDefinition[];
 
-export const CANONICAL_EVENT_COUNT = 59;
+export const CANONICAL_EVENT_COUNT = 60;
 
 export function isCanonicalEventId(value: string): value is CanonicalEventId {
   return CANONICAL_EVENT_DEFINITIONS.some((definition) => definition.id === value);

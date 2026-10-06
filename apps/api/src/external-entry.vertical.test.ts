@@ -154,16 +154,16 @@ async function createTemplateBanWithToken(url: string): Promise<{
   const bans = pending.bans as Array<{ id: string; receiverId: string | null }>;
   expect(bans).toHaveLength(1);
   expect(bans[0]?.receiverId).toBeNull();
-  expect(pending.controlState).toBe("CREATE_BAN.SUCCESS");
+  expect(pending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
   expect(share.createdBanId).toBe(bans[0]?.id);
   return { token: share.token, attemptId: share.attemptId };
 }
 
 describe("Stage 12 Telegram Share Link External Entry", () => {
-  it("keeps frozen 30 / 59 / 358 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
+  it("keeps frozen 30 / 60 / 360 and exposes EXTERNAL_ENTRY_STAGE = 12", async () => {
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(60);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(360);
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(TEMPLATE_CREATE_BAN_STAGE).toBe(11);
     expect(EXTERNAL_ENTRY_STAGE).toBe(12);
@@ -175,7 +175,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     const app = await start();
     const meta = await (await fetch(`${app.url}/api/meta`)).json();
     expect(meta.EXTERNAL_ENTRY_STAGE).toBe(12);
-    expect(meta.MATRIX_RULE_COUNT).toBe(358);
+    expect(meta.MATRIX_RULE_COUNT).toBe(360);
   });
 
   it("parses start_param share_<token>", () => {
@@ -295,7 +295,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     );
     expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
     expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.id).toBe(banId);
-    expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(sender.snapshot.extended.successfulBanId).toBe(banId);
     expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.receiverId).toBe(
       userIdOf(app.runtime, USER_B_TG),
@@ -387,7 +387,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect((sender.diagnostics.bans as Array<{ receiverId: string | null }>)[0]?.receiverId).toBe(
       null,
     );
-    expect(sender.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(sender.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
   });
 
   it("E-13 after SUCCESS does not invalidate the claimable token", async () => {
@@ -397,7 +397,8 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       shareAttemptId: created.attemptId,
     });
     expect(cancelled.httpStatus).toBe(200);
-    expect(cancelled.executionStatus).not.toBe("APPLIED");
+    expect(cancelled.executionStatus).toBe("APPLIED");
+    expect(cancelled.diagnostics?.matrixResult).toBe("IGNORE_NOT_ALLOWED");
     const receiver = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
@@ -423,7 +424,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       userIdOf(app.runtime, USER_A_TG)!,
     );
     expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
-    expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(sender.snapshot.extended.successfulBanId).toBe(
       Object.values(sender.snapshot.extended.entities.bans)[0]?.id,
     );
@@ -458,7 +459,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       }>
     )[0]!;
     expect(prepared.bans).toHaveLength(1);
-    expect(prepared.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(prepared.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(preparedShare.status).toBe("ACTIVE");
     expect(preparedShare.createdBanId).toBe((prepared.bans as Array<{ id: string }>)[0]?.id);
     const token = preparedShare.token;
@@ -537,7 +538,9 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(senderSessionBans[0]?.senderId).toBe(senderUserId);
     expect(senderSessionBans[0]?.receiverId).toBe(receiverUserId);
     expect(senderSnapshotBans[0]).toEqual(senderSessionBans[0]);
-    expect(senderSession.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(senderSession.diagnostics.controlState).toBe(
+      "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    );
     expect(senderSession.diagnostics.successfulBanId).toBe(banId);
     expect(senderSnapshot.diagnostics.successfulBanId).toBe(banId);
     expect(senderSnapshot.diagnostics.controlState).toBe(senderSession.diagnostics.controlState);

@@ -533,7 +533,7 @@ function sharePendingScreen(diagnostics: TestUiScreenDiagnostics): ProductScreen
     "CreateBanSharePendingTestScreen",
     "CREATE BAN — SHARE PENDING",
     [
-      "<p>Legacy unresolved share. This screen is only for an ACTIVE share that has no Ban yet.</p>",
+      "<p>The Ban already exists. The native Telegram Share interaction has not returned yet.</p>",
       `<p>Share attempt: <code data-share-attempt="${escapeAttr(String(attemptId))}">${escapeHtml(String(attemptId))}</code></p>`,
       share?.preparedMessageId
         ? `<p>Prepared message: <code data-prepared-message="${escapeAttr(share.preparedMessageId)}">${escapeHtml(share.preparedMessageId)}</code></p>`
@@ -541,8 +541,8 @@ function sharePendingScreen(diagnostics: TestUiScreenDiagnostics): ProductScreen
       share?.shareUrl
         ? `<p>Share URL: <code data-share-url="${escapeAttr(share.shareUrl)}">${escapeHtml(share.shareUrl)}</code></p>`
         : "",
-      "<p>Telegram share completion does not create or cancel a Ban. FORBID creates the Ban. Opening the link binds the recipient to that Ban.</p>",
-      '<p class="dev-label">DEV ONLY — explicit cancel while the share is still ACTIVE. This does not mint a Ban.</p>',
+      "<p>This screen stays visible while the Telegram Share sheet is open.</p>",
+      '<p class="dev-label">DEV ONLY — legacy cancel for an ACTIVE share that has no Ban. A share whose Ban already exists is not cancelled.</p>',
       `<div class="row"><button type="button" data-event="CREATE_BAN.SHARE_CANCELLED" data-share-attempt-id="${escapeAttr(String(attemptId))}" data-dev-only="share-outcome">DEV: SHARE_CANCELLED</button></div>`,
     ].join(""),
   );

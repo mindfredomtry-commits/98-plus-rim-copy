@@ -234,6 +234,8 @@ export const EXPECTED_AUTHORITATIVE_ROW_IDS: readonly string[] = [
   ]),
   ...localIds("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING", [
     ["E-13", "closed-without-send"],
+    ["E-13", "created-ban-exists"],
+    ["E-66", "share-ui-returned"],
     ["E-32", "share-unresolved"],
     ["E-34", "if-applicable"],
     ["E-35", "if-applicable"],
@@ -351,7 +353,7 @@ export const EXPECTED_LOCAL_ROW_COUNTS = {
   "CREATE_BAN.CONFIRM.CONTACT": 10,
   "CREATE_BAN.CONFIRM.TEMPLATE": 8,
   "CREATE_BAN.CONFIRM.RIM": 15,
-  "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING": 7,
+  "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING": 9,
   "CREATE_BAN.SUCCESS": 8,
   "NOTIFICATIONS.INCOMING_BAN": 10,
   "NOTIFICATIONS.TIMER": 7,

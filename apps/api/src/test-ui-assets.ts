@@ -27,6 +27,7 @@ const TEST_UI_MODULES: Readonly<Record<string, string>> = {
   "/test-ui/product-screens.js": "product-screens.ts",
   "/test-ui/machine-diagnostics.js": "machine-diagnostics.ts",
   "/test-ui/telegram-share-signal-log.js": "telegram-share-signal-log.ts",
+  "/test-ui/telegram-share-return.js": "telegram-share-return.ts",
 };
 
 export function testUiHtmlSource(): string {

@@ -127,12 +127,14 @@
         shareMessageFailedSignal,
         visibilityChangedSignal,
       } from "/test-ui/telegram-share-signal-log.js";
+      import { createShareReturnLatch } from "/test-ui/telegram-share-return.js";
 
       const productEl = document.getElementById("product-screen");
       const machineEl = document.getElementById("machine");
       const rawEl = document.getElementById("raw");
       const shareSignalsEl = document.getElementById("share-signals");
       const shareSignalLog = createShareSignalLog();
+      const shareReturnLatch = createShareReturnLatch();
       const telegramEl = document.getElementById("telegramUserId");
       const secretEl = document.getElementById("secret");
       const switchEl = document.getElementById("switchUser");
@@ -151,10 +153,19 @@
         }
       }
 
+      function noteShareLifecycle(signal) {
+        const decision = shareReturnLatch.observe(signal);
+        if (decision.dispatch && decision.shareAttemptId) {
+          void sendEvent("CREATE_BAN.SHARE_RETURNED", { shareAttemptId: decision.shareAttemptId });
+        }
+      }
+
       function installShareSignalObservers() {
         document.addEventListener("visibilitychange", () => {
-          shareSignalLog.record(`document.visibilitychange:${document.visibilityState}`);
+          const signal = `document.visibilitychange:${document.visibilityState}`;
+          shareSignalLog.record(signal);
           paintShareSignals();
+          noteShareLifecycle(signal);
         });
         window.addEventListener("focus", () => {
           shareSignalLog.record("window.focus");
@@ -178,11 +189,13 @@
           paintShareSignals();
           return;
         }
-        const listen = (name, formatPayload) => {
+        const listen = (name, formatPayload, afterRecord) => {
           try {
             webApp.onEvent(name, (payload) => {
-              shareSignalLog.record(formatPayload ? formatPayload(payload) : name);
+              const signal = formatPayload ? formatPayload(payload) : name;
+              shareSignalLog.record(signal);
               paintShareSignals();
+              if (afterRecord) afterRecord(name);
             });
           } catch (_error) {
             shareSignalLog.record(`listener-install-failed:${name}`);
@@ -191,8 +204,8 @@
         };
         listen("shareMessageSent");
         listen("shareMessageFailed", shareMessageFailedSignal);
-        listen("activated");
-        listen("deactivated");
+        listen("activated", null, noteShareLifecycle);
+        listen("deactivated", null, noteShareLifecycle);
         listen("visibilityChanged", (payload) => visibilityChangedSignal(payload));
         listen("visibility_changed", (payload) =>
           visibilityChangedSignal(payload, "visibility_changed"),
@@ -403,45 +416,63 @@
         }
       }
 
+      async function completeShareWithoutSheet(share, code, message) {
+        const decision = shareReturnLatch.failOpen(share.attemptId);
+        if (!decision.dispatch) {
+          return;
+        }
+        await sendEvent("CREATE_BAN.SHARE_RETURNED", { shareAttemptId: share.attemptId });
+        diagnostics = {
+          ...(diagnostics || {}),
+          error: { code, message },
+        };
+        render();
+      }
+
       async function maybeInvokeTelegramShare(diag) {
         const share = diag && diag.telegramShare;
         if (!share) {
           return;
         }
         if (!share.preparedMessageId) {
-          diagnostics = {
-            ...(diag || diagnostics || {}),
-            error: {
-              code: "TELEGRAM_SHARE_PREPARE_MISSING",
-              message:
-                "preparedMessageId missing — savePreparedInlineMessage did not succeed. The Ban stays created.",
-            },
-          };
-          render();
+          await completeShareWithoutSheet(
+            share,
+            "TELEGRAM_SHARE_PREPARE_MISSING",
+            "preparedMessageId missing — savePreparedInlineMessage did not succeed. The Ban stays created.",
+          );
           return;
         }
         const webApp = telegramWebApp();
         if (!webApp || typeof webApp.shareMessage !== "function") {
-          diagnostics = {
-            ...(diag || diagnostics || {}),
-            error: {
-              code: "TELEGRAM_SHARE_UNAVAILABLE",
-              message:
-                "Telegram.WebApp.shareMessage is unavailable in this runtime. The Ban stays created.",
-            },
-          };
-          render();
+          await completeShareWithoutSheet(
+            share,
+            "TELEGRAM_SHARE_UNAVAILABLE",
+            "Telegram.WebApp.shareMessage is unavailable in this runtime. The Ban stays created.",
+          );
           return;
         }
         shareSignalLog.beginAttempt(share.attemptId);
+        shareReturnLatch.arm(share.attemptId);
         paintShareSignals();
-        await new Promise((resolve) => {
-          webApp.shareMessage(share.preparedMessageId, (success) => {
-            shareSignalLog.record(success ? "callback:true" : "callback:false");
-            paintShareSignals();
-            resolve(undefined);
+        try {
+          await new Promise((resolve, reject) => {
+            try {
+              webApp.shareMessage(share.preparedMessageId, (success) => {
+                shareSignalLog.record(success ? "callback:true" : "callback:false");
+                paintShareSignals();
+                resolve(undefined);
+              });
+            } catch (error) {
+              reject(error);
+            }
           });
-        });
+        } catch (_error) {
+          await completeShareWithoutSheet(
+            share,
+            "TELEGRAM_SHARE_OPEN_FAILED",
+            "Telegram.WebApp.shareMessage threw. The Ban stays created.",
+          );
+        }
       }
 
       async function sendOverboard() {

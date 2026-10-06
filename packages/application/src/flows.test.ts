@@ -30,7 +30,7 @@ describe("Stage 5 representative product flows", () => {
     await sender(eventOf("CREATE_BAN.PRESS_NEXT"));
     const share = await sender(eventOf("CREATE_BAN.PRESS_FORBID"));
     expect(share.status).toBe("APPLIED");
-    expect(share.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(share.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(share.pendingExternalEffects.map((item) => item.effect.type)).toEqual([
       "OPEN_TELEGRAM_SHARE",
     ]);

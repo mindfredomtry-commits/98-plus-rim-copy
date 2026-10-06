@@ -1630,8 +1630,13 @@ describe("Stage 11 TEST UI Template Create Ban screens", () => {
         },
       }),
     );
-    expect(pending.html).toContain("Legacy unresolved share");
+    expect(pending.html).toContain("The Ban already exists");
+    expect(pending.html).toContain("has not returned yet");
+    expect(pending.html).not.toContain("Legacy unresolved share");
+    expect(pending.html).not.toContain("does not exist");
     expect(pending.html).not.toContain("when the recipient opens");
+    expect(pending.html).not.toContain("Запрет создан");
+    expect(pending.html).not.toContain("Ban was sent");
     expect(pending.html).toContain('data-share-attempt="share-1"');
     expect(pending.html).not.toContain("DEV: SHARE_CONFIRMED");
     expect(pending.html).toContain("DEV: SHARE_CANCELLED");

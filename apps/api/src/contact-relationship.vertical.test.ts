@@ -130,7 +130,7 @@ async function createTemplateShare(url: string, telegramUserId: string) {
   const confirm = await dispatch(url, telegramUserId, "CREATE_BAN.PRESS_NEXT");
   expect(confirm.diagnostics?.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE");
   const forbid = await dispatch(url, telegramUserId, "CREATE_BAN.PRESS_FORBID");
-  expect(forbid.diagnostics?.controlState).toBe("CREATE_BAN.SUCCESS");
+  expect(forbid.diagnostics?.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
   const attemptId = forbid.diagnostics?.activeShareAttemptId;
   expect(attemptId).toBeTruthy();
   const created = (forbid.diagnostics?.bans ?? []) as Array<{
@@ -152,11 +152,11 @@ async function createTemplateShare(url: string, telegramUserId: string) {
 }
 
 describe("Stage 13B MVP8 Contact relationship", () => {
-  it("keeps frozen 30 / 59 / 358 under MVP10 authority", () => {
+  it("keeps frozen 30 / 60 / 360 under MVP10 authority", () => {
     expect(PRODUCT_SPECIFICATION_SOURCE.revision).toBe("10");
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(CANONICAL_EVENT_COUNT).toBe(60);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(360);
     expect(ABSENT_EVENT_IDS).toEqual(["E-36", "E-37", "E-38", "E-39", "E-40"]);
     expect(CONTACT_RELATIONSHIP_STAGE).toBe(13);
     expect(STAGE_13B_EXCLUDES).toContain("rim-ai");
@@ -244,7 +244,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([]);
 
     const senderPending = (await session(app.url, USER_A_TG, { openIfNeeded: false })).diagnostics;
-    expect(senderPending.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(senderPending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(contactIds(senderPending)).toEqual([]);
 
     const restored = await dispatch(app.url, USER_B_TG, "CONNECTION.RESTORED");
@@ -257,7 +257,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     expect(contactIds(restored.diagnostics!)).toEqual([aId]);
     const senderAfterClaim = (await session(app.url, USER_A_TG, { openIfNeeded: false }))
       .diagnostics;
-    expect(senderAfterClaim.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(senderAfterClaim.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(senderAfterClaim.successfulBanId).toBe(bound[0]?.id);
     expect(contactIds(senderAfterClaim)).toEqual([bId]);
 

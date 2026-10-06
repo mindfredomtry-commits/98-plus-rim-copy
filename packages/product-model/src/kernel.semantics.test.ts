@@ -894,7 +894,7 @@ describe("Stage 2 semantic effect audit", () => {
     expect(result.snapshot.extended.priorities.timerItemId).toBeNull();
   });
 
-  it("E-08 creates one unbound Ban, an ACTIVE share, and SUCCESS", () => {
+  it("E-08 creates one unbound Ban and an ACTIVE share, then stays SHARE_PENDING until E-66", () => {
     let snapshot = withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE");
     snapshot = {
       ...snapshot,
@@ -902,8 +902,9 @@ describe("Stage 2 semantic effect audit", () => {
     };
     const first = applied(snapshot, defaultEvent("CREATE_BAN.PRESS_FORBID"));
     expect(first.outcome).toBe("APPLIED");
-    expect(first.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(first.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(first.effects.map((effect) => effect.type)).toContain("OPEN_TELEGRAM_SHARE");
+    expect(first.effects.map((effect) => effect.type)).not.toContain("UPSERT_NOTIFICATION_ITEM");
     const bans = Object.values(first.snapshot.extended.entities.bans);
     expect(bans).toHaveLength(1);
     expect(bans[0]).toMatchObject({
@@ -920,9 +921,32 @@ describe("Stage 2 semantic effect audit", () => {
       createdBanId: bans[0]?.id,
     });
     expect(first.snapshot.extended.successfulBanId).toBe(bans[0]?.id);
+    const banBeforeReturn = structuredClone(bans[0]);
+    const shareBeforeReturn = structuredClone(shares[0]);
     const repeated = applied(first.snapshot, defaultEvent("CREATE_BAN.PRESS_FORBID"));
     expect(repeated.outcome).not.toBe("APPLIED");
     expect(Object.values(repeated.snapshot.extended.entities.bans)).toHaveLength(1);
+
+    const returned = applied(
+      first.snapshot,
+      eventOf("CREATE_BAN.SHARE_RETURNED", { shareAttemptId: shares[0]!.attemptId }),
+    );
+    expect(returned.outcome).toBe("APPLIED");
+    expect(returned.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(returned.effects.map((effect) => effect.type)).toEqual(["SET_CONTROL_STATE"]);
+    expect(returned.snapshot.extended.entities.bans[bans[0]!.id]).toEqual(banBeforeReturn);
+    expect(returned.snapshot.extended.entities.shareOperations[shares[0]!.attemptId]).toEqual(
+      shareBeforeReturn,
+    );
+    expect(returned.snapshot.extended.successfulBanId).toBe(bans[0]?.id);
+    expect(Object.values(returned.snapshot.extended.entities.notificationItems)).toEqual([]);
+    const duplicate = applied(
+      returned.snapshot,
+      eventOf("CREATE_BAN.SHARE_RETURNED", { shareAttemptId: shares[0]!.attemptId }),
+    );
+    expect(duplicate.outcome).not.toBe("APPLIED");
+    expect(duplicate.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(Object.values(duplicate.snapshot.extended.entities.bans)).toHaveLength(1);
 
     const expired = applied(first.snapshot, defaultEvent("BAN.DURATION_EXPIRED"));
     expect(Object.values(expired.snapshot.extended.entities.domainTimers)).toEqual([]);
@@ -939,6 +963,43 @@ describe("Stage 2 semantic effect audit", () => {
     expect(closed.snapshot.extended.entities.shareOperations[shares[0]!.attemptId]?.status).toBe(
       "ACTIVE",
     );
+    expect(closed.snapshot.extended.entities.shareOperations[shares[0]!.attemptId]?.token).toBe(
+      shares[0]?.token,
+    );
+  });
+
+  it("E-66 reaches Success after the recipient has already claimed", () => {
+    let snapshot = withControlState(emptySnapshot(), "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    snapshot = withEntities(snapshot, {
+      bans: {
+        [BAN_ID]: makeBan({
+          receiverId: CONTACT_A,
+          acceptance: "PENDING",
+          status: null,
+          boundViaTelegramShareLink: true,
+        }),
+      },
+      shareOperations: {
+        [SHARE_ATTEMPT_ID]: shareOp({ status: "CONFIRMED", createdBanId: BAN_ID }),
+      },
+    });
+    snapshot = {
+      ...snapshot,
+      extended: { ...snapshot.extended, successfulBanId: BAN_ID },
+    };
+    const beforeBan = structuredClone(snapshot.extended.entities.bans[BAN_ID]);
+    const beforeShare = structuredClone(
+      snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID],
+    );
+    const returned = applied(snapshot, defaultEvent("CREATE_BAN.SHARE_RETURNED"));
+    expect(returned.outcome).toBe("APPLIED");
+    expect(returned.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(returned.snapshot.extended.entities.bans[BAN_ID]).toEqual(beforeBan);
+    expect(returned.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]).toEqual(
+      beforeShare,
+    );
+    expect(returned.snapshot.extended.successfulBanId).toBe(BAN_ID);
+    expect(Object.keys(returned.snapshot.extended.entities.notificationItems)).toEqual([]);
   });
 
   it("E-45 binds the existing Template Ban and never mints another", () => {
@@ -1097,11 +1158,33 @@ describe("Stage 2 semantic effect audit", () => {
         [SHARE_ATTEMPT_ID]: shareOp({ createdBanId: BAN_ID }),
       },
     });
+    const beforeBan = structuredClone(created.extended.entities.bans[BAN_ID]);
+    const beforeShare = structuredClone(
+      created.extended.entities.shareOperations[SHARE_ATTEMPT_ID],
+    );
     const kept = applied(created, defaultEvent("CREATE_BAN.SHARE_CANCELLED"));
-    expect(kept.outcome).not.toBe("APPLIED");
-    expect(kept.snapshot.extended.entities.bans[BAN_ID]?.receiverId).toBeNull();
+    expect(kept.outcome).toBe("APPLIED");
+    expect(kept.outcome).not.toBe("KERNEL_INVARIANT");
+    expect(kept.result).toBe("IGNORE_NOT_ALLOWED");
+    expect(kept.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(kept.effects).toEqual([]);
+    expect(kept.snapshot.extended.entities.bans[BAN_ID]).toEqual(beforeBan);
+    expect(kept.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]).toEqual(beforeShare);
     expect(kept.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
       "ACTIVE",
+    );
+    expect(kept.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.token).toBe(
+      beforeShare?.token,
+    );
+    const returned = applied(kept.snapshot, defaultEvent("CREATE_BAN.SHARE_RETURNED"));
+    expect(returned.outcome).toBe("APPLIED");
+    expect(returned.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(returned.snapshot.extended.entities.bans[BAN_ID]).toEqual(beforeBan);
+    expect(returned.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
+      "ACTIVE",
+    );
+    expect(returned.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.token).toBe(
+      beforeShare?.token,
     );
   });
 
@@ -2105,6 +2188,6 @@ describe("Stage 2 semantic effect audit", () => {
 
 describe("Stage 2 semantic audit inventory", () => {
   it("keeps every Matrix row identity available for the reachability suite", () => {
-    expect(MATRIX_CONTRACT_ROWS).toHaveLength(358);
+    expect(MATRIX_CONTRACT_ROWS).toHaveLength(360);
   });
 });

@@ -9,6 +9,6 @@ describe("shared contracts package", () => {
   it("re-exports the closed Stage 1 counts", () => {
     expect(IMPLEMENTATION_STAGE).toBe(2);
     expect(PRODUCT_CONTROL_STATE_COUNT).toBe(30);
-    expect(CANONICAL_EVENT_COUNT).toBe(59);
+    expect(CANONICAL_EVENT_COUNT).toBe(60);
   });
 });

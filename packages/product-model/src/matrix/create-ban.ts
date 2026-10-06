@@ -1104,10 +1104,10 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     branch: "valid-template-draft",
     guardsText: "valid template draft",
     guards: { type: "BAN_DRAFT_VALID", draft: "CREATE" },
-    nextStateText: "CB-10 CREATE_BAN.SUCCESS",
-    nextState: "CREATE_BAN.SUCCESS",
+    nextStateText: "CB-09 CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    nextState: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
     effectsText:
-      "Создаётся ровно один canonical Ban с receiverId null из template draft; Share operation / opaque token сохраняется ACTIVE и ссылается на этот Ban; открывается Telegram Share. Success означает, что Ban создан, а не что Telegram доставил сообщение.",
+      "Создаётся ровно один canonical Ban с receiverId null из template draft; Share operation / opaque token сохраняется ACTIVE и ссылается на этот Ban; successfulBanId указывает на этот Ban; открывается Telegram Share. Product state остаётся SHARE_PENDING, пока native Telegram Share UI не вернёт управление. Success ещё не показывается.",
     effects: [{ type: "OPEN_TELEGRAM_SHARE" }, { type: "SET_CONTROL_STATE" }],
     result: "TRANSITION",
     source: {
@@ -1503,6 +1503,45 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
   matrixRow({
     kind: "LOCAL",
     state: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    eventId: "E-13",
+    eventName: "CREATE_BAN.SHARE_CANCELLED",
+    branch: "created-ban-exists",
+    guardsText:
+      "matching Share attempt has createdBanId; the canonical Ban already exists and this cancel does not apply",
+    nextStateText: "CB-09 CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    nextState: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    effectsText: "No Ban, ShareOperation, token, or receiver change. Sender remains SHARE_PENDING.",
+    effects: [],
+    result: "IGNORE_NOT_ALLOWED",
+    source: {
+      section: "Template Share timing — E-13 created Ban already exists",
+      locator: "SHARE_PENDING E-13 ignore when createdBanId is set",
+      extractedLines: "timing",
+    },
+  }),
+  matrixRow({
+    kind: "LOCAL",
+    state: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
+    eventId: "E-66",
+    eventName: "CREATE_BAN.SHARE_RETURNED",
+    branch: "share-ui-returned",
+    guardsText:
+      "shareAttemptId identifies this sender's share; createdBanId exists and that Ban exists with senderId = current USER; ShareOperation may be ACTIVE or CONFIRMED; Ban receiverId may be null or already bound",
+    nextStateText: "CB-10 CREATE_BAN.SUCCESS",
+    nextState: "CREATE_BAN.SUCCESS",
+    effectsText:
+      "SET_CONTROL_STATE only. Ban, ShareOperation, Incoming, receiver binding, and successfulBanId are unchanged. Control returned from the native Telegram Share UI, or the invocation failed before the sheet was entered. This does not mean sent, delivered, cancelled, or claimed.",
+    effects: [{ type: "SET_CONTROL_STATE" }],
+    result: "TRANSITION",
+    source: {
+      section: "Template Share timing — E-66 CREATE_BAN.SHARE_RETURNED",
+      locator: "SHARE_PENDING → SUCCESS after native share return",
+      extractedLines: "timing",
+    },
+  }),
+  matrixRow({
+    kind: "LOCAL",
+    state: "CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING",
     eventId: "E-32",
     eventName: "APP.FULL_CLOSE",
     branch: "share-unresolved",
@@ -1510,7 +1549,7 @@ export const CREATE_BAN_MATRIX_ROWS: readonly MatrixContractRow[] = [
     nextStateText: "—",
     nextState: null,
     effectsText:
-      "draft удаляется; Ban не считается отправленнымShare operation прекращается / становится недействительной для создания Ban; draft удаляется; Ban не создаётся; поздний Share result этой operation не может создать Ban.",
+      "Session ends and the Create Ban draft is cleared. An ACTIVE share with createdBanId null is cancelled. A share whose Ban already exists stays claimable and is not invalidated.",
     effects: [{ type: "SET_CREATE_BAN_DRAFT" }, { type: "END_SESSION" }],
     result: "SESSION_END",
     source: {
