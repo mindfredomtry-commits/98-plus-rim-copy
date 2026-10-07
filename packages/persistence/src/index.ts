@@ -19,6 +19,7 @@ export { MemorySqlClient } from "./memory-sql.ts";
 export {
   allMigrationSql,
   banSourceProposalSql,
+  canonicalMigrationScripts,
   IDENTITY_MIGRATION_AUTHORITY,
   identitySchemaSql,
   MIGRATION_CHAIN,
@@ -30,8 +31,20 @@ export {
   telegramPersistentReentryCtaOpportunitySql,
   telegramPersistentReentrySql,
 } from "./migrations.ts";
+export type { CanonicalMigrationScript } from "./migrations.ts";
+export { ProductionMigrationError } from "./production-migrations.ts";
+export type {
+  MigrationScript,
+  ProductionMigrationErrorCode,
+  ProductionMigrationReport,
+} from "./production-migrations.ts";
 export { PostgresProductStore } from "./postgres-store.ts";
-export { bindSqlParams, normalizeDriverRows, openPostgresPersistence } from "./postgres-client.ts";
+export {
+  bindSqlParams,
+  normalizeDriverRows,
+  openPostgresPersistence,
+  redactConnectionString,
+} from "./postgres-client.ts";
 export type {
   PostgresPersistence,
   PostgresPoolConfig,

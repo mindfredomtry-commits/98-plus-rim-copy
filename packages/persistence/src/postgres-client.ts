@@ -1,15 +1,19 @@
 import { Pool, type PoolClient, type PoolConfig, type QueryResult } from "pg";
-import { allMigrationSql } from "./migrations.ts";
-import type { PersistenceSqlClient } from "./types.ts";
 import type { SqlQueryResult } from "@98plus/identity";
+import { allMigrationSql, canonicalMigrationScripts } from "./migrations.ts";
+import {
+  runProductionMigrations,
+  type MigrationScript,
+  type ProductionMigrationReport,
+} from "./production-migrations.ts";
+import type { PersistenceSqlClient } from "./types.ts";
 
 const INT8_OID = 20;
 
 /**
  * Explicit Postgres pool configuration.
- * Construction does not connect. Production main does not call this.
- * `max` is optional so MVP18 can size the pool; node-postgres supplies its own
- * default when max is omitted.
+ * Construction does not connect. `max` is optional. When it is omitted,
+ * node-postgres uses its driver default. That default is not a capacity decision.
  */
 export type PostgresPoolConfig = Readonly<{
   connectionString: string;
@@ -27,7 +31,15 @@ export type PostgresPoolStats = Readonly<{
 
 export type PostgresPersistence = Readonly<{
   sql: PersistenceSqlClient;
+  /** Test harness. Replays every canonical script and does not record history. */
   applyMigrations(): Promise<void>;
+  /**
+   * Production runner. Applies canonical migrations 001–009 once, recording
+   * schema_migrations. Does not fall back to any other store.
+   */
+  migrate(options?: {
+    readonly migrations?: readonly MigrationScript[];
+  }): Promise<ProductionMigrationReport>;
   close(): Promise<void>;
   stats(): PostgresPoolStats;
 }>;
@@ -57,15 +69,36 @@ export function normalizeDriverRows<T>(result: Pick<QueryResult, "fields" | "row
   });
 }
 
+function connectionPassword(connectionString: string): string | null {
+  try {
+    const password = new URL(connectionString).password;
+    if (password.length < 4) {
+      return null;
+    }
+    return decodeURIComponent(password);
+  } catch {
+    return null;
+  }
+}
+
 export function redactConnectionString(error: unknown, connectionString: string): unknown {
   if (!(error instanceof Error) || connectionString.length === 0) {
     return error;
   }
-  if (error.message.includes(connectionString)) {
-    error.message = error.message.replaceAll(connectionString, "[redacted]");
-  }
-  if (error.stack?.includes(connectionString)) {
-    error.stack = error.stack.replaceAll(connectionString, "[redacted]");
+  const password = connectionPassword(connectionString);
+  const redact = (value: string): string => {
+    let next = value;
+    if (connectionString.length > 0 && next.includes(connectionString)) {
+      next = next.replaceAll(connectionString, "[redacted]");
+    }
+    if (password !== null && password.length >= 4 && next.includes(password)) {
+      next = next.replaceAll(password, "[redacted]");
+    }
+    return next;
+  };
+  error.message = redact(error.message);
+  if (error.stack !== undefined) {
+    error.stack = redact(error.stack);
   }
   return error;
 }
@@ -166,6 +199,32 @@ export function openPostgresPersistence(config: PostgresPoolConfig): PostgresPer
           await connection.query("ROLLBACK").catch(() => undefined);
           throw redactConnectionString(error, connectionString);
         }
+      } finally {
+        connection.release();
+      }
+    },
+    async migrate(options?: {
+      readonly migrations?: readonly MigrationScript[];
+    }): Promise<ProductionMigrationReport> {
+      const connection = await pool.connect();
+      const session = {
+        async query<T>(
+          sql: string,
+          params: readonly unknown[] = [],
+        ): Promise<{ readonly rows: T[] }> {
+          try {
+            const result = await connection.query(sql, [...params]);
+            return { rows: result.rows as T[] };
+          } catch (error) {
+            throw redactConnectionString(error, connectionString);
+          }
+        },
+      };
+      try {
+        return await runProductionMigrations(
+          session,
+          options?.migrations ?? canonicalMigrationScripts(),
+        );
       } finally {
         connection.release();
       }

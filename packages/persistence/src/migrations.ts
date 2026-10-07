@@ -103,6 +103,19 @@ export function shareOperationTokenUniqueSql(): string {
   return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "009_share_operation_token_unique.sql"), "utf8");
 }
 
+export type CanonicalMigrationScript = Readonly<{
+  id: string;
+  sql: string;
+}>;
+
+/** Stable ids are the canonical file paths. SQL is read from those files. */
+export function canonicalMigrationScripts(): readonly CanonicalMigrationScript[] {
+  return MIGRATION_CHAIN.map((entry) => ({
+    id: entry.file,
+    sql: readFileSync(entry.path, "utf8"),
+  }));
+}
+
 export function allMigrationSql(): readonly string[] {
   return [
     identitySchemaSql(),

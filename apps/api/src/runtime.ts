@@ -32,6 +32,7 @@ import {
 } from "@98plus/persistence";
 import type { UserId } from "@98plus/product-model";
 import { MemorySqlRegisteredUserDirectory, type RegisteredUserDirectory } from "./directory.ts";
+import { PersistenceConfigError } from "./persistence-config.ts";
 import { toTestUiDiagnostics, type TestUiDiagnostics } from "./diagnostics.ts";
 import {
   selectRimProvider,
@@ -52,6 +53,8 @@ export type TelegramPersistentReentryBootstrapSend = "success" | "failure" | "fa
 
 export type CreateBanContactRuntime = Readonly<{
   sql: PersistenceSqlClient;
+  /** One mode for the single SQL client shared by identity, product, and directory. */
+  persistenceMode: "memory" | "postgres";
   identityStore: IdentityStore;
   productStore: ProductStore;
   directory: RegisteredUserDirectory;
@@ -94,6 +97,8 @@ export type CreateBanContactRuntime = Readonly<{
 
 export type CreateBanContactRuntimeOptions = Readonly<{
   sql?: PersistenceSqlClient;
+  /** Explicit selection. When set, it must match the SQL client. There is no fallback. */
+  persistence?: "memory" | "postgres";
   identityStore?: IdentityStore;
   productStore?: ProductStore;
   directory?: RegisteredUserDirectory;
@@ -172,11 +177,27 @@ export function rimProviderTools(runtime: CreateBanContactRuntime): {
   };
 }
 
+function resolvePersistenceMode(
+  sql: PersistenceSqlClient,
+  requested: "memory" | "postgres" | undefined,
+): "memory" | "postgres" {
+  const actual = sql instanceof MemorySqlClient ? "memory" : "postgres";
+  if (requested !== undefined && requested !== actual) {
+    throw new PersistenceConfigError(
+      requested === "postgres"
+        ? "postgres persistence cannot use MemorySqlClient"
+        : "memory persistence cannot use a PostgreSQL client",
+    );
+  }
+  return actual;
+}
+
 export function createCreateBanContactRuntime(
   options: CreateBanContactRuntimeOptions = {},
 ): CreateBanContactRuntime {
   const provider = resolveRimProvider(options);
   const sql = options.sql ?? new MemorySqlClient();
+  const persistenceMode = resolvePersistenceMode(sql, options.persistence);
   const identityStore = options.identityStore ?? new PostgresIdentityStore(sql);
   const productStore = options.productStore ?? new PostgresProductStore(sql);
   const directory = options.directory ?? new MemorySqlRegisteredUserDirectory(sql);
@@ -184,6 +205,7 @@ export function createCreateBanContactRuntime(
     options.config ?? (options.env ? loadIdentityConfig(options.env) : developmentIdentityConfig());
   return {
     sql,
+    persistenceMode,
     identityStore,
     productStore,
     directory,

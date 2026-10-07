@@ -35,12 +35,12 @@ describe("PostgreSQL client contract helpers", () => {
     expect(normalized[1]?.created_seq).toBe("9007199254740993");
   });
 
-  it("removes a connection string from a thrown error", () => {
+  it("removes a connection string and its password from a thrown error", () => {
     const connectionString = "postgres://mvp17:unit-test-secret@127.0.0.1:1/none";
-    const error = new Error(`failed ${connectionString}`);
+    const error = new Error(`failed ${connectionString} password unit-test-secret`);
     error.stack = `stack ${connectionString}`;
     redactConnectionString(error, connectionString);
-    expect(error.message).toBe("failed [redacted]");
+    expect(error.message).toBe("failed [redacted] password [redacted]");
     expect(error.stack).not.toContain("unit-test-secret");
     expect(error.stack).toContain("[redacted]");
   });
