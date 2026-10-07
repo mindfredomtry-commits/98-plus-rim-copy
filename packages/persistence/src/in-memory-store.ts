@@ -209,8 +209,10 @@ export class InMemoryProductStore implements ProductStore {
 
   async withCheckPairLock<T>(
     pairId: string,
+    currentUserId: UserId,
     run: (context: CheckPairLockContext) => Promise<T>,
   ): Promise<T> {
+    this.tables.lockSession(currentUserId);
     return this.tables.withPairLock(pairId, async () =>
       run({
         pair: this.tables.getPair(pairId) ?? null,

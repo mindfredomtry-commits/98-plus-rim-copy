@@ -177,7 +177,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
     const storeB = new PostgresProductStore(client);
 
     const names = await Promise.all([
-      storeA.withCheckPairLock(PAIR_ID, async (ctx) => {
+      storeA.withCheckPairLock(PAIR_ID, USER_ID, async (ctx) => {
         const loaded = await ctx.loadProductSnapshot(USER_ID);
         const pair = ctx.pair ?? loaded.snapshot.extended.entities.checkPairs[PAIR_ID]!;
         const other = pair.senderAnswer;
@@ -203,7 +203,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
         });
         return event.name;
       }),
-      storeB.withCheckPairLock(PAIR_ID, async (ctx) => {
+      storeB.withCheckPairLock(PAIR_ID, OTHER_USER, async (ctx) => {
         const loaded = await ctx.loadProductSnapshot(OTHER_USER);
         const pair = ctx.pair ?? loaded.snapshot.extended.entities.checkPairs[PAIR_ID]!;
         const other = pair.receiverAnswer;
@@ -269,7 +269,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
     const client = new MemorySqlClient();
     await seedSharedPair(client);
     const store = new PostgresProductStore(client);
-    await store.withCheckPairLock(PAIR_ID, async (ctx) => {
+    await store.withCheckPairLock(PAIR_ID, USER_ID, async (ctx) => {
       const loaded = await ctx.loadProductSnapshot(USER_ID);
       const result = reduce(loaded.snapshot, firstEvent("RECEIVER"), {
         ...kernelContext(),
@@ -282,7 +282,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
         result,
       });
     });
-    await store.withCheckPairLock(PAIR_ID, async (ctx) => {
+    await store.withCheckPairLock(PAIR_ID, OTHER_USER, async (ctx) => {
       const loaded = await ctx.loadProductSnapshot(OTHER_USER);
       const result = reduce(
         loaded.snapshot,

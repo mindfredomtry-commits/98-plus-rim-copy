@@ -181,6 +181,7 @@ export type ProductStore = {
   ): Promise<ReleaseTelegramPersistentReentryBootstrapClaimResult>;
   withCheckPairLock<T>(
     pairId: string,
+    currentUserId: UserId,
     run: (context: CheckPairLockContext) => Promise<T>,
   ): Promise<T>;
   listRelationshipBans(

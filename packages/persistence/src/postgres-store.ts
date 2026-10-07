@@ -366,9 +366,12 @@ export class PostgresProductStore implements ProductStore {
 
   async withCheckPairLock<T>(
     pairId: string,
+    currentUserId: UserId,
     run: (context: CheckPairLockContext) => Promise<T>,
   ): Promise<T> {
     return this.client.transaction(async (tx) => {
+      // Session row, then CheckPair row. Snapshot writes use the same order.
+      await tx.query(SQL.selectSessionForUpdate, [currentUserId]);
       const locked = await tx.query<PairSqlRow>(SQL.selectPairForUpdate, [pairId]);
       const pair = locked.rows[0] ? pairFromRow(locked.rows[0]) : null;
       return run({
@@ -479,6 +482,8 @@ export class PostgresProductStore implements ProductStore {
         if (classification.action === "REJECTED") {
           return { status: "REJECTED" as const, reason: classification.reason };
         }
+        // Share row is already locked. Sessions are locked in user-id order
+        // before later CheckPair locks inside writeOn.
         for (const userId of [lookup.ownerId, input.receiverId].sort()) {
           await tx.query(SQL.selectSessionForUpdate, [userId]);
         }
@@ -877,7 +882,10 @@ export class PostgresProductStore implements ProductStore {
         timer.checkPairCreated,
       ]);
     }
-    for (const pair of Object.values(entities.checkPairs)) {
+    const pairs = Object.values(entities.checkPairs).sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+    for (const pair of pairs) {
       const locked = await tx.query<PairSqlRow>(SQL.selectPairForUpdate, [pair.id]);
       assertCheckPairWriteAllowed(locked.rows[0] ? pairFromRow(locked.rows[0]) : undefined, pair);
       await tx.query(SQL.upsertPair, [

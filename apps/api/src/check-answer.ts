@@ -139,73 +139,77 @@ export async function completeCheckAnswer(
     );
   }
   const answer = answerOfPress(press.event.name);
-  return runtime.productStore.withCheckPairLock(item.checkPairId, async (locked) => {
-    const loaded = await locked.loadProductSnapshot(context.currentUserId);
-    const pair = locked.pair ?? loaded.snapshot.extended.entities.checkPairs[item.checkPairId];
-    const currentItem = loaded.snapshot.extended.entities.notificationItems[itemId];
-    const currentPending = pendingUnappliedCheckAnswer(loaded.snapshot);
-    if (!pair || !currentItem || currentItem.kind !== "CHECK" || !currentPending) {
-      return press;
-    }
-    if (
-      pair.id !== currentItem.checkPairId ||
-      currentPending.originatingItemId !== itemId ||
-      currentPending.resultApplied
-    ) {
-      return press;
-    }
-    const event = confirmationEvent(pair, currentItem.role, itemId as NotificationItemId, answer);
-    if (!event) {
-      return press;
-    }
-    const canonical = toCanonicalEvent(event);
-    const transition = reduce(loaded.snapshot, canonical, {
-      now: asInstant(runtime.clock.nowMs()),
-      currentUserId: context.currentUserId,
-      allocateId: runtime.allocateId,
-    });
-    if (transition.outcome !== "APPLIED") {
+  return runtime.productStore.withCheckPairLock(
+    item.checkPairId,
+    context.currentUserId,
+    async (locked) => {
+      const loaded = await locked.loadProductSnapshot(context.currentUserId);
+      const pair = locked.pair ?? loaded.snapshot.extended.entities.checkPairs[item.checkPairId];
+      const currentItem = loaded.snapshot.extended.entities.notificationItems[itemId];
+      const currentPending = pendingUnappliedCheckAnswer(loaded.snapshot);
+      if (!pair || !currentItem || currentItem.kind !== "CHECK" || !currentPending) {
+        return press;
+      }
+      if (
+        pair.id !== currentItem.checkPairId ||
+        currentPending.originatingItemId !== itemId ||
+        currentPending.resultApplied
+      ) {
+        return press;
+      }
+      const event = confirmationEvent(pair, currentItem.role, itemId as NotificationItemId, answer);
+      if (!event) {
+        return press;
+      }
+      const canonical = toCanonicalEvent(event);
+      const transition = reduce(loaded.snapshot, canonical, {
+        now: asInstant(runtime.clock.nowMs()),
+        currentUserId: context.currentUserId,
+        allocateId: runtime.allocateId,
+      });
+      if (transition.outcome !== "APPLIED") {
+        return {
+          status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+          currentUserId: context.currentUserId,
+          event: canonical,
+          outcome: transition.outcome,
+          result: transition.result,
+          controlState: loaded.snapshot.controlState,
+          snapshot: loaded.snapshot,
+          revision: loaded.revision,
+          persisted: false,
+          effects: transition.effects,
+          pendingExternalEffects: pendingExternalEffects(transition.effects),
+          traces: transition.traces,
+          composition: transition.composition,
+          kernelError: transition.error,
+          error: null,
+        };
+      }
+      const saved = await locked.persistTransition({
+        currentUserId: context.currentUserId,
+        expectedRevision: loaded.revision,
+        result: transition,
+      });
       return {
-        status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+        status: "APPLIED",
         currentUserId: context.currentUserId,
         event: canonical,
         outcome: transition.outcome,
         result: transition.result,
-        controlState: loaded.snapshot.controlState,
-        snapshot: loaded.snapshot,
-        revision: loaded.revision,
-        persisted: false,
+        controlState: saved.snapshot.controlState,
+        snapshot: saved.snapshot,
+        revision: saved.revision,
+        persisted: true,
         effects: transition.effects,
         pendingExternalEffects: pendingExternalEffects(transition.effects),
         traces: transition.traces,
         composition: transition.composition,
-        kernelError: transition.error,
+        kernelError: null,
         error: null,
       };
-    }
-    const saved = await locked.persistTransition({
-      currentUserId: context.currentUserId,
-      expectedRevision: loaded.revision,
-      result: transition,
-    });
-    return {
-      status: "APPLIED",
-      currentUserId: context.currentUserId,
-      event: canonical,
-      outcome: transition.outcome,
-      result: transition.result,
-      controlState: saved.snapshot.controlState,
-      snapshot: saved.snapshot,
-      revision: saved.revision,
-      persisted: true,
-      effects: transition.effects,
-      pendingExternalEffects: pendingExternalEffects(transition.effects),
-      traces: transition.traces,
-      composition: transition.composition,
-      kernelError: null,
-      error: null,
-    };
-  });
+    },
+  );
 }
 
 export function checkAnswerOrchestration(

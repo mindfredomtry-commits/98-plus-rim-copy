@@ -124,7 +124,7 @@ describe("Stage 5 executeProductEvent", () => {
       listRelationshipBans: (left, right) => inner.listRelationshipBans(left, right),
       listRelationshipContextSources: (left, right) =>
         inner.listRelationshipContextSources(left, right),
-      withCheckPairLock: (pairId, run) => inner.withCheckPairLock(pairId, run),
+      withCheckPairLock: (pairId, userId, run) => inner.withCheckPairLock(pairId, userId, run),
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
@@ -181,7 +181,7 @@ describe("Stage 5 executeProductEvent", () => {
       listRelationshipBans: (left, right) => inner.listRelationshipBans(left, right),
       listRelationshipContextSources: (left, right) =>
         inner.listRelationshipContextSources(left, right),
-      withCheckPairLock: (pairId, run) => inner.withCheckPairLock(pairId, run),
+      withCheckPairLock: (pairId, userId, run) => inner.withCheckPairLock(pairId, userId, run),
       findShareByToken: (token) => inner.findShareByToken(token),
       getBanById: (banId) => inner.getBanById(banId),
       bindBanReceiver: (banId, receiverId) => inner.bindBanReceiver(banId, receiverId),
