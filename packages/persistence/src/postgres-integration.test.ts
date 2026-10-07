@@ -402,7 +402,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL persistence client", () => {
       ]),
     );
     const index = await db.sql.query(
-      "SELECT indexname FROM pg_indexes WHERE indexname = 'share_operations_token_key'",
+      "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'share_operations_token_key'",
       [],
     );
     expect(index.rows).toHaveLength(1);
