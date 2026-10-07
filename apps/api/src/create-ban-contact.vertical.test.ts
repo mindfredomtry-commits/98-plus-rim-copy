@@ -166,7 +166,7 @@ async function userBId(app: Started, diagnostics: TestUiDiagnostics): Promise<st
   if (listed) {
     return listed.userId;
   }
-  const fromSql = userIdOf(app.runtime, USER_B_TG);
+  const fromSql = await userIdOf(app.runtime, USER_B_TG);
   expect(fromSql).not.toBeNull();
   return fromSql!;
 }
@@ -177,7 +177,7 @@ async function reachWhatContact(
 ): Promise<{ a: TestUiDiagnostics; bId: string }> {
   await session(url, USER_A_TG);
   await session(url, USER_B_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const opened = await session(url, USER_A_TG);
   expect(opened.controlState).toBe("RIM.LOBBY");
   const who = requireDiagnostics(await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_START"));
@@ -334,7 +334,7 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
       durationMinutes: 10,
       proposalId: null,
     });
-    expect(diagnostics.currentUserId).toBe(userIdOf(app.runtime, USER_A_TG));
+    expect(diagnostics.currentUserId).toBe(await userIdOf(app.runtime, USER_A_TG));
   });
 
   it("A–I, R. one Confirm click runs E-08 then backend E-10 to SUCCESS", async () => {
@@ -447,7 +447,7 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
   it("S. client-spoofed UserId cannot become sender", async () => {
     const app = await start();
     const opened = await session(app.url, USER_A_TG);
-    const spoofed = userIdOf(app.runtime, USER_B_TG);
+    const spoofed = await userIdOf(app.runtime, USER_B_TG);
     const startedBan = requireDiagnostics(
       await dispatch(
         app.url,

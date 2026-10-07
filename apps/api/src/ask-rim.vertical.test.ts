@@ -66,9 +66,9 @@ async function start(steps: readonly FakeRimAiStep[] = [], contextFailures = 0) 
     seedTelegramUserIds: [USER_A_TG, USER_B_TG, USER_C_TG],
   });
   started.push(app);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_C_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_B_TG, USER_C_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_C_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_B_TG, USER_C_TG);
   return { app, rimAi };
 }
 
@@ -147,8 +147,8 @@ function activeStatus(diagnostics: TestUiDiagnostics): NotificationJson {
   return item!;
 }
 
-function userId(app: Started, telegramUserId: string): string {
-  const id = userIdOf(app.runtime, telegramUserId);
+async function userId(app: Started, telegramUserId: string): Promise<string> {
+  const id = await userIdOf(app.runtime, telegramUserId);
   expect(id).toBeTruthy();
   return id!;
 }
@@ -162,7 +162,7 @@ async function reachReceiverOverboard(app: Started): Promise<{
   await session(app.url, USER_B_TG);
   const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   const bId = who.contacts.find((contact) => contact.telegramUserId === USER_B_TG)?.userId;
-  expect(bId).toBe(userId(app, USER_B_TG));
+  expect(bId).toBe(await userId(app, USER_B_TG));
   requireDiagnostics(
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),
   );
@@ -211,7 +211,7 @@ describe("Feature 9 Ask RIM vertical", () => {
   it("opens Ask RIM from the receiver Status, sends with origin, and returns to that item", async () => {
     const { app, rimAi } = await start();
     const { banId, statusItem } = await reachReceiverOverboard(app);
-    const senderId = userId(app, USER_A_TG);
+    const senderId = await userId(app, USER_A_TG);
 
     const opened = requireDiagnostics(
       await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_ASK_RIM"),
@@ -365,7 +365,7 @@ describe("Feature 9 Ask RIM vertical", () => {
     const opened = requireDiagnostics(
       await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_ASK_RIM"),
     );
-    const third = userId(app, USER_C_TG);
+    const third = await userId(app, USER_C_TG);
     requireDiagnostics(await dispatch(app.url, USER_B_TG, "RIM.PRESS_SELECT_CONTACT"));
     const changed = requireDiagnostics(
       await dispatch(app.url, USER_B_TG, "RIM.SELECT_CONTACT", { contactId: third }),
@@ -387,7 +387,7 @@ describe("Feature 9 Ask RIM vertical", () => {
   it("opens Ask RIM from the sender Status and returns to that unprocessed item", async () => {
     const { app, rimAi } = await start();
     const { banId, statusItem } = await reachSenderOverboard(app);
-    const receiverId = userId(app, USER_B_TG);
+    const receiverId = await userId(app, USER_B_TG);
     const opened = requireDiagnostics(
       await dispatch(app.url, USER_A_TG, "NOTIFICATIONS.PRESS_ASK_RIM"),
     );

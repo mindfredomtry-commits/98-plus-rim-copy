@@ -26,6 +26,7 @@ import {
   type CreateBanContactRuntime,
 } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
+import { memoryTables } from "./seed-contact.ts";
 
 const USER_A_TG = "1001";
 const USER_B_TG = "1002";
@@ -201,7 +202,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(bans).toHaveLength(1);
     expect(bans[0]?.id).toBeTruthy();
     expect(bans[0]?.banText).toBe(BAN_TEXT);
-    const receiverUserId = userIdOf(app.runtime, USER_B_TG);
+    const receiverUserId = await userIdOf(app.runtime, USER_B_TG);
     expect(bans[0]?.receiverId).toBe(receiverUserId);
     const incoming = receiver.diagnostics.incomingItems as Array<{
       id: string;
@@ -291,14 +292,14 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     });
     const banId = (opened.diagnostics.bans as Array<{ id: string }>)[0]?.id;
     const sender = await app.runtime.productStore.loadProductSnapshot(
-      userIdOf(app.runtime, USER_A_TG)!,
+      (await userIdOf(app.runtime, USER_A_TG))!,
     );
     expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
     expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.id).toBe(banId);
     expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     expect(sender.snapshot.extended.successfulBanId).toBe(banId);
     expect(Object.values(sender.snapshot.extended.entities.bans)[0]?.receiverId).toBe(
-      userIdOf(app.runtime, USER_B_TG),
+      await userIdOf(app.runtime, USER_B_TG),
     );
   });
 
@@ -421,7 +422,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(outcomes.filter((outcome) => outcome === "RESOLVED")).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome === "REJECTED")).toHaveLength(1);
     const sender = await app.runtime.productStore.loadProductSnapshot(
-      userIdOf(app.runtime, USER_A_TG)!,
+      (await userIdOf(app.runtime, USER_A_TG))!,
     );
     expect(Object.values(sender.snapshot.extended.entities.bans)).toHaveLength(1);
     expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
@@ -437,8 +438,8 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
 
   it("fresh HTTP session and snapshot both hydrate the claimed Ban for sender and receiver", async () => {
     const app = await start();
-    const senderUserId = userIdOf(app.runtime, USER_A_TG);
-    const receiverUserId = userIdOf(app.runtime, USER_B_TG);
+    const senderUserId = await userIdOf(app.runtime, USER_A_TG);
+    const receiverUserId = await userIdOf(app.runtime, USER_B_TG);
     expect(senderUserId).toBeTruthy();
     expect(receiverUserId).toBeTruthy();
     expect(senderUserId).not.toBe(receiverUserId);
@@ -492,7 +493,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     });
     const banId = claimedBan.id;
 
-    const stored = app.runtime.sql.tables.snapshot();
+    const stored = memoryTables(app.runtime).snapshot();
     expect(stored.bans.size).toBe(1);
     const storedBan = [...stored.bans.values()][0]!;
     expect(storedBan.id).toBe(banId);

@@ -81,8 +81,8 @@ async function start(
     seedTelegramUserIds: [USER_A_TG, USER_B_TG, USER_C_TG],
   });
   started.push(app);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_C_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_C_TG);
   return app;
 }
 
@@ -116,8 +116,8 @@ async function dispatch(
   return body.diagnostics!;
 }
 
-function contactId(app: Started, telegramUserId: string): string {
-  const userId = userIdOf(app.runtime, telegramUserId);
+async function contactId(app: Started, telegramUserId: string): Promise<string> {
+  const userId = await userIdOf(app.runtime, telegramUserId);
   expect(userId).toBeTruthy();
   return userId!;
 }
@@ -173,8 +173,8 @@ describe("Feature 8 RIM vertical", () => {
     ]);
     const opened = await session(app.url, USER_A_TG);
     expect(opened.controlState).toBe("RIM.LOBBY");
-    const other = contactId(app, USER_B_TG);
-    const third = contactId(app, USER_C_TG);
+    const other = await contactId(app, USER_B_TG);
+    const third = await contactId(app, USER_C_TG);
 
     const chat = await dispatch(app.url, USER_A_TG, "RIM.PRESS_START_CHAT");
     expect(chat.controlState).toBe("RIM.CHAT");
@@ -312,7 +312,7 @@ describe("Feature 8 RIM vertical", () => {
     );
     const opened = await session(app.url, USER_A_TG);
     expect(opened.controlState).toBe("RIM.LOBBY");
-    const other = contactId(app, USER_B_TG);
+    const other = await contactId(app, USER_B_TG);
     await dispatch(app.url, USER_A_TG, "RIM.PRESS_START_CHAT");
     await dispatch(app.url, USER_A_TG, "RIM.PRESS_SELECT_CONTACT");
     const failed = await dispatch(app.url, USER_A_TG, "RIM.SELECT_CONTACT", { contactId: other });
@@ -370,7 +370,7 @@ describe("Feature 8 RIM vertical", () => {
     const app = await start([{ kind: "MESSAGE", text: "ok" }]);
     const opened = await session(app.url, USER_A_TG);
     expect(opened.controlState).toBe("RIM.LOBBY");
-    const other = contactId(app, USER_B_TG);
+    const other = await contactId(app, USER_B_TG);
     const context = await authenticateRuntime(app.runtime, {
       method: "development",
       secret: DEV_SECRET,
@@ -446,8 +446,8 @@ describe("Feature 8 RIM vertical", () => {
         ],
       },
     ]);
-    const userA = contactId(app, USER_A_TG);
-    const userB = contactId(app, USER_B_TG);
+    const userA = await contactId(app, USER_A_TG);
+    const userB = await contactId(app, USER_B_TG);
     const beforeB = await snapshot(app.url, USER_B_TG);
     expect(beforeB.currentUserId).toBe(userB);
     expect(beforeB.currentUserId).not.toBe(userA);

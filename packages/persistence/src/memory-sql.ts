@@ -136,6 +136,28 @@ export class MemorySqlClient implements PersistenceSqlClient {
         this.telegramByUser.set(String(params[0]), String(params[1]));
         return rows([]);
       }
+      case SQL.selectIdentityByTelegramUserId: {
+        const existing = this.tables.findIdentityByTelegramUserId(String(params[0]));
+        return rows(
+          existing ? [{ user_id: existing.userId, telegram_user_id: existing.telegramUserId }] : [],
+        );
+      }
+      case SQL.selectIdentitiesByUserIds: {
+        const ids = new Set((params[0] as string[]) ?? []);
+        return rows(
+          [...this.tables.snapshot().identities.values()]
+            .filter((row) => ids.has(row.userId))
+            .map((row) => ({ user_id: row.userId, telegram_user_id: row.telegramUserId })),
+        );
+      }
+      case SQL.selectAllIdentities: {
+        return rows(
+          [...this.tables.snapshot().identities.values()].map((row) => ({
+            user_id: row.userId,
+            telegram_user_id: row.telegramUserId,
+          })),
+        );
+      }
       case SQL.selectSessionForUpdate: {
         const session = this.tables.lockSession(String(params[0]));
         return rows(session ? [sessionToRow(session)] : []);

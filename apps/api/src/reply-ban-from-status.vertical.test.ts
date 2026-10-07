@@ -297,10 +297,10 @@ async function createRealIncomingFromA(
 ): Promise<{ ban: BanJson; bId: string }> {
   await ensureLobby(app, USER_A_TG);
   await session(app.url, USER_B_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   const listed = who.contacts.find((contact) => contact.telegramUserId === USER_B_TG);
-  const bId = listed?.userId ?? userIdOf(app.runtime, USER_B_TG);
+  const bId = listed?.userId ?? (await userIdOf(app.runtime, USER_B_TG));
   requireDiagnostics(
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),
   );

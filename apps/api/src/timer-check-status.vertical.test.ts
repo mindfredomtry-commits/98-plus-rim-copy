@@ -30,7 +30,7 @@ import {
 } from "./runtime.ts";
 import type { TestUiDiagnostics } from "./diagnostics.ts";
 import type { ContactSendOrchestration } from "./contact-send.ts";
-import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
+import { grantContactBetweenTelegramUsers, memoryTables } from "./seed-contact.ts";
 
 const USER_A_TG = "1001";
 const USER_B_TG = "1002";
@@ -203,10 +203,10 @@ function pairsOf(diagnostics: TestUiDiagnostics): PairJson[] {
 async function createRealIncomingFromA(app: Started): Promise<{ ban: BanJson }> {
   await session(app.url, USER_A_TG);
   await session(app.url, USER_B_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   const listed = who.contacts.find((contact) => contact.telegramUserId === USER_B_TG);
-  const bId = listed?.userId ?? userIdOf(app.runtime, USER_B_TG);
+  const bId = listed?.userId ?? (await userIdOf(app.runtime, USER_B_TG));
   requireDiagnostics(
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),
   );
@@ -566,13 +566,13 @@ describe("Stage 9 Timer expiration → Check → Status vertical", () => {
     );
     expect(operation).toBeTruthy();
     const userId = press.currentUserId;
-    app.runtime.sql.tables.upsertOperation(userId, {
+    memoryTables(app.runtime).upsertOperation(userId, {
       ...operation!,
       supersededByExternalEntry: true,
     });
-    const sessionRow = app.runtime.sql.tables.lockSession(userId);
+    const sessionRow = memoryTables(app.runtime).lockSession(userId);
     expect(sessionRow).toBeTruthy();
-    app.runtime.sql.tables.writeSession({
+    memoryTables(app.runtime).writeSession({
       ...sessionRow!,
       controlState: "NOTIFICATIONS.INCOMING_BAN",
     });

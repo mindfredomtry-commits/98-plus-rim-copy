@@ -1,5 +1,6 @@
 import type { ApplicationExecutionResult } from "@98plus/application";
 import { asTelegramUserId, type AuthenticatedContext } from "@98plus/identity";
+import { SQL } from "@98plus/persistence";
 import {
   asInstant,
   reduce,
@@ -111,12 +112,20 @@ export async function applyElapsedDomainTimers(
   return last;
 }
 
+/**
+ * Test/worker helper. Production expiry stays request-scoped through
+ * applyElapsedDomainTimers. This scan is not a scheduler.
+ */
 export async function expireElapsedDomainTimers(runtime: CreateBanContactRuntime): Promise<number> {
+  const identities = await runtime.sql.query<{ user_id: string; telegram_user_id: string }>(
+    SQL.selectAllIdentities,
+    [],
+  );
   let applied = 0;
-  for (const identity of runtime.sql.tables.snapshot().identities.values()) {
+  for (const identity of identities.rows) {
     const context: AuthenticatedContext = {
-      currentUserId: identity.userId as UserId,
-      currentTelegramUser: { telegramUserId: asTelegramUserId(identity.telegramUserId) },
+      currentUserId: identity.user_id as UserId,
+      currentTelegramUser: { telegramUserId: asTelegramUserId(identity.telegram_user_id) },
       authenticationMethod: "development",
     };
     const result = await applyElapsedDomainTimers(runtime, context);

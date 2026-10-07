@@ -31,6 +31,12 @@ export {
   telegramPersistentReentrySql,
 } from "./migrations.ts";
 export { PostgresProductStore } from "./postgres-store.ts";
+export { bindSqlParams, normalizeDriverRows, openPostgresPersistence } from "./postgres-client.ts";
+export type {
+  PostgresPersistence,
+  PostgresPoolConfig,
+  PostgresPoolStats,
+} from "./postgres-client.ts";
 export { SQL } from "./sql.ts";
 export { PERSISTENCE_STAGE, STAGE_4_EXCLUDES } from "./stage.ts";
 export { DURABLE_COLLECTION_SYNC } from "./sync-policy.ts";

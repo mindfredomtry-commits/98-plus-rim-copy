@@ -25,7 +25,9 @@ import {
 import {
   MemorySqlClient,
   PostgresProductStore,
+  SQL,
   type LoadedSnapshot,
+  type PersistenceSqlClient,
   type ProductStore,
 } from "@98plus/persistence";
 import type { UserId } from "@98plus/product-model";
@@ -49,7 +51,7 @@ export type TelegramSharePrepareMode = "live" | "mock";
 export type TelegramPersistentReentryBootstrapSend = "success" | "failure" | "fail-once";
 
 export type CreateBanContactRuntime = Readonly<{
-  sql: MemorySqlClient;
+  sql: PersistenceSqlClient;
   identityStore: IdentityStore;
   productStore: ProductStore;
   directory: RegisteredUserDirectory;
@@ -91,7 +93,7 @@ export type CreateBanContactRuntime = Readonly<{
 }>;
 
 export type CreateBanContactRuntimeOptions = Readonly<{
-  sql?: MemorySqlClient;
+  sql?: PersistenceSqlClient;
   identityStore?: IdentityStore;
   productStore?: ProductStore;
   directory?: RegisteredUserDirectory;
@@ -317,7 +319,13 @@ export async function openLobbyIfNeeded(
   return { ...(await loadDiagnostics(runtime, context, execution)), execution };
 }
 
-export function userIdOf(runtime: CreateBanContactRuntime, telegramUserId: string): UserId | null {
-  const found = runtime.sql.tables.findIdentityByTelegramUserId(telegramUserId);
-  return found?.userId ?? null;
+export async function userIdOf(
+  runtime: CreateBanContactRuntime,
+  telegramUserId: string,
+): Promise<UserId | null> {
+  const result = await runtime.sql.query<{ user_id: string }>(SQL.selectIdentityByTelegramUserId, [
+    telegramUserId,
+  ]);
+  const userId = result.rows[0]?.user_id;
+  return userId === undefined ? null : (userId as UserId);
 }

@@ -35,7 +35,7 @@ export async function assertSelectableContactId(
   if (contactId === currentUserId) {
     throw invalid("SELF", `${eventLabel} cannot select the authenticated current user`);
   }
-  if (!directory.isRegisteredUserId(contactId)) {
+  if (!(await directory.isRegisteredUserId(contactId))) {
     throw invalid(
       "UNREGISTERED",
       `${eventLabel} contactId must be an already-registered internal UserId`,

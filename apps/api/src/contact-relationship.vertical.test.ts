@@ -172,7 +172,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const who = (await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START")).diagnostics!;
     expect(who.controlState).toBe("CREATE_BAN.WHO");
     expect(contactIds(who)).toEqual([]);
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
     const rejected = await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", {
       contactId: bId,
     });
@@ -185,10 +185,10 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
     await session(app.url, USER_C_TG);
-    seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
-    const cId = userIdOf(app.runtime, USER_C_TG)!;
+    await seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
+    const cId = (await userIdOf(app.runtime, USER_C_TG))!;
     const aWho = (await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START")).diagnostics!;
     const bWho = (await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_START")).diagnostics!;
     expect(contactIds(aWho)).toEqual([bId]);
@@ -211,8 +211,8 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const app = await start();
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
 
     expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([]);
     expect(contactIds((await session(app.url, USER_B_TG)).diagnostics)).toEqual([]);
@@ -282,8 +282,8 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const app = await start();
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
     const created = await createTemplateShare(app.url, USER_A_TG);
     expect(
       Object.values(
@@ -353,8 +353,8 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const app = await start();
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
     const created = await createTemplateShare(app.url, USER_A_TG);
 
     await dispatch(app.url, USER_B_TG, "CONNECTION.LOST");
@@ -408,8 +408,8 @@ describe("Stage 13B MVP8 Contact relationship", () => {
       startParam: `share_${created.token}`,
     });
     expect(resolved.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
     expect(contactIds(resolved.diagnostics)).toEqual([aId]);
     const aAfterBind = await session(app.url, USER_A_TG);
     expect(contactIds(aAfterBind.diagnostics)).toEqual([bId]);
@@ -430,9 +430,9 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const app = await start();
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
-    seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
+    await seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START");
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId });
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.CHANGE_BAN_TEXT", { banText: BAN_TEXT });
@@ -470,9 +470,9 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     const app = await start(runtime);
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
-    seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
-    const bId = userIdOf(app.runtime, USER_B_TG)!;
+    await seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
+    const bId = (await userIdOf(app.runtime, USER_B_TG))!;
 
     await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_START");
     await dispatch(app.url, USER_B_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: aId });
@@ -501,9 +501,9 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
     await session(app.url, USER_C_TG);
-    seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
-    const cId = userIdOf(app.runtime, USER_C_TG)!;
+    await seedContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
+    const cId = (await userIdOf(app.runtime, USER_C_TG))!;
     const who = (await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START")).diagnostics!;
     expect(contactIds(who)).not.toContain(aId);
     expect(contactIds(who)).not.toContain(cId);

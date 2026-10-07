@@ -1,5 +1,5 @@
 import type { Ban, DurationMinutes, UserId } from "@98plus/product-model";
-import { MemorySqlClient } from "@98plus/persistence";
+import { MemorySqlClient, SQL, type PersistenceSqlClient } from "@98plus/persistence";
 import {
   MemorySqlRegisteredUserDirectory,
   listSelectableRegisteredUsers,
@@ -19,7 +19,7 @@ let seedSeq = 0;
 export class TestOnlyRegisteredUserDirectory extends MemorySqlRegisteredUserDirectory {
   private readonly testGrants = new Map<string, Set<string>>();
 
-  constructor(sql: MemorySqlClient) {
+  constructor(sql: PersistenceSqlClient) {
     super(sql);
   }
 
@@ -39,7 +39,7 @@ export class TestOnlyRegisteredUserDirectory extends MemorySqlRegisteredUserDire
     for (const granted of this.testGrants.get(currentUserId) ?? []) {
       partnerIds.add(granted);
     }
-    const contacts = this.allIdentities().filter((user) => partnerIds.has(user.userId));
+    const contacts = (await this.allIdentities()).filter((user) => partnerIds.has(user.userId));
     return listSelectableRegisteredUsers(contacts, currentUserId);
   }
 
@@ -51,12 +51,12 @@ export class TestOnlyRegisteredUserDirectory extends MemorySqlRegisteredUserDire
 }
 
 /** Persist a qualifying authoritative Ban so Ban-derived Contact rule includes the pair. */
-export function seedAuthoritativeContactBan(
+export async function seedAuthoritativeContactBan(
   runtime: CreateBanContactRuntime,
   senderUserId: UserId,
   receiverUserId: UserId,
   banId?: string,
-): Ban {
+): Promise<Ban> {
   seedSeq += 1;
   const ban: Ban = {
     id: (banId ?? `seed-contact-ban-${seedSeq}`) as Ban["id"],
@@ -69,8 +69,25 @@ export function seedAuthoritativeContactBan(
     boundViaTelegramShareLink: false,
     sourceProposalId: null,
   };
-  runtime.sql.tables.upsertBan(ban);
+  await runtime.sql.query(SQL.upsertBan, [
+    ban.id,
+    ban.senderId,
+    ban.receiverId,
+    ban.banText,
+    ban.durationMinutes,
+    ban.acceptance,
+    ban.status,
+    ban.boundViaTelegramShareLink,
+    ban.sourceProposalId,
+  ]);
   return ban;
+}
+
+export function memoryTables(runtime: CreateBanContactRuntime): MemorySqlClient["tables"] {
+  if (!(runtime.sql instanceof MemorySqlClient)) {
+    throw new Error("memory table inspection requires MemorySqlClient");
+  }
+  return runtime.sql.tables;
 }
 
 /**
@@ -82,13 +99,13 @@ export function seedAuthoritativeContactBan(
  * Installs TestOnlyRegisteredUserDirectory on the runtime if needed. Production
  * runtimes never import this module and never receive this adapter.
  */
-export function grantContactBetweenTelegramUsers(
+export async function grantContactBetweenTelegramUsers(
   runtime: CreateBanContactRuntime,
   senderTelegramUserId: string,
   receiverTelegramUserId: string,
-): void {
-  const senderUserId = userIdOf(runtime, senderTelegramUserId);
-  const receiverUserId = userIdOf(runtime, receiverTelegramUserId);
+): Promise<void> {
+  const senderUserId = await userIdOf(runtime, senderTelegramUserId);
+  const receiverUserId = await userIdOf(runtime, receiverTelegramUserId);
   if (!senderUserId || !receiverUserId) {
     throw new Error("grantContactBetweenTelegramUsers requires both users to be registered");
   }
@@ -96,13 +113,13 @@ export function grantContactBetweenTelegramUsers(
   directory.grantTestContactPair(senderUserId, receiverUserId);
 }
 
-export function seedContactBetweenTelegramUsers(
+export async function seedContactBetweenTelegramUsers(
   runtime: CreateBanContactRuntime,
   senderTelegramUserId: string,
   receiverTelegramUserId: string,
-): Ban {
-  const senderUserId = userIdOf(runtime, senderTelegramUserId);
-  const receiverUserId = userIdOf(runtime, receiverTelegramUserId);
+): Promise<Ban> {
+  const senderUserId = await userIdOf(runtime, senderTelegramUserId);
+  const receiverUserId = await userIdOf(runtime, receiverTelegramUserId);
   if (!senderUserId || !receiverUserId) {
     throw new Error("seedContactBetweenTelegramUsers requires both users to be registered");
   }

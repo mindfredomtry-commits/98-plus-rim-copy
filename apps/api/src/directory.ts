@@ -1,6 +1,6 @@
 import type { UserId } from "@98plus/product-model";
 import { contactPartnerIdsFromBans } from "@98plus/product-model";
-import { MemorySqlClient } from "@98plus/persistence";
+import { SQL, type PersistenceSqlClient } from "@98plus/persistence";
 
 export type SelectableRegisteredUser = Readonly<{
   userId: UserId;
@@ -27,34 +27,54 @@ export function listSelectableRegisteredUsers(
 
 export type RegisteredUserDirectory = {
   listSelectableContacts(currentUserId: UserId): Promise<readonly SelectableRegisteredUser[]>;
-  isRegisteredUserId(userId: string): boolean;
+  isRegisteredUserId(userId: string): Promise<boolean>;
 };
+
+type IdentitySqlRow = { user_id: string; telegram_user_id: string };
+type BanParticipantRow = { sender_id: string; receiver_id: string | null };
 
 /**
  * Production MVP8 Contact set: derived exclusively from authoritative Ban facts
- * (senderId + receiverId). No test-grant fallback path exists on this class.
+ * (senderId + receiverId) and identity_users. No test-grant fallback path exists
+ * on this class. Reads go through PersistenceSqlClient, not MemorySqlClient.tables.
  */
 export class MemorySqlRegisteredUserDirectory implements RegisteredUserDirectory {
-  constructor(protected readonly sql: MemorySqlClient) {}
+  constructor(protected readonly sql: PersistenceSqlClient) {}
 
   async listSelectableContacts(
     currentUserId: UserId,
   ): Promise<readonly SelectableRegisteredUser[]> {
-    const partnerIds = new Set<string>(
-      contactPartnerIdsFromBans(this.sql.tables.listBansForUser(currentUserId), currentUserId),
+    const bans = await this.sql.query<BanParticipantRow>(SQL.selectBansForUser, [currentUserId]);
+    const partnerIds = contactPartnerIdsFromBans(
+      bans.rows.map((row) => ({
+        senderId: row.sender_id as UserId,
+        receiverId: row.receiver_id as UserId | null,
+      })),
+      currentUserId,
     );
-    const contacts = this.allIdentities().filter((user) => partnerIds.has(user.userId));
+    if (partnerIds.length === 0) {
+      return [];
+    }
+    const identities = await this.sql.query<IdentitySqlRow>(SQL.selectIdentitiesByUserIds, [
+      partnerIds,
+    ]);
+    const contacts = identities.rows.map((row) => ({
+      userId: row.user_id as UserId,
+      telegramUserId: row.telegram_user_id,
+    }));
     return listSelectableRegisteredUsers(contacts, currentUserId);
   }
 
-  isRegisteredUserId(userId: string): boolean {
-    return this.sql.tables.hasUser(userId);
+  async isRegisteredUserId(userId: string): Promise<boolean> {
+    const result = await this.sql.query<{ user_id: string }>(SQL.selectIdentity, [userId]);
+    return result.rows.length > 0;
   }
 
-  protected allIdentities(): readonly SelectableRegisteredUser[] {
-    return [...this.sql.tables.snapshot().identities.values()].map((row) => ({
-      userId: row.userId,
-      telegramUserId: row.telegramUserId,
+  protected async allIdentities(): Promise<readonly SelectableRegisteredUser[]> {
+    const result = await this.sql.query<IdentitySqlRow>(SQL.selectAllIdentities, []);
+    return result.rows.map((row) => ({
+      userId: row.user_id as UserId,
+      telegramUserId: row.telegram_user_id,
     }));
   }
 }

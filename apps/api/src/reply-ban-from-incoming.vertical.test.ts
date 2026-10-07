@@ -197,12 +197,12 @@ async function createRealIncomingFromA(app: Started): Promise<{
 }> {
   await session(app.url, USER_A_TG);
   await session(app.url, USER_B_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   const opened = await session(app.url, USER_A_TG);
   expect(opened.controlState).toBe("RIM.LOBBY");
   const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   const listed = who.contacts.find((contact) => contact.telegramUserId === USER_B_TG);
-  const bId = listed?.userId ?? userIdOf(app.runtime, USER_B_TG);
+  const bId = listed?.userId ?? (await userIdOf(app.runtime, USER_B_TG));
   expect(bId).toBeTruthy();
   requireDiagnostics(
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),
@@ -257,7 +257,7 @@ async function createAnotherIncomingFromA(
   expect(a.controlState).toBe("RIM.LOBBY");
   const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
   const listed = who.contacts.find((contact) => contact.telegramUserId === USER_B_TG);
-  const bId = listed?.userId ?? userIdOf(app.runtime, USER_B_TG);
+  const bId = listed?.userId ?? (await userIdOf(app.runtime, USER_B_TG));
   requireDiagnostics(
     await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),
   );

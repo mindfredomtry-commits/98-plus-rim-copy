@@ -306,4 +306,18 @@ WHERE b.receiver_id IS NOT NULL
   )
 ORDER BY b.created_seq ASC
 `.trim(),
+  selectIdentityByTelegramUserId: `
+SELECT user_id, telegram_user_id
+FROM identity_users
+WHERE telegram_user_id = $1
+`.trim(),
+  selectIdentitiesByUserIds: `
+SELECT user_id, telegram_user_id
+FROM identity_users
+WHERE user_id = ANY($1::text[])
+`.trim(),
+  selectAllIdentities: `
+SELECT user_id, telegram_user_id
+FROM identity_users
+`.trim(),
 } as const;

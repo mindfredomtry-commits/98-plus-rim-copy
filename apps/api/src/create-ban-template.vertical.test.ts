@@ -292,7 +292,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     const bans = bansOf(pending);
     expect(bans).toHaveLength(1);
     expect(bans[0]?.receiverId).toBeNull();
-    expect(bans[0]?.senderId).toBe(userIdOf(app.runtime, USER_A_TG));
+    expect(bans[0]?.senderId).toBe(await userIdOf(app.runtime, USER_A_TG));
     expect(bans[0]?.boundViaTelegramShareLink).toBe(false);
     expect(pending.successfulBanId).toBe(bans[0]?.id);
     expect(pending.effects).toContain("OPEN_TELEGRAM_SHARE");
@@ -335,13 +335,13 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(created).toHaveLength(1);
     expect(created[0]?.id).toBe(createdId);
     expect(created[0]?.banText).toBe(BAN_TEXT);
-    expect(created[0]?.senderId).toBe(userIdOf(app.runtime, USER_A_TG));
-    expect(created[0]?.receiverId).toBe(userIdOf(app.runtime, USER_B_TG));
+    expect(created[0]?.senderId).toBe(await userIdOf(app.runtime, USER_A_TG));
+    expect(created[0]?.receiverId).toBe(await userIdOf(app.runtime, USER_B_TG));
     expect(receiver.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
     expect(receiver.incomingItems).toHaveLength(1);
 
     const sender = await app.runtime.productStore.loadProductSnapshot(
-      userIdOf(app.runtime, USER_A_TG)!,
+      (await userIdOf(app.runtime, USER_A_TG))!,
     );
     expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
     const returned = requireDiagnostics(
@@ -352,7 +352,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(returned.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(bansOf(returned)).toHaveLength(1);
     expect(bansOf(returned)[0]?.id).toBe(created[0]?.id);
-    expect(bansOf(returned)[0]?.receiverId).toBe(userIdOf(app.runtime, USER_B_TG));
+    expect(bansOf(returned)[0]?.receiverId).toBe(await userIdOf(app.runtime, USER_B_TG));
     expect(sharesOf(returned).find((share) => share.attemptId === attemptId)?.status).toBe(
       "CONFIRMED",
     );
@@ -541,8 +541,8 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     const emptyApp = await start();
     await session(emptyApp.url, USER_A_TG);
     await session(emptyApp.url, USER_B_TG);
-    grantContactBetweenTelegramUsers(emptyApp.runtime, USER_A_TG, USER_B_TG);
-    const bId = userIdOf(emptyApp.runtime, USER_B_TG)!;
+    await grantContactBetweenTelegramUsers(emptyApp.runtime, USER_A_TG, USER_B_TG);
+    const bId = (await userIdOf(emptyApp.runtime, USER_B_TG))!;
     requireDiagnostics(await dispatch(emptyApp.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
     requireDiagnostics(
       await dispatch(emptyApp.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),
@@ -568,9 +568,9 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
 
     const app = await start();
     await session(app.url, USER_A_TG);
-    const aId = userIdOf(app.runtime, USER_A_TG)!;
+    const aId = (await userIdOf(app.runtime, USER_A_TG))!;
     await session(app.url, USER_B_TG);
-    grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+    await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
     requireDiagnostics(await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_START"));
     requireDiagnostics(
       await dispatch(app.url, USER_B_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: aId }),
@@ -584,7 +584,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     requireDiagnostics(await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_NEXT"));
     requireDiagnostics(await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_FORBID"));
 
-    const contactBId = userIdOf(app.runtime, USER_B_TG)!;
+    const contactBId = (await userIdOf(app.runtime, USER_B_TG))!;
     requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
     requireDiagnostics(
       await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: contactBId }),
@@ -621,8 +621,8 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
       startParam: `share_${token}`,
     });
     expect(bansOf(receiver)[0]).toMatchObject({
-      senderId: userIdOf(app.runtime, USER_A_TG),
-      receiverId: userIdOf(app.runtime, USER_B_TG),
+      senderId: await userIdOf(app.runtime, USER_A_TG),
+      receiverId: await userIdOf(app.runtime, USER_B_TG),
       acceptance: "PENDING",
       status: null,
       boundViaTelegramShareLink: true,
@@ -633,11 +633,11 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     const app = await start();
     await session(app.url, USER_A_TG);
     await session(app.url, USER_B_TG);
-    grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+    await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
     const who = requireDiagnostics(await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START"));
     const bId =
       who.contacts.find((c) => c.telegramUserId === USER_B_TG)?.userId ??
-      userIdOf(app.runtime, USER_B_TG);
+      (await userIdOf(app.runtime, USER_B_TG));
     expect(bId).toBeTruthy();
     requireDiagnostics(
       await dispatch(app.url, USER_A_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: bId }),

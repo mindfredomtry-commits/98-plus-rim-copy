@@ -107,7 +107,7 @@ async function reachBothChecks(now: { value: number }, sql: MemorySqlClient) {
   started.push(app);
   await session(app.url, USER_A_TG);
   await session(app.url, USER_B_TG);
-  grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
+  await grantContactBetweenTelegramUsers(app.runtime, USER_A_TG, USER_B_TG);
   await dispatch(app.url, USER_A_TG, "CREATE_BAN.PRESS_START");
   const contactsResponse = await fetch(`${app.url}/api/snapshot`, {
     headers: authHeaders(USER_A_TG),
@@ -117,7 +117,7 @@ async function reachBothChecks(now: { value: number }, sql: MemorySqlClient) {
   };
   const bId =
     contactsBody.diagnostics.contacts.find((contact) => contact.telegramUserId === USER_B_TG)
-      ?.userId ?? userIdOf(app.runtime, USER_B_TG);
+      ?.userId ?? (await userIdOf(app.runtime, USER_B_TG));
   await fetch(`${app.url}/api/events`, {
     method: "POST",
     headers: authHeaders(USER_A_TG),

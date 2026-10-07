@@ -334,8 +334,8 @@ async function pendingKnownChat(response: OpenAiRetrievedResponse | Error) {
     secret: SECRET,
     telegramUserId: "1001",
   });
-  grantContactBetweenTelegramUsers(runtime, "1001", "1002");
-  const contactId = userIdOf(runtime, "1002");
+  await grantContactBetweenTelegramUsers(runtime, "1001", "1002");
+  const contactId = await userIdOf(runtime, "1002");
   expect(contactId).toBeTruthy();
   await openLobbyIfNeeded(runtime, context);
   await executeIncomingOverboardVertical(runtime, context, {
