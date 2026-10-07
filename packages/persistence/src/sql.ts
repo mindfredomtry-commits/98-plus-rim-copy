@@ -123,7 +123,7 @@ ON CONFLICT (ban_id) DO UPDATE SET
   selectTimersForBans: `
 SELECT timer_id, ban_id, started_at, duration_minutes, state, check_pair_created
 FROM domain_timers
-WHERE ban_id = ANY($1)
+WHERE ban_id = ANY($1::text[])
 `.trim(),
   upsertTimer: `
 INSERT INTO domain_timers (
@@ -139,7 +139,7 @@ ON CONFLICT (timer_id) DO UPDATE SET
   selectPairsForBans: `
 SELECT pair_id, ban_id, receiver_item_id, sender_item_id, receiver_answer, sender_answer, resulting_status
 FROM check_pairs
-WHERE ban_id = ANY($1)
+WHERE ban_id = ANY($1::text[])
 `.trim(),
   selectPairForUpdate: `
 SELECT pair_id, ban_id, receiver_item_id, sender_item_id, receiver_answer, sender_answer, resulting_status
@@ -204,15 +204,15 @@ ON CONFLICT (operation_id) DO UPDATE SET
 `.trim(),
   deleteOpsNotIn: `
 DELETE FROM pending_operations
-WHERE owner_id = $1 AND NOT (operation_id = ANY($2))
+WHERE owner_id = $1 AND NOT (operation_id = ANY($2::text[]))
 `.trim(),
   deleteItemsNotIn: `
 DELETE FROM notification_items
-WHERE owner_id = $1 AND NOT (item_id = ANY($2))
+WHERE owner_id = $1 AND NOT (item_id = ANY($2::text[]))
 `.trim(),
   deleteSharesNotIn: `
 DELETE FROM share_operations
-WHERE owner_id = $1 AND NOT (attempt_id = ANY($2))
+WHERE owner_id = $1 AND NOT (attempt_id = ANY($2::text[]))
 `.trim(),
   selectSharesForUser: `
 SELECT attempt_id, owner_id, draft, token, status, created_ban_id
@@ -223,15 +223,11 @@ WHERE owner_id = $1
 SELECT attempt_id, owner_id, draft, token, status, created_ban_id
 FROM share_operations
 WHERE token = $1
-ORDER BY attempt_id
-LIMIT 1
 `.trim(),
   selectShareByTokenForUpdate: `
 SELECT attempt_id, owner_id, draft, token, status, created_ban_id
 FROM share_operations
 WHERE token = $1
-ORDER BY attempt_id
-LIMIT 1
 FOR UPDATE
 `.trim(),
   selectShareByAttemptId: `

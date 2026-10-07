@@ -25,7 +25,7 @@ import type {
 } from "./types.ts";
 
 type IdentityRow = { userId: UserId; telegramUserId: string };
-type BanRecord = Ban & { createdSeq: number };
+type BanRecord = Ban & { createdSeq: number; createdAtMs: number };
 type ShareRecord = ShareOperation & { ownerId: UserId };
 type OperationRecord = PendingOperation & { ownerId: UserId };
 
@@ -60,7 +60,7 @@ function cloneTables(tables: ProductTablesSnapshot): ProductTablesSnapshot {
 }
 
 function asBan(record: BanRecord): Ban {
-  const { createdSeq: _createdSeq, ...ban } = record;
+  const { createdSeq: _createdSeq, createdAtMs: _createdAtMs, ...ban } = record;
   return ban;
 }
 
@@ -168,6 +168,8 @@ export class ProductTables {
     const record: BanRecord = {
       ...cloneJson(ban),
       createdSeq: existing?.createdSeq ?? this.data.nextBanSeq++,
+      // bans.created_at DEFAULT NOW() on insert; ON CONFLICT does not change it.
+      createdAtMs: existing?.createdAtMs ?? Date.now(),
     };
     this.data.bans.set(ban.id, record);
     return record;
@@ -316,6 +318,13 @@ export class ProductTables {
     if (other) {
       throw new PersistenceError("INVARIANT", "created_ban_id is unique on share_operations");
     }
+    const sameToken = [...this.data.shares.values()].find(
+      (existing) =>
+        String(existing.token) === String(share.token) && existing.attemptId !== share.attemptId,
+    );
+    if (sameToken) {
+      throw new PersistenceError("INVARIANT", "token is unique on share_operations");
+    }
     this.data.shares.set(share.attemptId, { ...cloneJson(share), ownerId });
   }
 
@@ -412,7 +421,7 @@ export class ProductTables {
           acceptance: ban.acceptance,
           status: ban.status,
           createdSeq: ban.createdSeq,
-          createdAtMs: null,
+          createdAtMs: ban.createdAtMs,
           timerStartedAtMs: timer ? Number(timer.startedAt) : null,
           timerState: timer?.state ?? null,
           checkPairCreated: timer?.checkPairCreated ?? pair !== null,

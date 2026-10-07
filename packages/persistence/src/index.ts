@@ -26,6 +26,7 @@ export {
   telegramPersistentReentryBootstrapClaimSql,
   telegramPersistentReentryBootstrapClaimTokenSql,
   rimProviderRuntimeSql,
+  shareOperationTokenUniqueSql,
   telegramPersistentReentryCtaOpportunitySql,
   telegramPersistentReentrySql,
 } from "./migrations.ts";

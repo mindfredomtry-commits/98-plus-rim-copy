@@ -51,6 +51,11 @@ export const MIGRATION_CHAIN = [
     file: "packages/persistence/schema/008_rim_provider_runtime.sql",
     path: join(PERSISTENCE_SCHEMA_DIR, "008_rim_provider_runtime.sql"),
   },
+  {
+    authority: "persistence",
+    file: "packages/persistence/schema/009_share_operation_token_unique.sql",
+    path: join(PERSISTENCE_SCHEMA_DIR, "009_share_operation_token_unique.sql"),
+  },
 ] as const;
 
 export function identitySchemaSql(): string {
@@ -94,6 +99,10 @@ export function rimProviderRuntimeSql(): string {
   return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "008_rim_provider_runtime.sql"), "utf8");
 }
 
+export function shareOperationTokenUniqueSql(): string {
+  return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "009_share_operation_token_unique.sql"), "utf8");
+}
+
 export function allMigrationSql(): readonly string[] {
   return [
     identitySchemaSql(),
@@ -104,5 +113,6 @@ export function allMigrationSql(): readonly string[] {
     telegramPersistentReentryCtaOpportunitySql(),
     banSourceProposalSql(),
     rimProviderRuntimeSql(),
+    shareOperationTokenUniqueSql(),
   ];
 }

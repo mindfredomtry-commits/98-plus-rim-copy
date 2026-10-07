@@ -66,6 +66,16 @@ describe("RelationshipContext builder", () => {
     expect(data.recentBans.every((ban) => ban.ageHours >= 0)).toBe(true);
   });
 
+  it("derives ageHours from a Ban creation timestamp", () => {
+    const createdAtMs = 1_000 * 3_600_000;
+    const data = buildRelationshipContextData({
+      currentUserId: USER,
+      sources: [source(1, USER, { createdAtMs, acceptance: "ACCEPTED" })],
+      nowMs: createdAtMs + 5 * 3_600_000 + 10,
+    });
+    expect(data.recentBans[0]?.ageHours).toBe(5);
+  });
+
   it("maps check answers USER-relative and keeps completed final status", () => {
     const data = buildRelationshipContextData({
       currentUserId: USER,
