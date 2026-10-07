@@ -18,12 +18,13 @@ The application cannot see Railway's replica count. The platform setting is the 
 
 The process reads configuration only from the environment.
 
-| Variable            | Required                | Meaning                                                                                                                       |
-| ------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `PERSISTENCE_MODE`  | yes                     | `memory` or `postgres`. Any other value, including an empty value, fails startup.                                             |
-| `DATABASE_URL`      | when mode is `postgres` | Opaque PostgreSQL connection string. The application does not parse host, port, user format, or pooler mode.                  |
-| `DATABASE_SSL`      | no                      | `disable` or `require`. When omitted, TLS is whatever `DATABASE_URL` already expresses.                                       |
-| `DATABASE_POOL_MAX` | no                      | Positive integer override. When omitted, node-postgres uses its driver default (10). That default is not a capacity decision. |
+| Variable            | Required                | Meaning                                                                                                                                                                                                                                                       |
+| ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PERSISTENCE_MODE`  | yes                     | `memory` or `postgres`. Any other value, including an empty value, fails startup.                                                                                                                                                                             |
+| `DATABASE_URL`      | when mode is `postgres` | Opaque PostgreSQL connection string. Do not put `sslmode`, `ssl`, `sslrootcert`, `sslcert`, or `sslkey` in it when `DATABASE_SSL` is set. Those parameters would replace the application TLS setting inside node-postgres.                                    |
+| `DATABASE_SSL`      | no                      | `disable` or `require`. When omitted, TLS is whatever `DATABASE_URL` already expresses. `require` verifies the server certificate and hostname. `disable` is plaintext. Production Supabase uses `require`. There is no fallback from `require` to `disable`. |
+| `DATABASE_SSL_CA`   | with Supabase `require` | PEM text, or a path to a PEM file, for the CA that signed the server. This is a public certificate, not a credential. For this Session Pooler set it to `packages/persistence/certs/supabase-root-2021.crt`. It is used only on the Postgres socket.          |
+| `DATABASE_POOL_MAX` | no                      | Positive integer override. When omitted, node-postgres uses its driver default (10). That default is not a capacity decision.                                                                                                                                 |
 
 Startup fails when postgres mode is selected and `DATABASE_URL` is missing. A failed Postgres connection does not start `MemorySqlClient`.
 
@@ -123,7 +124,7 @@ Migrations 001–009 are the canonical schema. Do not down-migrate them because 
 1. Create or select the Supabase project and its PostgreSQL database. Prefer an empty database.
 2. Obtain one session-capable PostgreSQL connection string. Keep it in the platform secret store only.
 3. From an operator client, verify `BEGIN`/`COMMIT`, `SELECT … FOR UPDATE`, and a session `pg_advisory_lock` using that string. Disconnect afterwards.
-4. In Railway, set secrets: `PERSISTENCE_MODE` is not enabled yet. Set `DATABASE_URL`. Leave `DATABASE_POOL_MAX` unset unless step 3's connection limit requires a smaller temporary cap. Set `DATABASE_SSL` only when the URL's TLS mode is insufficient.
+4. In Railway, set `PERSISTENCE_MODE=postgres` only when this deploy should serve the database. Set `DATABASE_URL` to the Session Pooler string with no `sslmode` parameter. Set `DATABASE_SSL=require`. Set `DATABASE_SSL_CA` to `packages/persistence/certs/supabase-root-2021.crt` (or the same PEM). Leave `DATABASE_POOL_MAX` unset unless the connection limit requires a smaller temporary cap. Do not set `DATABASE_SSL=disable`.
 5. Set the API service to one replica. Confirm the count in the Railway UI. Do not add a second service that also runs this API against the same database.
 6. Deploy this migration-capable application while the previous deployment is still the one serving traffic, or deploy it with the new command not yet receiving users. The deployed commit must be Pass 7A (`MVP17: prepare PostgreSQL production cutover`) or a later commit that preserves this startup path.
 7. Start one process with `PERSISTENCE_MODE=postgres`. Startup runs migrations before listen. If the process exits before listen, stop. Read `schema_migrations` from an operator client. Resume only after the failure cause is understood. Do not delete the schema to "retry from scratch" if any row has been committed.

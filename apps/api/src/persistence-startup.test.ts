@@ -1,3 +1,6 @@
+import { X509Certificate } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemorySqlClient, openPostgresPersistence } from "@98plus/persistence";
 import { loadPersistenceConfig, PersistenceConfigError } from "./persistence-config.ts";
@@ -75,6 +78,100 @@ describe("persistence mode selection", () => {
         DATABASE_POOL_MAX: "0",
       }),
     ).toThrow(/DATABASE_POOL_MAX must be a positive integer/);
+  });
+
+  it("loads the Supabase root for verified TLS and rejects malformed TLS config", () => {
+    const caPath = fileURLToPath(
+      new URL("../../../packages/persistence/certs/supabase-root-2021.crt", import.meta.url),
+    );
+    const pem = readFileSync(caPath, "utf8");
+    expect(new X509Certificate(pem).fingerprint256).toBe(
+      "80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA",
+    );
+    expect(
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: "postgres://db",
+        DATABASE_SSL: "require",
+        DATABASE_SSL_CA: caPath,
+      }),
+    ).toEqual({
+      mode: "postgres",
+      connectionString: "postgres://db",
+      ssl: { rejectUnauthorized: true, ca: pem },
+    });
+    const inline = loadPersistenceConfig({
+      PERSISTENCE_MODE: "postgres",
+      DATABASE_URL: `postgres://mvp17:${SECRET}@127.0.0.1:5432/app`,
+      DATABASE_SSL: "require",
+      DATABASE_SSL_CA: pem,
+    });
+    expect(inline.mode).toBe("postgres");
+    if (inline.mode !== "postgres") {
+      throw new Error("expected postgres config");
+    }
+    expect(inline.ssl).toEqual({ rejectUnauthorized: true, ca: pem.trim() });
+    expect(() =>
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: "postgres://db",
+        DATABASE_SSL_CA: caPath,
+      }),
+    ).toThrow(/DATABASE_SSL_CA requires DATABASE_SSL=require/);
+    expect(() =>
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: "postgres://db",
+        DATABASE_SSL: "disable",
+        DATABASE_SSL_CA: caPath,
+      }),
+    ).toThrow(/DATABASE_SSL_CA requires DATABASE_SSL=require/);
+    expect(() =>
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: "postgres://db",
+        DATABASE_SSL: "require",
+        DATABASE_SSL_CA: "C:/missing/supabase-root.crt",
+      }),
+    ).toThrow(/^DATABASE_SSL_CA could not be read$/);
+    expect(() =>
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: "postgres://db",
+        DATABASE_SSL: "require",
+        DATABASE_SSL_CA: "-----BEGIN CERTIFICATE-----only",
+      }),
+    ).toThrow(/^DATABASE_SSL_CA must be a PEM certificate$/);
+    expect(() =>
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: "postgres://db",
+        DATABASE_SSL: "require",
+        DATABASE_SSL_CA: `${pem}\n-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----`,
+      }),
+    ).toThrow(/DATABASE_SSL_CA must be a certificate, not a private key/);
+    expect(() =>
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: `postgres://mvp17:${SECRET}@127.0.0.1:5432/app?sslmode=disable`,
+        DATABASE_SSL: "require",
+        DATABASE_SSL_CA: pem,
+      }),
+    ).toThrow(PersistenceConfigError);
+    try {
+      loadPersistenceConfig({
+        PERSISTENCE_MODE: "postgres",
+        DATABASE_URL: `postgres://mvp17:${SECRET}@127.0.0.1:5432/app?sslmode=disable`,
+        DATABASE_SSL: "require",
+        DATABASE_SSL_CA: pem,
+      });
+    } catch (error) {
+      expect(error instanceof Error ? error.message : "").toBe(
+        "DATABASE_URL must not set sslmode, ssl, sslrootcert, sslcert, or sslkey",
+      );
+      expect(error instanceof Error ? error.message : "").not.toContain(SECRET);
+      expect(error instanceof Error ? error.message : "").not.toContain("BEGIN CERTIFICATE");
+    }
   });
 
   it("refuses to mix memory and postgres clients", async () => {
