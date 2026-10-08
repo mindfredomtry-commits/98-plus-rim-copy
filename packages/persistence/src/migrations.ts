@@ -61,6 +61,11 @@ export const MIGRATION_CHAIN = [
     file: "packages/persistence/schema/010_rim_history.sql",
     path: join(PERSISTENCE_SCHEMA_DIR, "010_rim_history.sql"),
   },
+  {
+    authority: "persistence",
+    file: "packages/persistence/schema/011_rim_provider_ownership.sql",
+    path: join(PERSISTENCE_SCHEMA_DIR, "011_rim_provider_ownership.sql"),
+  },
 ] as const;
 
 export function identitySchemaSql(): string {
@@ -112,6 +117,10 @@ export function rimHistorySql(): string {
   return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "010_rim_history.sql"), "utf8");
 }
 
+export function rimProviderOwnershipSql(): string {
+  return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "011_rim_provider_ownership.sql"), "utf8");
+}
+
 export type CanonicalMigrationScript = Readonly<{
   id: string;
   sql: string;
@@ -137,5 +146,6 @@ export function allMigrationSql(): readonly string[] {
     rimProviderRuntimeSql(),
     shareOperationTokenUniqueSql(),
     rimHistorySql(),
+    rimProviderOwnershipSql(),
   ];
 }

@@ -535,6 +535,13 @@ describe("Stage 6 Create Ban CONTACT vertical", () => {
       releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
         inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
       commitOwnedTransition: (input) => inner.commitOwnedTransition(input),
+      acquireRimProviderOwnership: (input) => inner.acquireRimProviderOwnership(input),
+      renewRimProviderOwnership: (input) => inner.renewRimProviderOwnership(input),
+      releaseRimProviderOwnership: (input) => inner.releaseRimProviderOwnership(input),
+      lookupRimProviderOwnership: (key) => inner.lookupRimProviderOwnership(key),
+      invalidateRimProviderOwnership: (input) => inner.invalidateRimProviderOwnership(input),
+      withRimProviderOwnershipCoordination: (key, run) =>
+        inner.withRimProviderOwnershipCoordination(key, run),
       persistTransition: async (input) => {
         if (input.result.snapshot.controlState === "CREATE_BAN.WHO") {
           throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");

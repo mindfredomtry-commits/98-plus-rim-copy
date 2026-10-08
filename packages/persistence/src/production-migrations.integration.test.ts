@@ -100,7 +100,7 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
     return name;
   }
 
-  it("applies 001–010 once on an empty schema and leaves stores usable", async () => {
+  it("applies 001–011 once on an empty schema and leaves stores usable", async () => {
     const name = await schema();
     const db = open(name);
     try {
@@ -127,7 +127,7 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
         "SELECT version FROM schema_migrations",
         [],
       );
-      expect(again.rows).toHaveLength(10);
+      expect(again.rows).toHaveLength(11);
 
       const identity = new PostgresIdentityStore(db.sql);
       const user = await identity.resolveByTelegramUserId(asTelegramUserId("4242"));
@@ -152,7 +152,7 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
     }
   }, 30_000);
 
-  it("continues a recorded 001–004 prefix with 005–010", async () => {
+  it("continues a recorded 001–004 prefix with 005–011", async () => {
     const name = await schema();
     const db = open(name);
     try {
@@ -161,7 +161,7 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
       expect(partial.newlyApplied).toHaveLength(4);
       const rest = await db.migrate();
       expect(rest.newlyApplied).toEqual(scripts.slice(4).map((script) => script.id));
-      expect(rest.applied).toHaveLength(10);
+      expect(rest.applied).toHaveLength(11);
     } finally {
       await db.close();
     }
@@ -328,10 +328,10 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
     const currentDb = open(current);
     try {
       const first = await currentDb.migrate();
-      expect(first.applied).toHaveLength(10);
+      expect(first.applied).toHaveLength(11);
       const second = await currentDb.migrate();
       expect(second.newlyApplied).toEqual([]);
-      expect(second.applied).toHaveLength(10);
+      expect(second.applied).toHaveLength(11);
     } finally {
       await currentDb.close();
     }

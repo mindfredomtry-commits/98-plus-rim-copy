@@ -81,8 +81,9 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
     await db.sql.query(`CREATE SCHEMA ${schema}`, []);
     await db.sql.query(`SET search_path TO ${schema}`, []);
     const report = await db.migrate();
-    expect(report.applied).toHaveLength(10);
+    expect(report.applied).toHaveLength(11);
     expect(report.applied[9]).toBe("packages/persistence/schema/010_rim_history.sql");
+    expect(report.applied[10]).toBe("packages/persistence/schema/011_rim_provider_ownership.sql");
   }, 30_000);
 
   afterAll(async () => {
@@ -177,7 +178,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
       "SELECT version FROM schema_migrations ORDER BY applied_at, version",
       [],
     );
-    expect(versions.rows.map((row) => row.version)).toHaveLength(10);
+    expect(versions.rows.map((row) => row.version)).toHaveLength(11);
     const tables = await db.sql.query<{ name: string }>(
       `SELECT table_name AS name FROM information_schema.tables
        WHERE table_schema = current_schema() AND table_name IN ('rim_chats', 'rim_messages')

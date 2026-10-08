@@ -140,6 +140,13 @@ describe("Stage 5 executeProductEvent", () => {
       releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
         inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
       commitOwnedTransition: (input) => inner.commitOwnedTransition(input),
+      acquireRimProviderOwnership: (input) => inner.acquireRimProviderOwnership(input),
+      renewRimProviderOwnership: (input) => inner.renewRimProviderOwnership(input),
+      releaseRimProviderOwnership: (input) => inner.releaseRimProviderOwnership(input),
+      lookupRimProviderOwnership: (key) => inner.lookupRimProviderOwnership(key),
+      invalidateRimProviderOwnership: (input) => inner.invalidateRimProviderOwnership(input),
+      withRimProviderOwnershipCoordination: (key, run) =>
+        inner.withRimProviderOwnershipCoordination(key, run),
       persistTransition: async () => {
         throw new PersistenceError("REVISION_CONFLICT", "conflicting writes");
       },
@@ -197,6 +204,13 @@ describe("Stage 5 executeProductEvent", () => {
       releaseTelegramPersistentReentryBootstrapClaim: (userId, claimToken) =>
         inner.releaseTelegramPersistentReentryBootstrapClaim(userId, claimToken),
       commitOwnedTransition: (input) => inner.commitOwnedTransition(input),
+      acquireRimProviderOwnership: (input) => inner.acquireRimProviderOwnership(input),
+      renewRimProviderOwnership: (input) => inner.renewRimProviderOwnership(input),
+      releaseRimProviderOwnership: (input) => inner.releaseRimProviderOwnership(input),
+      lookupRimProviderOwnership: (key) => inner.lookupRimProviderOwnership(key),
+      invalidateRimProviderOwnership: (input) => inner.invalidateRimProviderOwnership(input),
+      withRimProviderOwnershipCoordination: (key, run) =>
+        inner.withRimProviderOwnershipCoordination(key, run),
       persistTransition: async (_input: PersistTransitionInput) => {
         throw new PersistenceError("INVARIANT", "persistence refused the write");
       },

@@ -22,6 +22,8 @@ import type {
   BanReceiverBindResult,
   RelationshipBanRecord,
   RelationshipContextSource,
+  RimOwnershipOperationKind,
+  RimOwnershipReleaseReason,
 } from "./types.ts";
 
 type IdentityRow = { userId: UserId; telegramUserId: string };
@@ -38,6 +40,17 @@ type RimChatArchiveRow = {
   terminationReason: string | null;
   openaiConversationId: string | null;
   resultingBanId: string | null;
+};
+
+export type OwnershipMemoryRow = {
+  userId: string;
+  operationKind: RimOwnershipOperationKind;
+  attemptId: string;
+  requestId: string | null;
+  ownerToken: string;
+  leasedUntilMs: number;
+  releasedAtMs: number | null;
+  releaseReason: RimOwnershipReleaseReason | null;
 };
 
 type RimMessageArchiveRow = {
@@ -62,6 +75,7 @@ export type ProductTablesSnapshot = {
   shares: Map<string, ShareRecord>;
   rimChats: Map<string, RimChatArchiveRow>;
   rimMessages: Map<string, RimMessageArchiveRow>;
+  ownership: Map<string, OwnershipMemoryRow>;
   nextBanSeq: number;
 };
 
@@ -85,6 +99,9 @@ function cloneTables(tables: ProductTablesSnapshot): ProductTablesSnapshot {
     rimMessages: new Map(
       [...tables.rimMessages.entries()].map(([key, value]) => [key, cloneJson(value)]),
     ),
+    ownership: new Map(
+      [...tables.ownership.entries()].map(([key, value]) => [key, cloneJson(value)]),
+    ),
     nextBanSeq: tables.nextBanSeq,
   };
 }
@@ -106,6 +123,7 @@ export function emptyTables(): ProductTablesSnapshot {
     shares: new Map(),
     rimChats: new Map(),
     rimMessages: new Map(),
+    ownership: new Map(),
     nextBanSeq: 1,
   };
 }
@@ -560,4 +578,54 @@ export class ProductTables {
     this.data.rimChats.set(rimChatId, { ...row, openaiConversationId: conversationId });
     return true;
   }
+
+  getOwnership(
+    userId: string,
+    operationKind: RimOwnershipOperationKind,
+    attemptId: string,
+  ): OwnershipMemoryRow | undefined {
+    const row = this.data.ownership.get(ownershipMemoryKey(userId, operationKind, attemptId));
+    return row ? cloneJson(row) : undefined;
+  }
+
+  insertOwnership(row: OwnershipMemoryRow): boolean {
+    this.requireUser(row.userId, "rim_provider_ownership.user_id");
+    const key = ownershipMemoryKey(row.userId, row.operationKind, row.attemptId);
+    if (this.data.ownership.has(key)) {
+      return false;
+    }
+    this.data.ownership.set(key, cloneJson(row));
+    return true;
+  }
+
+  replaceOwnership(row: OwnershipMemoryRow): void {
+    const key = ownershipMemoryKey(row.userId, row.operationKind, row.attemptId);
+    if (!this.data.ownership.has(key)) {
+      throw new PersistenceError("MISSING_FACT", "rim ownership row is missing");
+    }
+    this.data.ownership.set(key, cloneJson(row));
+  }
+
+  /** Test seam. Moves the in-memory lease deadline. PostgreSQL uses clock_timestamp(). */
+  retimeOwnershipLease(
+    userId: string,
+    operationKind: RimOwnershipOperationKind,
+    attemptId: string,
+    leasedUntilMs: number,
+  ): void {
+    const key = ownershipMemoryKey(userId, operationKind, attemptId);
+    const row = this.data.ownership.get(key);
+    if (!row) {
+      throw new PersistenceError("MISSING_FACT", "rim ownership row is missing");
+    }
+    this.data.ownership.set(key, { ...row, leasedUntilMs });
+  }
+}
+
+function ownershipMemoryKey(
+  userId: string,
+  operationKind: RimOwnershipOperationKind,
+  attemptId: string,
+): string {
+  return `${userId}\u0000${operationKind}\u0000${attemptId}`;
 }

@@ -37,6 +37,18 @@ import {
 } from "./codec.ts";
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { PersistenceError } from "./errors.ts";
+import {
+  assertRimOwnershipAttemptId,
+  assertRimOwnershipInvalidationReason,
+  assertRimOwnershipLeaseSeconds,
+  assertRimOwnershipOperationKind,
+  assertRimOwnershipRequestId,
+  assertRimOwnershipTokenReleaseReason,
+  isRimOwnershipToken,
+  isUniqueViolation,
+  ownershipFromSqlRow,
+  type RimOwnershipSqlRow,
+} from "./rim-ownership.ts";
 import { runtimeAttemptAllowsCommit } from "./runtime-attempt-authority.ts";
 import {
   persistOpenAiConversationId,
@@ -53,9 +65,20 @@ import type {
   LoadedSnapshot,
   PersistShareLinkResolvedInput,
   PersistShareLinkResolvedResult,
+  AcquireRimProviderOwnershipInput,
+  AcquireRimProviderOwnershipResult,
+  InvalidateRimProviderOwnershipInput,
+  InvalidateRimProviderOwnershipResult,
   PersistTransitionInput,
   PersistenceSqlClient,
   ProductStore,
+  ReleaseRimProviderOwnershipInput,
+  ReleaseRimProviderOwnershipResult,
+  RenewRimProviderOwnershipInput,
+  RenewRimProviderOwnershipResult,
+  RimOwnershipCoordinationContext,
+  RimOwnershipKey,
+  RimProviderOwnership,
   RelationshipBanRecord,
   RelationshipContextSource,
   StoredShareLookup,
@@ -378,6 +401,264 @@ export class PostgresProductStore implements ProductStore {
         error instanceof Error ? error.message : "product persistence transaction failed",
       );
     }
+  }
+
+  async acquireRimProviderOwnership(
+    input: AcquireRimProviderOwnershipInput,
+  ): Promise<AcquireRimProviderOwnershipResult> {
+    const operationKind = assertRimOwnershipOperationKind(input.operationKind);
+    const attemptId = assertRimOwnershipAttemptId(input.attemptId);
+    const requestId = assertRimOwnershipRequestId(input.requestId);
+    const leaseSeconds = assertRimOwnershipLeaseSeconds(input.leaseSeconds);
+    try {
+      return await this.client.transaction(async (tx) => {
+        const sessionResult = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [
+          input.currentUserId,
+        ]);
+        const session = sessionResult.rows[0];
+        if (!session) {
+          throw new PersistenceError(
+            "INVARIANT",
+            "rim provider ownership requires an existing product_user_sessions row",
+          );
+        }
+        if (Number(session.revision) !== input.expectedRevision) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        const existing = await tx.query<RimOwnershipSqlRow>(
+          SQL.selectRimProviderOwnershipForUpdate,
+          [input.currentUserId, operationKind, attemptId],
+        );
+        const present = existing.rows[0];
+        if (present) {
+          return {
+            status: "ALREADY_PRESENT" as const,
+            loaded: await this.read(tx, input.currentUserId),
+            ownership: ownershipFromSqlRow(present),
+          };
+        }
+        const ownerToken = randomUUID();
+        let inserted: RimOwnershipSqlRow | undefined;
+        try {
+          const created = await tx.transaction(async (inner) =>
+            inner.query<RimOwnershipSqlRow>(SQL.insertRimProviderOwnership, [
+              input.currentUserId,
+              operationKind,
+              attemptId,
+              requestId,
+              ownerToken,
+              leaseSeconds,
+            ]),
+          );
+          inserted = created.rows[0];
+        } catch (error) {
+          if (!isUniqueViolation(error)) {
+            throw error;
+          }
+          const raced = await tx.query<RimOwnershipSqlRow>(
+            SQL.selectRimProviderOwnershipForUpdate,
+            [input.currentUserId, operationKind, attemptId],
+          );
+          const winner = raced.rows[0];
+          if (!winner) {
+            throw new PersistenceError(
+              "INVARIANT",
+              "rim ownership primary key conflict left no row",
+            );
+          }
+          return {
+            status: "ALREADY_PRESENT" as const,
+            loaded: await this.read(tx, input.currentUserId),
+            ownership: ownershipFromSqlRow(winner),
+          };
+        }
+        if (!inserted) {
+          throw new PersistenceError("INVARIANT", "rim ownership insert returned no row");
+        }
+        const updated = await tx.query<{ user_id: string }>(SQL.updateRimProviderRuntime, [
+          input.currentUserId,
+          input.expectedRevision,
+          jsonParam(input.runtime),
+        ]);
+        if (!updated.rows[0]) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        await persistOpenAiConversationId(tx, input.runtime);
+        return {
+          status: "ACQUIRED" as const,
+          loaded: await this.read(tx, input.currentUserId),
+          ownership: ownershipFromSqlRow(inserted),
+        };
+      });
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "product persistence transaction failed",
+      );
+    }
+  }
+
+  async renewRimProviderOwnership(
+    input: RenewRimProviderOwnershipInput,
+  ): Promise<RenewRimProviderOwnershipResult> {
+    const key = ownershipKey(input);
+    const leaseSeconds = assertRimOwnershipLeaseSeconds(input.leaseSeconds);
+    if (!isRimOwnershipToken(input.ownerToken)) {
+      return this.rejectUnknownToken(key);
+    }
+    try {
+      const renewed = await this.client.query<RimOwnershipSqlRow>(SQL.renewRimProviderOwnership, [
+        ...key,
+        input.ownerToken,
+        leaseSeconds,
+      ]);
+      const row = renewed.rows[0];
+      if (row) {
+        return { status: "RENEWED", ownership: ownershipFromSqlRow(row) };
+      }
+      const current = await this.client.query<RimOwnershipSqlRow>(
+        SQL.selectRimProviderOwnershipTokenState,
+        [...key, input.ownerToken],
+      );
+      return renewalRejection(current.rows[0]);
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "product persistence transaction failed",
+      );
+    }
+  }
+
+  async releaseRimProviderOwnership(
+    input: ReleaseRimProviderOwnershipInput,
+  ): Promise<ReleaseRimProviderOwnershipResult> {
+    const key = ownershipKey(input);
+    const releaseReason = assertRimOwnershipTokenReleaseReason(input.releaseReason);
+    if (!isRimOwnershipToken(input.ownerToken)) {
+      return this.rejectUnknownToken(key);
+    }
+    try {
+      const released = await this.client.query<RimOwnershipSqlRow>(
+        SQL.releaseRimProviderOwnership,
+        [...key, input.ownerToken, releaseReason],
+      );
+      const row = released.rows[0];
+      if (row) {
+        return { status: "RELEASED", ownership: ownershipFromSqlRow(row) };
+      }
+      const current = await this.client.query<RimOwnershipSqlRow>(
+        SQL.selectRimProviderOwnershipTokenState,
+        [...key, input.ownerToken],
+      );
+      return releaseRejection(current.rows[0]);
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "product persistence transaction failed",
+      );
+    }
+  }
+
+  async lookupRimProviderOwnership(key: RimOwnershipKey): Promise<RimProviderOwnership | null> {
+    const params = ownershipKey(key);
+    const result = await this.client.query<RimOwnershipSqlRow>(
+      SQL.selectRimProviderOwnership,
+      params,
+    );
+    const row = result.rows[0];
+    return row ? ownershipFromSqlRow(row) : null;
+  }
+
+  async invalidateRimProviderOwnership(
+    input: InvalidateRimProviderOwnershipInput,
+  ): Promise<InvalidateRimProviderOwnershipResult> {
+    const key = ownershipKey(input);
+    const releaseReason = assertRimOwnershipInvalidationReason(input.releaseReason);
+    try {
+      return await this.client.transaction(async (tx) =>
+        invalidateOwnershipOn(tx, key, releaseReason),
+      );
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "product persistence transaction failed",
+      );
+    }
+  }
+
+  async withRimProviderOwnershipCoordination<T>(
+    key: RimOwnershipKey,
+    run: (context: RimOwnershipCoordinationContext) => Promise<T>,
+  ): Promise<T> {
+    const params = ownershipKey(key);
+    try {
+      return await this.client.transaction(async (tx) => {
+        const sessionResult = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [params[0]]);
+        const session = sessionResult.rows[0];
+        if (!session) {
+          throw new PersistenceError(
+            "INVARIANT",
+            "rim provider ownership requires an existing product_user_sessions row",
+          );
+        }
+        const locked = await tx.query<RimOwnershipSqlRow>(
+          SQL.selectRimProviderOwnershipForUpdate,
+          params,
+        );
+        const context: RimOwnershipCoordinationContext = {
+          revision: Number(session.revision),
+          runtime: parseJson(session.rim_provider_runtime ?? null),
+          ownership: locked.rows[0] ? ownershipFromSqlRow(locked.rows[0]) : null,
+          invalidate: (reason) => invalidateOwnershipOn(tx, params, reason),
+        };
+        return run(context);
+      });
+    } catch (error) {
+      if (error instanceof PersistenceError) {
+        throw error;
+      }
+      throw new PersistenceError(
+        "TRANSACTION_FAILED",
+        error instanceof Error ? error.message : "product persistence transaction failed",
+      );
+    }
+  }
+
+  private async rejectUnknownToken(key: readonly [string, string, string]): Promise<{
+    status: "REJECTED";
+    reason: "ABSENT" | "TOKEN_MISMATCH";
+    ownership: RimProviderOwnership | null;
+  }> {
+    const current = await this.client.query<RimOwnershipSqlRow>(SQL.selectRimProviderOwnership, [
+      ...key,
+    ]);
+    const row = current.rows[0];
+    if (!row) {
+      return { status: "REJECTED", reason: "ABSENT", ownership: null };
+    }
+    return {
+      status: "REJECTED",
+      reason: "TOKEN_MISMATCH",
+      ownership: ownershipFromSqlRow(row),
+    };
   }
 
   async withCheckPairLock<T>(
@@ -1193,4 +1474,74 @@ export class PostgresProductStore implements ProductStore {
       }),
     };
   }
+}
+
+function ownershipKey(key: RimOwnershipKey): [string, string, string] {
+  return [
+    key.currentUserId,
+    assertRimOwnershipOperationKind(key.operationKind),
+    assertRimOwnershipAttemptId(key.attemptId),
+  ];
+}
+
+async function invalidateOwnershipOn(
+  tx: PersistenceSqlClient,
+  key: readonly [string, string, string],
+  reason: string,
+): Promise<InvalidateRimProviderOwnershipResult> {
+  const releaseReason = assertRimOwnershipInvalidationReason(reason);
+  const session = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [key[0]]);
+  if (!session.rows[0]) {
+    throw new PersistenceError(
+      "INVARIANT",
+      "rim provider ownership requires an existing product_user_sessions row",
+    );
+  }
+  const locked = await tx.query<RimOwnershipSqlRow>(SQL.selectRimProviderOwnershipForUpdate, [
+    ...key,
+  ]);
+  const current = locked.rows[0];
+  if (!current) {
+    return { status: "ABSENT" };
+  }
+  if (current.released_at !== null) {
+    return { status: "ALREADY_RELEASED", ownership: ownershipFromSqlRow(current) };
+  }
+  const updated = await tx.query<RimOwnershipSqlRow>(SQL.invalidateRimProviderOwnership, [
+    ...key,
+    releaseReason,
+  ]);
+  const row = updated.rows[0];
+  if (!row) {
+    throw new PersistenceError("INVARIANT", "rim ownership invalidation did not return a row");
+  }
+  return { status: "INVALIDATED", ownership: ownershipFromSqlRow(row) };
+}
+
+function renewalRejection(row: RimOwnershipSqlRow | undefined): RenewRimProviderOwnershipResult {
+  if (!row) {
+    return { status: "REJECTED", reason: "ABSENT", ownership: null };
+  }
+  const ownership = ownershipFromSqlRow(row);
+  if (row.token_matches !== true) {
+    return { status: "REJECTED", reason: "TOKEN_MISMATCH", ownership };
+  }
+  if (row.released_at !== null) {
+    return { status: "REJECTED", reason: "ALREADY_RELEASED", ownership };
+  }
+  return { status: "REJECTED", reason: "EXPIRED", ownership };
+}
+
+function releaseRejection(row: RimOwnershipSqlRow | undefined): ReleaseRimProviderOwnershipResult {
+  if (!row) {
+    return { status: "REJECTED", reason: "ABSENT", ownership: null };
+  }
+  const ownership = ownershipFromSqlRow(row);
+  if (row.token_matches !== true) {
+    return { status: "REJECTED", reason: "TOKEN_MISMATCH", ownership };
+  }
+  if (row.released_at !== null) {
+    return { status: "REJECTED", reason: "ALREADY_RELEASED", ownership };
+  }
+  throw new PersistenceError("INVARIANT", "token release matched no row and no rejection");
 }

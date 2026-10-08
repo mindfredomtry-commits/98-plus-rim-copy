@@ -14,7 +14,7 @@ describe("production migration authority", () => {
     expect(MATRIX_CONTRACT_ROWS).toHaveLength(360);
   });
 
-  it("reads 001–010 from the canonical files in order", () => {
+  it("reads 001–011 from the canonical files in order", () => {
     const scripts = canonicalMigrationScripts();
     expect(scripts.map((script) => script.id)).toEqual([
       "packages/identity/schema/001_identity_users.sql",
@@ -27,6 +27,7 @@ describe("production migration authority", () => {
       "packages/persistence/schema/008_rim_provider_runtime.sql",
       "packages/persistence/schema/009_share_operation_token_unique.sql",
       "packages/persistence/schema/010_rim_history.sql",
+      "packages/persistence/schema/011_rim_provider_ownership.sql",
     ]);
     expect(scripts.every((script) => script.sql.includes("IF NOT EXISTS"))).toBe(true);
   });
@@ -75,6 +76,20 @@ describe("production migration authority", () => {
       { kind: "constraint", name: "rim_messages_chat_ordinal_key" },
       { kind: "constraint", name: "rim_messages_kind_chk" },
       { kind: "constraint", name: "rim_messages_source_chk" },
+    ]);
+    const ownership = declaredMigrationObjects(
+      byId.get("packages/persistence/schema/011_rim_provider_ownership.sql") ?? "",
+    );
+    expect(ownership).toEqual([
+      { kind: "table", name: "rim_provider_ownership" },
+      { kind: "index", name: "rim_provider_ownership_open_lease_idx" },
+      { kind: "constraint", name: "rim_provider_ownership_pkey" },
+      { kind: "constraint", name: "rim_provider_ownership_operation_kind_chk" },
+      { kind: "constraint", name: "rim_provider_ownership_attempt_id_chk" },
+      { kind: "constraint", name: "rim_provider_ownership_request_id_chk" },
+      { kind: "constraint", name: "rim_provider_ownership_release_reason_chk" },
+      { kind: "constraint", name: "rim_provider_ownership_release_pair_chk" },
+      { kind: "constraint", name: "rim_provider_ownership_user_fk" },
     ]);
   });
 });

@@ -13,13 +13,34 @@ import {
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { cloneJson, sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
-import { ProductTables } from "./tables.ts";
+import {
+  assertRimOwnershipAttemptId,
+  assertRimOwnershipInvalidationReason,
+  assertRimOwnershipLeaseSeconds,
+  assertRimOwnershipOperationKind,
+  assertRimOwnershipRequestId,
+  assertRimOwnershipTokenReleaseReason,
+  isRimOwnershipToken,
+  ownershipPhase,
+} from "./rim-ownership.ts";
+import { ProductTables, type OwnershipMemoryRow } from "./tables.ts";
 import { runtimeAttemptAllowsCommit } from "./runtime-attempt-authority.ts";
 import type {
   CheckPairLockContext,
+  AcquireRimProviderOwnershipInput,
+  AcquireRimProviderOwnershipResult,
   CommitOwnedTransitionInput,
   CommitOwnedTransitionResult,
+  InvalidateRimProviderOwnershipInput,
+  InvalidateRimProviderOwnershipResult,
   LoadedSnapshot,
+  ReleaseRimProviderOwnershipInput,
+  ReleaseRimProviderOwnershipResult,
+  RenewRimProviderOwnershipInput,
+  RenewRimProviderOwnershipResult,
+  RimOwnershipCoordinationContext,
+  RimOwnershipKey,
+  RimProviderOwnership,
   PersistShareLinkResolvedInput,
   PersistShareLinkResolvedResult,
   PersistTransitionInput,
@@ -41,6 +62,7 @@ export class InMemoryProductStore implements ProductStore {
   private readonly userLocks = new Map<string, Promise<void>>();
   private readonly shareLocks = new Map<string, Promise<void>>();
   private failAfterBans = false;
+  private failOwnershipAcquire = false;
 
   constructor(tables: ProductTables = new ProductTables()) {
     this.tables = tables;
@@ -52,6 +74,11 @@ export class InMemoryProductStore implements ProductStore {
 
   failNextWriteAfterBans(): void {
     this.failAfterBans = true;
+  }
+
+  /** Test-only: roll back an ownership acquire after the row is inserted. */
+  failNextOwnershipAcquireAfterInsert(): void {
+    this.failOwnershipAcquire = true;
   }
 
   async loadProductSnapshot(currentUserId: UserId): Promise<LoadedSnapshot> {
@@ -128,6 +155,212 @@ export class InMemoryProductStore implements ProductStore {
         return this.read(currentUserId);
       }),
     );
+  }
+
+  async acquireRimProviderOwnership(
+    input: AcquireRimProviderOwnershipInput,
+  ): Promise<AcquireRimProviderOwnershipResult> {
+    const operationKind = assertRimOwnershipOperationKind(input.operationKind);
+    const attemptId = assertRimOwnershipAttemptId(input.attemptId);
+    const requestId = assertRimOwnershipRequestId(input.requestId);
+    const leaseSeconds = assertRimOwnershipLeaseSeconds(input.leaseSeconds);
+    return this.withUserLock(input.currentUserId, () =>
+      this.tables.transaction(() => {
+        const current = this.requireSession(input.currentUserId);
+        if (current.revision !== input.expectedRevision) {
+          throw new PersistenceError(
+            "REVISION_CONFLICT",
+            "Conflicting writes to the same user's durable ProductSnapshot",
+          );
+        }
+        const existing = this.tables.getOwnership(input.currentUserId, operationKind, attemptId);
+        if (existing) {
+          return {
+            status: "ALREADY_PRESENT" as const,
+            loaded: this.read(input.currentUserId),
+            ownership: ownershipFromMemory(existing),
+          };
+        }
+        const now = Date.now();
+        const inserted = this.tables.insertOwnership({
+          userId: input.currentUserId,
+          operationKind,
+          attemptId,
+          requestId,
+          ownerToken: randomUUID(),
+          leasedUntilMs: now + leaseSeconds * 1000,
+          releasedAtMs: null,
+          releaseReason: null,
+        });
+        if (!inserted) {
+          const winner = this.tables.getOwnership(input.currentUserId, operationKind, attemptId);
+          if (!winner) {
+            throw new PersistenceError(
+              "INVARIANT",
+              "rim ownership primary key conflict left no row",
+            );
+          }
+          return {
+            status: "ALREADY_PRESENT" as const,
+            loaded: this.read(input.currentUserId),
+            ownership: ownershipFromMemory(winner),
+          };
+        }
+        if (this.failOwnershipAcquire) {
+          this.failOwnershipAcquire = false;
+          throw new PersistenceError(
+            "TRANSACTION_FAILED",
+            "injected failure after ownership insert",
+          );
+        }
+        this.tables.writeSession({
+          ...current,
+          revision: current.revision + 1,
+          rimProviderRuntime: input.runtime === null ? null : cloneJson(input.runtime),
+        });
+        const stored = this.tables.getOwnership(input.currentUserId, operationKind, attemptId);
+        if (!stored) {
+          throw new PersistenceError("INVARIANT", "rim ownership insert returned no row");
+        }
+        return {
+          status: "ACQUIRED" as const,
+          loaded: this.read(input.currentUserId),
+          ownership: ownershipFromMemory(stored),
+        };
+      }),
+    );
+  }
+
+  async renewRimProviderOwnership(
+    input: RenewRimProviderOwnershipInput,
+  ): Promise<RenewRimProviderOwnershipResult> {
+    const operationKind = assertRimOwnershipOperationKind(input.operationKind);
+    const attemptId = assertRimOwnershipAttemptId(input.attemptId);
+    const leaseSeconds = assertRimOwnershipLeaseSeconds(input.leaseSeconds);
+    return this.withUserLock(input.currentUserId, () =>
+      this.tables.transaction(() => {
+        const row = this.tables.getOwnership(input.currentUserId, operationKind, attemptId);
+        if (!row) {
+          return { status: "REJECTED" as const, reason: "ABSENT" as const, ownership: null };
+        }
+        if (!sameOwnershipToken(row.ownerToken, input.ownerToken)) {
+          return {
+            status: "REJECTED" as const,
+            reason: "TOKEN_MISMATCH" as const,
+            ownership: ownershipFromMemory(row),
+          };
+        }
+        if (row.releasedAtMs !== null) {
+          return {
+            status: "REJECTED" as const,
+            reason: "ALREADY_RELEASED" as const,
+            ownership: ownershipFromMemory(row),
+          };
+        }
+        const now = Date.now();
+        if (row.leasedUntilMs <= now) {
+          return {
+            status: "REJECTED" as const,
+            reason: "EXPIRED" as const,
+            ownership: ownershipFromMemory(row),
+          };
+        }
+        const next: OwnershipMemoryRow = {
+          ...row,
+          leasedUntilMs: now + leaseSeconds * 1000,
+        };
+        this.tables.replaceOwnership(next);
+        return { status: "RENEWED" as const, ownership: ownershipFromMemory(next) };
+      }),
+    );
+  }
+
+  async releaseRimProviderOwnership(
+    input: ReleaseRimProviderOwnershipInput,
+  ): Promise<ReleaseRimProviderOwnershipResult> {
+    const operationKind = assertRimOwnershipOperationKind(input.operationKind);
+    const attemptId = assertRimOwnershipAttemptId(input.attemptId);
+    const releaseReason = assertRimOwnershipTokenReleaseReason(input.releaseReason);
+    return this.withUserLock(input.currentUserId, () =>
+      this.tables.transaction(() => {
+        const row = this.tables.getOwnership(input.currentUserId, operationKind, attemptId);
+        if (!row) {
+          return { status: "REJECTED" as const, reason: "ABSENT" as const, ownership: null };
+        }
+        if (!sameOwnershipToken(row.ownerToken, input.ownerToken)) {
+          return {
+            status: "REJECTED" as const,
+            reason: "TOKEN_MISMATCH" as const,
+            ownership: ownershipFromMemory(row),
+          };
+        }
+        if (row.releasedAtMs !== null) {
+          return {
+            status: "REJECTED" as const,
+            reason: "ALREADY_RELEASED" as const,
+            ownership: ownershipFromMemory(row),
+          };
+        }
+        const next: OwnershipMemoryRow = {
+          ...row,
+          releasedAtMs: Date.now(),
+          releaseReason,
+        };
+        this.tables.replaceOwnership(next);
+        return { status: "RELEASED" as const, ownership: ownershipFromMemory(next) };
+      }),
+    );
+  }
+
+  async lookupRimProviderOwnership(key: RimOwnershipKey): Promise<RimProviderOwnership | null> {
+    const operationKind = assertRimOwnershipOperationKind(key.operationKind);
+    const attemptId = assertRimOwnershipAttemptId(key.attemptId);
+    const row = this.tables.getOwnership(key.currentUserId, operationKind, attemptId);
+    return row ? ownershipFromMemory(row) : null;
+  }
+
+  async invalidateRimProviderOwnership(
+    input: InvalidateRimProviderOwnershipInput,
+  ): Promise<InvalidateRimProviderOwnershipResult> {
+    const operationKind = assertRimOwnershipOperationKind(input.operationKind);
+    const attemptId = assertRimOwnershipAttemptId(input.attemptId);
+    const releaseReason = assertRimOwnershipInvalidationReason(input.releaseReason);
+    return this.withUserLock(input.currentUserId, () =>
+      this.tables.transaction(() =>
+        this.invalidateOwnershipUnlocked(
+          input.currentUserId,
+          operationKind,
+          attemptId,
+          releaseReason,
+        ),
+      ),
+    );
+  }
+
+  async withRimProviderOwnershipCoordination<T>(
+    key: RimOwnershipKey,
+    run: (context: RimOwnershipCoordinationContext) => Promise<T>,
+  ): Promise<T> {
+    const operationKind = assertRimOwnershipOperationKind(key.operationKind);
+    const attemptId = assertRimOwnershipAttemptId(key.attemptId);
+    return this.withUserLock(key.currentUserId, async () => {
+      const before = this.tables.snapshot();
+      try {
+        const session = this.requireSession(key.currentUserId);
+        const row = this.tables.getOwnership(key.currentUserId, operationKind, attemptId);
+        const context: RimOwnershipCoordinationContext = {
+          revision: session.revision,
+          runtime: session.rimProviderRuntime ?? null,
+          ownership: row ? ownershipFromMemory(row) : null,
+          invalidate: async (reason) =>
+            this.invalidateOwnershipUnlocked(key.currentUserId, operationKind, attemptId, reason),
+        };
+        return await run(context);
+      } catch (error) {
+        this.tables.restore(before);
+        throw error;
+      }
+    });
   }
 
   async markTelegramPersistentReentryBootstrapSent(currentUserId: UserId, claimToken: string) {
@@ -444,6 +677,47 @@ export class InMemoryProductStore implements ProductStore {
     }
   }
 
+  private requireSession(currentUserId: UserId) {
+    if (!this.tables.hasUser(currentUserId)) {
+      throw new PersistenceError(
+        "IDENTITY_REQUIRED",
+        "Persistence operations require an authenticated identity_users.user_id",
+      );
+    }
+    const current = this.tables.lockSession(currentUserId);
+    if (!current) {
+      throw new PersistenceError(
+        "INVARIANT",
+        "rim provider ownership requires an existing product_user_sessions row",
+      );
+    }
+    return current;
+  }
+
+  private invalidateOwnershipUnlocked(
+    currentUserId: UserId,
+    operationKind: AcquireRimProviderOwnershipInput["operationKind"],
+    attemptId: string,
+    reason: string,
+  ): InvalidateRimProviderOwnershipResult {
+    this.requireSession(currentUserId);
+    const releaseReason = assertRimOwnershipInvalidationReason(reason);
+    const row = this.tables.getOwnership(currentUserId, operationKind, attemptId);
+    if (!row) {
+      return { status: "ABSENT" };
+    }
+    if (row.releasedAtMs !== null) {
+      return { status: "ALREADY_RELEASED", ownership: ownershipFromMemory(row) };
+    }
+    const next: OwnershipMemoryRow = {
+      ...row,
+      releasedAtMs: Date.now(),
+      releaseReason,
+    };
+    this.tables.replaceOwnership(next);
+    return { status: "INVALIDATED", ownership: ownershipFromMemory(next) };
+  }
+
   private async withUserLock<T>(userId: UserId, fn: () => T): Promise<T> {
     const previous = this.userLocks.get(userId) ?? Promise.resolve();
     let release: () => void = () => undefined;
@@ -456,7 +730,7 @@ export class InMemoryProductStore implements ProductStore {
     );
     await previous;
     try {
-      return fn();
+      return await fn();
     } finally {
       release();
       if (this.userLocks.get(userId) === current) {
@@ -561,4 +835,24 @@ export class InMemoryProductStore implements ProductStore {
     );
     return this.read(currentUserId);
   }
+}
+
+function sameOwnershipToken(stored: string, supplied: string): boolean {
+  return isRimOwnershipToken(supplied) && stored.toLowerCase() === supplied.toLowerCase();
+}
+
+function ownershipFromMemory(row: OwnershipMemoryRow): RimProviderOwnership {
+  const now = Date.now();
+  const released = row.releasedAtMs !== null;
+  return {
+    userId: row.userId as UserId,
+    operationKind: row.operationKind,
+    attemptId: row.attemptId,
+    requestId: row.requestId,
+    ownerToken: row.ownerToken,
+    leasedUntil: new Date(row.leasedUntilMs).toISOString(),
+    releasedAt: row.releasedAtMs === null ? null : new Date(row.releasedAtMs).toISOString(),
+    releaseReason: row.releaseReason,
+    phase: ownershipPhase(released, !released && row.leasedUntilMs > now),
+  };
 }

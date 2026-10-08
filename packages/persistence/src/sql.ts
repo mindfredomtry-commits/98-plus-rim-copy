@@ -374,4 +374,81 @@ WHERE rim_chat_id = $1
   AND (openai_conversation_id IS NULL OR openai_conversation_id = $2)
 RETURNING rim_chat_id
 `.trim(),
+  selectRimProviderOwnership: `
+SELECT user_id, operation_kind, attempt_id, request_id, owner_token::text AS owner_token,
+       leased_until, released_at, release_reason,
+       (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active
+FROM rim_provider_ownership
+WHERE user_id = $1
+  AND operation_kind = $2
+  AND attempt_id = $3
+`.trim(),
+  selectRimProviderOwnershipForUpdate: `
+SELECT user_id, operation_kind, attempt_id, request_id, owner_token::text AS owner_token,
+       leased_until, released_at, release_reason,
+       (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active
+FROM rim_provider_ownership
+WHERE user_id = $1
+  AND operation_kind = $2
+  AND attempt_id = $3
+FOR UPDATE
+`.trim(),
+  selectRimProviderOwnershipTokenState: `
+SELECT user_id, operation_kind, attempt_id, request_id, owner_token::text AS owner_token,
+       leased_until, released_at, release_reason,
+       (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active,
+       (owner_token = $4::uuid) AS token_matches
+FROM rim_provider_ownership
+WHERE user_id = $1
+  AND operation_kind = $2
+  AND attempt_id = $3
+`.trim(),
+  insertRimProviderOwnership: `
+INSERT INTO rim_provider_ownership (
+  user_id, operation_kind, attempt_id, request_id, owner_token, leased_until
+) VALUES (
+  $1, $2, $3, $4, $5::uuid, clock_timestamp() + ($6::integer * INTERVAL '1 second')
+)
+RETURNING user_id, operation_kind, attempt_id, request_id, owner_token::text AS owner_token,
+          leased_until, released_at, release_reason,
+          (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active
+`.trim(),
+  renewRimProviderOwnership: `
+UPDATE rim_provider_ownership
+SET leased_until = clock_timestamp() + ($5::integer * INTERVAL '1 second')
+WHERE user_id = $1
+  AND operation_kind = $2
+  AND attempt_id = $3
+  AND owner_token = $4::uuid
+  AND released_at IS NULL
+  AND leased_until > clock_timestamp()
+RETURNING user_id, operation_kind, attempt_id, request_id, owner_token::text AS owner_token,
+          leased_until, released_at, release_reason,
+          (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active
+`.trim(),
+  releaseRimProviderOwnership: `
+UPDATE rim_provider_ownership
+SET released_at = clock_timestamp(),
+    release_reason = $5
+WHERE user_id = $1
+  AND operation_kind = $2
+  AND attempt_id = $3
+  AND owner_token = $4::uuid
+  AND released_at IS NULL
+RETURNING user_id, operation_kind, attempt_id, request_id, owner_token::text AS owner_token,
+          leased_until, released_at, release_reason,
+          (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active
+`.trim(),
+  invalidateRimProviderOwnership: `
+UPDATE rim_provider_ownership
+SET released_at = clock_timestamp(),
+    release_reason = $4
+WHERE user_id = $1
+  AND operation_kind = $2
+  AND attempt_id = $3
+  AND released_at IS NULL
+RETURNING user_id, operation_kind, attempt_id, request_id, owner_token::text AS owner_token,
+          leased_until, released_at, release_reason,
+          (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active
+`.trim(),
 } as const;
