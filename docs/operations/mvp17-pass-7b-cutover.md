@@ -120,6 +120,18 @@ Those states need a person. The runner does not drop, rewrite, or mark them appl
 
 Migrations 001–010 are the canonical schema. Do not down-migrate them because an application deploy is rolled back. After `rim_chats` or `rim_messages` contain rows, do not drop 010.
 
+## Production schema after MVP16
+
+Migration `packages/persistence/schema/010_rim_history.sql` creates `rim_chats` and `rim_messages`. It is already applied in production. `schema_migrations` contains exactly the ten files 001–010 on commit `203cc660cdfb354fcfbfcbc109516cde2cf127ea`, deployment `7d0964c0-9eaa-4c93-bd98-8f23324e94c7`.
+
+Commit `428a8de8c3a498d9a4d77c49d32250264dc2dd59` cannot start against that history. Its migration runner does not know version 010 and refuses to listen.
+
+Do not down-migrate. Do not delete archived RIM history, including when those tables hold the only rows added after 009.
+
+A forward-fix must be a newer commit that still contains migration 010 and the archive prefix checks. Do not deploy a build whose migration list stops at 009.
+
+The encrypted logical backup taken at 2026-10-08T10:36:05Z is a `public` schema dump of migrations 001–009. It predates user data. It cannot recover activity created after that dump. Do not restore it over the current database. The checkpoint file `docs/operations/mvp16-final-production-checkpoint.md` records the backup limits.
+
 ## Pass 7B sequence
 
 1. Create or select the Supabase project and its PostgreSQL database. Prefer an empty database.
@@ -137,7 +149,7 @@ FROM schema_migrations
 ORDER BY applied_at ASC, version ASC;
 ```
 
-Expect the nine file paths above, each once. `applied_at` is non-null. A second process start must add zero rows.
+Expect the ten file paths above, 001–010, each once. `applied_at` is non-null. A second process start must add zero rows. The original Pass 7B cutover, before RIM history, recorded 001–009. Production since migration 010 is the ten-version history.
 
 9. Restart the API with `PERSISTENCE_MODE=postgres` and the same `DATABASE_URL`. Confirm the log contains `persistence=postgres` and the topology line, and does not contain the connection string.
 10. Health: the process is listening only after migrations succeed. `GET /api/meta` returns `PRODUCT_CONTROL_STATE_COUNT` 30, `CANONICAL_EVENT_COUNT` 60, `MATRIX_RULE_COUNT` 360.
@@ -145,7 +157,7 @@ Expect the nine file paths above, each once. `applied_at` is non-null. A second 
 12. Restart the same single replica. Repeat the smoke reads. State must still be there.
 13. Watch the rollback signals below during the smoke. Stop before public traffic if any fire.
 14. Roll back only by the procedure below. Do not drop the database as a rollback.
-15. Freeze only when the smoke and the restart proof pass, history stays at nine versions, replica count is still 1, and DC-02 is still recorded as open.
+15. Freeze only when the smoke and the restart proof pass, history stays at the ten versions 001–010, replica count is still 1, and DC-02 is still recorded as open.
 
 ## Controlled smoke
 
@@ -166,7 +178,7 @@ After each write, read it back. Then restart the single API process and read it 
 Stop before traffic:
 
 - migration command or startup exits before listen
-- `schema_migrations` is not the nine-version prefix
+- `schema_migrations` is not the ten-version prefix 001–010
 - startup log is missing, or it shows `persistence=memory`
 - replica count is not 1
 - `/api/meta` is not 30 / 60 / 360
@@ -201,7 +213,7 @@ Application, before any user write has committed to Postgres:
 
 Pass 6 cannot serve rows that were written by postgres mode. It will boot an empty volatile process and those rows become invisible.
 
-Application, after any durable user write exists:
+Application, after any durable user write exists and before migration 010 is recorded:
 
 - Do not deploy Pass 6.
 - Do not set `PERSISTENCE_MODE=memory`.
@@ -209,7 +221,15 @@ Application, after any durable user write exists:
 - Keep API replicas at 1.
 - If the failure is data-shaped, stop traffic and investigate `schema_migrations` and the affected user rows before redeploying.
 
-The first commit that can run against the migrated database is the Pass 7A commit. Pass 6 is the last commit that is a safe volatile rollback, and only while Postgres still has no user writes that must remain visible.
+Application, after migration 010 is recorded:
+
+- Do not deploy Pass 6, Pass 7A, or `428a8de8c3a498d9a4d77c49d32250264dc2dd59`.
+- Do not set `PERSISTENCE_MODE=memory`.
+- Do not down-migrate and do not delete `rim_chats` or `rim_messages`.
+- Redeploy `203cc660cdfb354fcfbfcbc109516cde2cf127ea`, or a later forward-fix that still contains migration 010, with `PERSISTENCE_MODE=postgres` and the same `DATABASE_URL`.
+- Keep API replicas at 1.
+
+The first commit that can run against the original Pass 7B database, migrations 001–009, is the Pass 7A commit. Pass 6 is the last commit that is a safe volatile rollback, and only while Postgres still has no user writes that must remain visible. After 010 is recorded, Pass 7A and `428a8de8` cannot start.
 
 ## Carried observations
 
