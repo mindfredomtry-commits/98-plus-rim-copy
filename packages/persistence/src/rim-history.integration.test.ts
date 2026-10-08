@@ -422,6 +422,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
       proposed,
       eventOf("RIM.PRESS_SUGGESTION_FORBID", { rimChatId: opened.chat.id, proposalId }),
     );
+    expect((await chats(owner))[0]?.terminated).toBe(false);
     const timed = await opened.apply(
       owner,
       frozen,
@@ -462,6 +463,45 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
     expect(archived[0]?.resulting_ban_id).toBe(succeeded.snapshot.extended.successfulBanId);
     expect(await messages(opened.chat.id)).toHaveLength(before);
     expect(succeeded.snapshot.extended.rimChat).toBeNull();
+    const closing = started.snapshot.extended.rimChat;
+    const realBanId = succeeded.snapshot.extended.successfulBanId;
+    const realBan = realBanId ? succeeded.snapshot.extended.entities.bans[realBanId] : undefined;
+    if (!closing || !realBanId || !realBan) {
+      throw new Error("Create Ban did not close the archived chat");
+    }
+    await db.sql.transaction(async (tx) => {
+      await projectRimHistory(tx, {
+        ownerUserId: owner,
+        previousLive: closing,
+        previousFrozen: started.snapshot.extended.savedFrozenRimChat,
+        nextLive: null,
+        nextFrozen: null,
+        bans: succeeded.snapshot.extended.entities.bans,
+        createdBanIds: new Set([realBanId]),
+        appliedRule: { eventId: "E-10", branch: "confirm-rim" },
+      });
+    });
+    expect((await chats(owner))[0]?.resulting_ban_id).toBe(realBanId);
+    const otherId = `ban-${randomUUID()}`;
+    await expect(
+      db.sql.transaction(async (tx) => {
+        await projectRimHistory(tx, {
+          ownerUserId: owner,
+          previousLive: closing,
+          previousFrozen: started.snapshot.extended.savedFrozenRimChat,
+          nextLive: null,
+          nextFrozen: null,
+          bans: { [otherId]: { ...realBan, id: otherId as never, sourceProposalId: null } },
+          createdBanIds: new Set([otherId]),
+          appliedRule: { eventId: "E-10", branch: "confirm-rim" },
+        });
+      }),
+    ).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM chat archive termination conflict",
+    });
+    expect((await chats(owner))[0]?.resulting_ban_id).toBe(realBanId);
+    expect(await messages(opened.chat.id)).toHaveLength(before);
   });
 
   it("retains history on full close and does not invent a reply when initialization fails", async () => {
@@ -785,5 +825,474 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
     );
     expect(asked.snapshot.extended.rimChat?.id).not.toBe(opened.chat.id);
     expect(await messages(opened.chat.id)).toHaveLength(0);
+  });
+
+  function withRimChat(
+    snapshot: ProductSnapshot,
+    patch: Partial<NonNullable<ProductSnapshot["extended"]["rimChat"]>>,
+  ): ProductSnapshot {
+    const chat = snapshot.extended.rimChat;
+    if (!chat) {
+      throw new Error("missing RimChat");
+    }
+    return {
+      ...snapshot,
+      extended: {
+        ...snapshot.extended,
+        rimChat: { ...chat, ...patch },
+      },
+    };
+  }
+
+  it("appends a normal event-keyed message into an empty archive", async () => {
+    const owner = await identity("empty-owner");
+    const contact = await identity("empty-contact");
+    const opened = await openChat(owner, contact);
+    expect(await messages(opened.chat.id)).toHaveLength(0);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const rows = await messages(opened.chat.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.message_key).toBe(
+      `${opened.chat.id}:${opened.chat.relationshipContext?.requestId}:prompt`,
+    );
+    expect(rows[0]?.message_key.includes(":accepted:")).toBe(false);
+    expect(rows[0]?.kind).toBe("RIM");
+    expect(rows[0]?.ordinal).toBe(1);
+    expect(ready.snapshot.extended.rimChat?.messages).toHaveLength(1);
+  });
+
+  it("recovers an empty archive with accepted-prefix keys and one new event key", async () => {
+    const owner = await identity("recover-owner");
+    const contact = await identity("recover-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const prompt = ready.snapshot.extended.rimChat?.messages[0];
+    if (!prompt || prompt.kind !== "RIM") {
+      throw new Error("prompt was not accepted");
+    }
+    await db.sql.query("DELETE FROM rim_messages WHERE rim_chat_id = $1", [opened.chat.id]);
+    const drafted = await opened.apply(
+      owner,
+      ready,
+      eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "recovered" }),
+    );
+    const sent = await opened.apply(owner, drafted, eventOf("RIM.PRESS_SEND", {}));
+    const pending = sent.snapshot.extended.rimChat?.aiOperation;
+    if (pending?.status !== "PENDING") {
+      throw new Error("recovered send did not open a pending AI request");
+    }
+    const rows = await messages(opened.chat.id);
+    expect(rows.map((row) => row.message_key)).toEqual([
+      `${opened.chat.id}:accepted:1`,
+      `${opened.chat.id}:${pending.requestId}:user`,
+    ]);
+    expect(rows[0]?.kind).toBe("RIM");
+    expect(rows[0]?.payload.text).toBe(prompt.text);
+    expect(rows[0]?.source_context_request_id).toBe(`accepted:${opened.chat.id}:1`);
+    expect(rows[1]?.payload.text).toBe("recovered");
+    expect(rows.filter((row) => row.payload.text === prompt.text)).toHaveLength(1);
+  });
+
+  it("appends only the missing tail after a verified archive prefix", async () => {
+    const owner = await identity("partial-owner");
+    const contact = await identity("partial-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const chat = ready.snapshot.extended.rimChat;
+    const prompt = chat?.messages[0];
+    if (!chat || !prompt) {
+      throw new Error("prompt was not accepted");
+    }
+    const promptKey = (await messages(chat.id))[0]?.message_key;
+    const seeded = await PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(
+      owner,
+      withRimChat(ready.snapshot, {
+        messages: [prompt, { kind: "USER", text: "already" }],
+        inputDraft: "tail",
+      }),
+    );
+    const sent = await opened.apply(owner, seeded, eventOf("RIM.PRESS_SEND", {}));
+    const pending = sent.snapshot.extended.rimChat?.aiOperation;
+    if (pending?.status !== "PENDING") {
+      throw new Error("partial recovery did not open a pending AI request");
+    }
+    const rows = await messages(chat.id);
+    expect(rows.map((row) => row.message_key)).toEqual([
+      promptKey,
+      `${chat.id}:accepted:2`,
+      `${chat.id}:${pending.requestId}:user`,
+    ]);
+    expect(rows.map((row) => row.ordinal)).toEqual([1, 2, 3]);
+    expect(rows.map((row) => row.payload.text)).toEqual([
+      prompt.kind === "RIM" ? prompt.text : "",
+      "already",
+      "tail",
+    ]);
+    expect(rows.filter((row) => row.message_key?.includes(":accepted:"))).toHaveLength(1);
+  });
+
+  it("rejects a partial archive that does not match the accepted payload", async () => {
+    const owner = await identity("mismatch-owner");
+    const contact = await identity("mismatch-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const prompt = ready.snapshot.extended.rimChat?.messages[0];
+    if (!prompt || prompt.kind !== "RIM") {
+      throw new Error("prompt was not accepted");
+    }
+    const before = await messages(opened.chat.id);
+    const seeded = await PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(
+      owner,
+      withRimChat(ready.snapshot, {
+        messages: [{ ...prompt, text: "mutated prompt" }],
+        inputDraft: "nope",
+      }),
+    );
+    await expect(opened.apply(owner, seeded, eventOf("RIM.PRESS_SEND", {}))).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM history archive prefix does not match",
+    });
+    expect(await messages(opened.chat.id)).toEqual(before);
+    const kept = await opened.store.loadProductSnapshot(owner);
+    expect(kept.revision).toBe(seeded.revision);
+  });
+
+  it("rejects a snapshot whose order does not match the archive", async () => {
+    const owner = await identity("reorder-owner");
+    const contact = await identity("reorder-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const drafted = await opened.apply(
+      owner,
+      ready,
+      eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "ordered" }),
+    );
+    const sent = await opened.apply(owner, drafted, eventOf("RIM.PRESS_SEND", {}));
+    const pending = sent.snapshot.extended.rimChat?.aiOperation;
+    const chat = sent.snapshot.extended.rimChat;
+    const prompt = chat?.messages[0];
+    const user = chat?.messages[1];
+    if (!chat || !prompt || !user || pending?.status !== "PENDING") {
+      throw new Error("ordered chat was not ready to reverse");
+    }
+    const before = await messages(chat.id);
+    const seeded = await PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(
+      owner,
+      withRimChat(sent.snapshot, { messages: [user, prompt] }),
+    );
+    await expect(
+      opened.apply(
+        owner,
+        seeded,
+        eventOf("RIM.AI_RESULT_RECEIVED", {
+          rimChatId: chat.id,
+          requestId: pending.requestId,
+          result: { kind: "MESSAGE", text: "should not archive" },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM history archive prefix does not match",
+    });
+    expect(await messages(chat.id)).toEqual(before);
+  });
+
+  it("keeps two legitimate messages with the same text at different ordinals", async () => {
+    const owner = await identity("duplicate-owner");
+    const contact = await identity("duplicate-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const prompt = ready.snapshot.extended.rimChat?.messages[0];
+    if (!prompt) {
+      throw new Error("prompt was not accepted");
+    }
+    const seeded = await PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(
+      owner,
+      withRimChat(ready.snapshot, {
+        messages: [prompt, { kind: "USER", text: "same" }],
+        inputDraft: "same",
+      }),
+    );
+    const sent = await opened.apply(owner, seeded, eventOf("RIM.PRESS_SEND", {}));
+    const pending = sent.snapshot.extended.rimChat?.aiOperation;
+    if (pending?.status !== "PENDING") {
+      throw new Error("duplicate send did not open a pending AI request");
+    }
+    const rows = await messages(opened.chat.id);
+    const users = rows.filter((row) => row.kind === "USER");
+    expect(users.map((row) => row.payload.text)).toEqual(["same", "same"]);
+    expect(users.map((row) => row.ordinal)).toEqual([2, 3]);
+    expect(new Set(users.map((row) => row.message_key)).size).toBe(2);
+  });
+
+  it("rejects a seeded prefix mutation after an event-keyed message", async () => {
+    const owner = await identity("mutate-owner");
+    const contact = await identity("mutate-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const drafted = await opened.apply(
+      owner,
+      ready,
+      eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "hello" }),
+    );
+    const sent = await opened.apply(owner, drafted, eventOf("RIM.PRESS_SEND", {}));
+    const pending = sent.snapshot.extended.rimChat?.aiOperation;
+    const chat = sent.snapshot.extended.rimChat;
+    if (!chat || pending?.status !== "PENDING") {
+      throw new Error("event-keyed user message was not archived");
+    }
+    await db.sql.query("DELETE FROM rim_messages WHERE rim_chat_id = $1 AND ordinal = 1", [
+      chat.id,
+    ]);
+    await db.sql.query(
+      "UPDATE rim_messages SET ordinal = 1 WHERE rim_chat_id = $1 AND ordinal = 2",
+      [chat.id],
+    );
+    const eventKeyed = await messages(chat.id);
+    expect(eventKeyed).toHaveLength(1);
+    expect(eventKeyed[0]?.message_key).toBe(`${chat.id}:${pending.requestId}:user`);
+    const seeded = await PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(
+      owner,
+      sent.snapshot,
+    );
+    await expect(
+      opened.apply(
+        owner,
+        seeded,
+        eventOf("RIM.AI_RESULT_RECEIVED", {
+          rimChatId: chat.id,
+          requestId: pending.requestId,
+          result: { kind: "MESSAGE", text: "should not archive" },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM history archive prefix does not match",
+    });
+    const rows = await messages(chat.id);
+    expect(rows.map((row) => row.message_key)).toEqual(eventKeyed.map((row) => row.message_key));
+    expect(rows.some((row) => row.message_key.includes(":accepted:"))).toBe(false);
+  });
+
+  it("rejects an archive that contains more messages than the snapshot", async () => {
+    const owner = await identity("longer-owner");
+    const contact = await identity("longer-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const drafted = await opened.apply(
+      owner,
+      ready,
+      eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "kept" }),
+    );
+    const sent = await opened.apply(owner, drafted, eventOf("RIM.PRESS_SEND", {}));
+    const pending = sent.snapshot.extended.rimChat?.aiOperation;
+    if (pending?.status !== "PENDING") {
+      throw new Error("longer archive setup did not send");
+    }
+    await opened.apply(
+      owner,
+      sent,
+      eventOf("RIM.AI_RESULT_RECEIVED", {
+        rimChatId: opened.chat.id,
+        requestId: pending.requestId,
+        result: { kind: "MESSAGE", text: "kept reply" },
+      }),
+    );
+    const before = await messages(opened.chat.id);
+    expect(before).toHaveLength(3);
+    const seeded = await PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(
+      owner,
+      withRimChat(ready.snapshot, { inputDraft: "extra" }),
+    );
+    await expect(opened.apply(owner, seeded, eventOf("RIM.PRESS_SEND", {}))).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM history has more messages than the accepted chat",
+    });
+    expect(await messages(opened.chat.id)).toEqual(before);
+  });
+
+  it("rejects a later user message and a later reply on a terminated chat", async () => {
+    const owner = await identity("closed-owner");
+    const contact = await identity("closed-contact");
+    const opened = await openChat(owner, contact);
+    const ready = await opened.apply(
+      owner,
+      opened.loaded,
+      eventOf("RIM.CONTEXT_READY", {
+        rimChatId: opened.chat.id,
+        selectedContactId: contact,
+        relationshipContext: CONTEXT_DATA,
+        requestId: opened.chat.relationshipContext!.requestId,
+      }),
+    );
+    const drafted = await opened.apply(
+      owner,
+      ready,
+      eventOf("RIM.CHANGE_INPUT_DRAFT", { inputDraft: "closing" }),
+    );
+    const sent = await opened.apply(owner, drafted, eventOf("RIM.PRESS_SEND", {}));
+    const live = sent.snapshot.extended.rimChat;
+    const pending = live?.aiOperation;
+    if (!live || pending?.status !== "PENDING") {
+      throw new Error("chat was not pending before close");
+    }
+    const closed = await opened.apply(owner, sent, eventOf("APP.FULL_CLOSE", {}));
+    const before = await messages(live.id);
+    await expect(
+      PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(owner, sent.snapshot),
+    ).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM history cannot write a terminated chat",
+    });
+    expect((await chats(owner))[0]?.termination_reason).toBe("full_close");
+    const nextUser = {
+      ...live,
+      messages: [...live.messages, { kind: "USER" as const, text: "later" }],
+      aiOperation: {
+        ...pending,
+        snapshot: { ...pending.snapshot, userMessage: "later" },
+      },
+    };
+    await expect(
+      db.sql.transaction(async (tx) => {
+        await projectRimHistory(tx, {
+          ownerUserId: owner,
+          previousLive: live,
+          previousFrozen: null,
+          nextLive: nextUser,
+          nextFrozen: null,
+          bans: {},
+          createdBanIds: new Set<string>(),
+          appliedRule: { eventId: "E-52", branch: "default" },
+        });
+      }),
+    ).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM history cannot write a terminated chat",
+    });
+    const nextReply = {
+      ...live,
+      messages: [...live.messages, { kind: "RIM" as const, text: "later reply" }],
+    };
+    await expect(
+      db.sql.transaction(async (tx) => {
+        await projectRimHistory(tx, {
+          ownerUserId: owner,
+          previousLive: live,
+          previousFrozen: null,
+          nextLive: nextReply,
+          nextFrozen: null,
+          bans: {},
+          createdBanIds: new Set<string>(),
+          appliedRule: { eventId: "E-58", branch: "current-request" },
+        });
+      }),
+    ).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM history cannot write a terminated chat",
+    });
+    await db.sql.transaction(async (tx) => {
+      await projectRimHistory(tx, {
+        ownerUserId: owner,
+        previousLive: live,
+        previousFrozen: null,
+        nextLive: closed.snapshot.extended.rimChat,
+        nextFrozen: null,
+        bans: {},
+        createdBanIds: new Set<string>(),
+        appliedRule: { eventId: "E-32", branch: "default" },
+      });
+    });
+    await expect(
+      db.sql.transaction(async (tx) => {
+        await projectRimHistory(tx, {
+          ownerUserId: owner,
+          previousLive: live,
+          previousFrozen: null,
+          nextLive: null,
+          nextFrozen: null,
+          bans: {},
+          createdBanIds: new Set<string>(),
+          appliedRule: { eventId: "E-50", branch: "default" },
+        });
+      }),
+    ).rejects.toMatchObject({
+      code: "INVARIANT",
+      message: "RIM chat archive termination conflict",
+    });
+    expect(await messages(live.id)).toEqual(before);
+    expect((await chats(owner))[0]?.termination_reason).toBe("full_close");
   });
 });

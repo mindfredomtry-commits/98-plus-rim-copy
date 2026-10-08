@@ -41,6 +41,7 @@ import { runtimeAttemptAllowsCommit } from "./runtime-attempt-authority.ts";
 import {
   persistOpenAiConversationId,
   projectRimHistory,
+  rejectTerminatedRimChats,
   rimHistoryChanged,
 } from "./rim-history.ts";
 import { SQL } from "./sql.ts";
@@ -901,6 +902,12 @@ export class PostgresProductStore implements ProductStore {
         ban.status,
         ban.boundViaTelegramShareLink,
         ban.sourceProposalId,
+      ]);
+    }
+    if (seed) {
+      await rejectTerminatedRimChats(tx, [
+        snapshot.extended.rimChat,
+        snapshot.extended.savedFrozenRimChat,
       ]);
     }
     if (!seed) {

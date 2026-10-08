@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { asTelegramUserId, PostgresIdentityStore } from "@98plus/identity";
 import { emptySnapshot } from "@98plus/product-model";
-import { canonicalMigrationScripts } from "./migrations.ts";
+import { canonicalMigrationScripts, rimHistorySql } from "./migrations.ts";
 import { declaredMigrationObjects, type DeclaredMigrationObject } from "./production-migrations.ts";
 import { openPostgresPersistence, type PostgresPersistence } from "./postgres-client.ts";
 import { PostgresProductStore } from "./postgres-store.ts";
@@ -306,6 +306,76 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
       expect(history.rows).toEqual([]);
     } finally {
       await aheadDb.close();
+    }
+  }, 30_000);
+
+  it("keeps migration 010 fail-closed for old code, new code, and a partial schema", async () => {
+    const scripts = canonicalMigrationScripts();
+    const oldScripts = scripts.slice(0, 9);
+
+    const recorded = await schema();
+    const recordedDb = open(recorded);
+    try {
+      await recordedDb.migrate();
+      await expect(recordedDb.migrate({ migrations: oldScripts })).rejects.toThrow(
+        /unknown version/,
+      );
+    } finally {
+      await recordedDb.close();
+    }
+
+    const current = await schema();
+    const currentDb = open(current);
+    try {
+      const first = await currentDb.migrate();
+      expect(first.applied).toHaveLength(10);
+      const second = await currentDb.migrate();
+      expect(second.newlyApplied).toEqual([]);
+      expect(second.applied).toHaveLength(10);
+    } finally {
+      await currentDb.close();
+    }
+
+    const unrecorded = await schema();
+    const unrecordedDb = open(unrecorded);
+    try {
+      await unrecordedDb.migrate({ migrations: oldScripts });
+      for (const statement of rimHistorySql()
+        .split(";")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)) {
+        await unrecordedDb.sql.query(statement, []);
+      }
+      const again = await unrecordedDb.migrate({ migrations: oldScripts });
+      expect(again.newlyApplied).toEqual([]);
+      const history = await unrecordedDb.sql.query<{ version: string }>(
+        "SELECT version FROM schema_migrations",
+        [],
+      );
+      expect(history.rows).toHaveLength(9);
+      await expect(unrecordedDb.migrate()).rejects.toMatchObject({ code: "MIGRATION_SCHEMA" });
+    } finally {
+      await unrecordedDb.close();
+    }
+
+    const partial = await schema();
+    const partialDb = open(partial);
+    try {
+      await partialDb.migrate({ migrations: oldScripts });
+      await partialDb.sql.query("CREATE TABLE rim_chats (rim_chat_id TEXT PRIMARY KEY)", []);
+      await expect(partialDb.migrate()).rejects.toMatchObject({ code: "MIGRATION_SCHEMA" });
+      const history = await partialDb.sql.query<{ version: string }>(
+        "SELECT version FROM schema_migrations",
+        [],
+      );
+      expect(history.rows).toHaveLength(9);
+      const messages = await partialDb.sql.query<{ present: string | null }>(
+        "SELECT to_regclass('rim_messages') AS present",
+        [],
+      );
+      expect(messages.rows[0]?.present).toBeNull();
+    } finally {
+      await partialDb.close();
     }
   }, 30_000);
 

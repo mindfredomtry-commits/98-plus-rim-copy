@@ -28,6 +28,7 @@ type ChatRow = {
 type MessageRow = {
   message_key: string;
   ordinal: number;
+  kind: string;
   payload: unknown;
 };
 
@@ -204,6 +205,41 @@ function appendIdentity(
   throw new PersistenceError("INVARIANT", "RIM history cannot key this accepted message");
 }
 
+async function loadChatRow(tx: PersistenceSqlClient, rimChatId: string): Promise<ChatRow | null> {
+  const existing = await tx.query<ChatRow>(SQL.selectRimChat, [rimChatId]);
+  return existing.rows[0] ?? null;
+}
+
+async function loadArchive(tx: PersistenceSqlClient, rimChatId: string): Promise<MessageRow[]> {
+  const archived = await tx.query<MessageRow>(SQL.selectRimMessages, [rimChatId]);
+  return [...archived.rows];
+}
+
+function sameAcceptedMessage(row: MessageRow, message: RimMessage): boolean {
+  return row.kind === message.kind && stable(row.payload) === stable(payloadOf(message));
+}
+
+function assertVerifiedPrefix(
+  archived: readonly MessageRow[],
+  messages: readonly RimMessage[],
+): void {
+  if (archived.length > messages.length) {
+    throw new PersistenceError("INVARIANT", "RIM history has more messages than the accepted chat");
+  }
+  for (let index = 0; index < archived.length; index += 1) {
+    const row = archived[index];
+    const message = messages[index];
+    if (
+      !row ||
+      !message ||
+      Number(row.ordinal) !== index + 1 ||
+      !sameAcceptedMessage(row, message)
+    ) {
+      throw new PersistenceError("INVARIANT", "RIM history archive prefix does not match");
+    }
+  }
+}
+
 async function ensureChat(
   tx: PersistenceSqlClient,
   chat: RimChat,
@@ -217,29 +253,53 @@ async function ensureChat(
   if (inserted.rows[0]) {
     return;
   }
-  const existing = await tx.query<ChatRow>(SQL.selectRimChat, [chat.id]);
-  const row = existing.rows[0];
+  const row = await loadChatRow(tx, chat.id);
   if (!row || row.owner_user_id !== ownerUserId || row.contact_user_id !== chat.selectedContactId) {
     throw new PersistenceError("INVARIANT", "RIM chat archive identity does not match");
   }
+  if (row.termination_reason !== null) {
+    throw new PersistenceError("INVARIANT", "RIM history cannot write a terminated chat");
+  }
 }
 
-async function backfillAcceptedMessages(
+export async function rejectTerminatedRimChats(
+  tx: PersistenceSqlClient,
+  chats: readonly (RimChat | null)[],
+): Promise<void> {
+  for (const chat of chats) {
+    if (!chat) {
+      continue;
+    }
+    const row = await loadChatRow(tx, chat.id);
+    if (row?.termination_reason) {
+      throw new PersistenceError("INVARIANT", "RIM history cannot write a terminated chat");
+    }
+  }
+}
+
+async function alignAcceptedMessages(
   tx: PersistenceSqlClient,
   chat: RimChat,
   ownerUserId: UserId,
+  accepted: readonly RimMessage[],
+  eventSlot: { index: number; identity: MessageIdentity } | null,
 ): Promise<void> {
   await ensureChat(tx, chat, ownerUserId);
-  const archived = await tx.query<MessageRow>(SQL.selectRimMessages, [chat.id]);
-  if (archived.rows.length >= chat.messages.length) {
-    return;
-  }
-  for (let index = archived.rows.length; index < chat.messages.length; index += 1) {
-    const message = chat.messages[index];
+  const archived = await loadArchive(tx, chat.id);
+  assertVerifiedPrefix(archived, accepted);
+  for (let index = archived.length; index < accepted.length; index += 1) {
+    const message = accepted[index];
     if (!message) {
       throw new PersistenceError("INVARIANT", "RIM history accepted message is missing");
     }
-    await archiveMessage(tx, chat, acceptedPrefixIdentity(chat, index + 1, message), message);
+    if (eventSlot && index > eventSlot.index) {
+      throw new PersistenceError("INVARIANT", "RIM history accepts one message per Product event");
+    }
+    const identity =
+      eventSlot && index === eventSlot.index
+        ? eventSlot.identity
+        : acceptedPrefixIdentity(chat, index + 1, message);
+    await archiveMessage(tx, chat, identity, message, index + 1);
   }
 }
 
@@ -248,10 +308,21 @@ async function archiveMessage(
   chat: RimChat,
   identity: MessageIdentity,
   message: RimMessage,
+  expectedOrdinal: number,
 ): Promise<void> {
-  const listed = await tx.query<MessageRow>(SQL.selectRimMessages, [chat.id]);
+  const row = await loadChatRow(tx, chat.id);
+  if (!row || row.termination_reason !== null) {
+    throw new PersistenceError("INVARIANT", "RIM history cannot write a terminated chat");
+  }
+  const listed = await loadArchive(tx, chat.id);
+  const ordinal = listed.length + 1;
+  if (ordinal !== expectedOrdinal) {
+    throw new PersistenceError(
+      "INVARIANT",
+      "RIM history ordinal does not match the accepted message",
+    );
+  }
   const payload = payloadOf(message);
-  const ordinal = listed.rows.length + 1;
   const inserted = await tx.query<{ message_key: string }>(SQL.insertRimMessage, [
     identity.key,
     chat.id,
@@ -264,12 +335,14 @@ async function archiveMessage(
   if (inserted.rows[0]) {
     return;
   }
-  const current = await tx.query<{ message_key: string; payload: unknown }>(
-    SQL.selectRimMessageByKey,
-    [identity.key],
-  );
-  const row = current.rows[0];
-  if (!row || stable(row.payload) !== stable(payload)) {
+  const current = listed.find((item) => item.message_key === identity.key);
+  const stored =
+    current ?? (await loadArchive(tx, chat.id)).find((item) => item.message_key === identity.key);
+  if (
+    !stored ||
+    Number(stored.ordinal) !== expectedOrdinal ||
+    !sameAcceptedMessage(stored, message)
+  ) {
     throw new PersistenceError("INVARIANT", "RIM history message key payload conflict");
   }
 }
@@ -371,37 +444,29 @@ export async function projectRimHistory(
     if (!prefixMatches) {
       throw new PersistenceError("INVARIANT", "RIM history message prefix does not match");
     }
-    await backfillAcceptedMessages(tx, previousLive, input.ownerUserId);
-    const appended = nextLive.messages.slice(previousLive.messages.length);
-    if (appended.length > 1) {
+    const added = nextLive.messages.length - previousLive.messages.length;
+    if (added > 1) {
       throw new PersistenceError("INVARIANT", "RIM history accepts one message per Product event");
     }
-    const message = appended[0];
-    if (message) {
-      await ensureChat(tx, nextLive, input.ownerUserId);
-      await archiveMessage(
-        tx,
-        nextLive,
-        appendIdentity(appliedRule, previousLive, nextLive, message),
-        message,
-      );
-    }
+    const appended = added === 1 ? nextLive.messages[previousLive.messages.length] : undefined;
+    await alignAcceptedMessages(
+      tx,
+      nextLive,
+      input.ownerUserId,
+      nextLive.messages,
+      appended
+        ? {
+            index: previousLive.messages.length,
+            identity: appendIdentity(appliedRule, previousLive, nextLive, appended),
+          }
+        : null,
+    );
   }
   for (const rimChatId of previousIds) {
     if (surviving.has(rimChatId)) {
       continue;
     }
     const closing = previousLive?.id === rimChatId ? previousLive : previousFrozen;
-    if (closing) {
-      await backfillAcceptedMessages(tx, closing, input.ownerUserId);
-    }
-    const archived = await tx.query<MessageRow>(SQL.selectRimMessages, [rimChatId]);
-    if ((closing?.messages.length ?? 0) !== archived.rows.length) {
-      throw new PersistenceError(
-        "INVARIANT",
-        "RIM history is missing accepted messages for a chat being closed",
-      );
-    }
     const reason = terminationReason(appliedRule);
     if (!reason) {
       throw new PersistenceError(
@@ -413,8 +478,43 @@ export async function projectRimHistory(
       reason === "create_ban_success"
         ? resultingBanId(previousLive, previousFrozen, input.bans, input.createdBanIds)
         : null;
-    await terminateChat(tx, rimChatId, reason, banId);
+    await closeArchivedChat(tx, closing, rimChatId, input.ownerUserId, reason, banId);
   }
+}
+
+async function closeArchivedChat(
+  tx: PersistenceSqlClient,
+  closing: RimChat | null,
+  rimChatId: string,
+  ownerUserId: UserId,
+  reason: RimTerminationReason,
+  banId: string | null,
+): Promise<void> {
+  const row = await loadChatRow(tx, rimChatId);
+  const accepted = closing?.messages ?? [];
+  if (row?.termination_reason) {
+    if (row.termination_reason !== reason || row.resulting_ban_id !== banId) {
+      throw new PersistenceError("INVARIANT", "RIM chat archive termination conflict");
+    }
+    const archived = await loadArchive(tx, rimChatId);
+    assertVerifiedPrefix(archived, accepted);
+    if (archived.length !== accepted.length) {
+      throw new PersistenceError("INVARIANT", "RIM history cannot write a terminated chat");
+    }
+    await terminateChat(tx, rimChatId, reason, banId);
+    return;
+  }
+  if (closing) {
+    await alignAcceptedMessages(tx, closing, ownerUserId, accepted, null);
+  }
+  const archived = await loadArchive(tx, rimChatId);
+  if (archived.length !== accepted.length) {
+    throw new PersistenceError(
+      "INVARIANT",
+      "RIM history is missing accepted messages for a chat being closed",
+    );
+  }
+  await terminateChat(tx, rimChatId, reason, banId);
 }
 
 export async function persistOpenAiConversationId(
