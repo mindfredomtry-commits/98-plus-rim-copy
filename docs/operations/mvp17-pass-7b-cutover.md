@@ -105,6 +105,7 @@ Canonical files, in order, read from disk:
 7. `packages/persistence/schema/007_ban_source_proposal.sql`
 8. `packages/persistence/schema/008_rim_provider_runtime.sql`
 9. `packages/persistence/schema/009_share_operation_token_unique.sql`
+10. `packages/persistence/schema/010_rim_history.sql`
 
 History table `schema_migrations` stores `version` (the file path) and `applied_at`. A recorded version is not executed again. Each migration commits on its own. A failed migration is rolled back and is not inserted. A second runner waits on the session advisory lock, then sees the history.
 
@@ -117,7 +118,7 @@ The runner stops without changing later migrations when:
 
 Those states need a person. The runner does not drop, rewrite, or mark them applied.
 
-Migrations 001–009 are the canonical schema. Do not down-migrate them because an application deploy is rolled back.
+Migrations 001–010 are the canonical schema. Do not down-migrate them because an application deploy is rolled back. After `rim_chats` or `rim_messages` contain rows, do not drop 010.
 
 ## Pass 7B sequence
 
@@ -189,7 +190,7 @@ Database investigation, leave the schema in place, do not down-migrate, do not s
 
 Application rollback and schema rollback are different.
 
-Schema: do not run a down migration. 001–009 stay. A rolled-back application that cannot speak Postgres must not be given this database's traffic.
+Schema: do not run a down migration. 001–010 stay. A rolled-back application that cannot speak Postgres must not be given this database's traffic.
 
 Application, before any user write has committed to Postgres:
 

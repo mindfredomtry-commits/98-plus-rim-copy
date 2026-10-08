@@ -70,9 +70,24 @@ async function readyChat(seen: RimAiRequest[]) {
   return { runtime, context, chat, sent };
 }
 
+async function storedConversationId(
+  ready: Awaited<ReturnType<typeof readyChat>>,
+): Promise<ProviderConversationId> {
+  const loaded = await ready.runtime.productStore.loadProductSnapshot(ready.context.currentUserId);
+  const applicable = applicableRimProviderRuntime(
+    parseRimProviderRuntime(loaded.rimProviderRuntime),
+    ready.chat.id,
+  );
+  if (applicable?.initialization.submissionState === "stored") {
+    return applicable.initialization.conversationId;
+  }
+  return "conv-hook" as ProviderConversationId;
+}
+
 function notSubmittedRuntime(
   chat: NonNullable<Awaited<ReturnType<typeof readyChat>>["chat"]>,
   submissionState: "not-submitted" | "acceptance-unknown",
+  conversationId: ProviderConversationId,
 ): RimProviderRuntime {
   if (chat.aiOperation.status !== "PENDING" || !chat.selectedContactId) {
     throw new Error("expected a pending chat");
@@ -84,7 +99,7 @@ function notSubmittedRuntime(
     initialization: {
       submissionState: "stored",
       attemptId: "init-hook" as RimProviderAttemptId,
-      conversationId: "conv-hook" as ProviderConversationId,
+      conversationId,
       clientRequestId: null,
     },
     attempt: {
@@ -101,15 +116,17 @@ function notSubmittedRuntime(
 describe("RIM AI recovery hooks", () => {
   it("does not recover from a snapshot read, and does recover on session re-entry", async () => {
     const seen: RimAiRequest[] = [];
-    const { runtime, context, chat, sent } = await readyChat(seen);
+    const ready = await readyChat(seen);
+    const { runtime, context, chat, sent } = ready;
     expect(seen).toEqual([]);
     if (chat.aiOperation.status !== "PENDING") {
       return;
     }
+    const conversationId = await storedConversationId(ready);
     await runtime.productStore.saveRimProviderRuntime(
       context.currentUserId,
       sent.revision,
-      notSubmittedRuntime(chat, "not-submitted"),
+      notSubmittedRuntime(chat, "not-submitted", conversationId),
     );
     await loadDiagnostics(runtime, context);
     expect(seen).toEqual([]);
@@ -117,7 +134,7 @@ describe("RIM AI recovery hooks", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.continuityMode).toBe("provider-conversation");
     if (seen[0]?.continuityMode === "provider-conversation") {
-      expect(seen[0].conversationId).toBe("conv-hook");
+      expect(seen[0].conversationId).toBe(conversationId);
       expect(seen[0].userMessage).toBe("привет");
     }
     expect(seen[0]?.requestId).toBe(chat.aiOperation.requestId);
@@ -132,14 +149,15 @@ describe("RIM AI recovery hooks", () => {
 
   it("recovers a restored pending chat from the event path without another open", async () => {
     const seen: RimAiRequest[] = [];
-    const { runtime, context, chat, sent } = await readyChat(seen);
+    const ready = await readyChat(seen);
+    const { runtime, context, chat, sent } = ready;
     if (chat.aiOperation.status !== "PENDING") {
       return;
     }
     await runtime.productStore.saveRimProviderRuntime(
       context.currentUserId,
       sent.revision,
-      notSubmittedRuntime(chat, "not-submitted"),
+      notSubmittedRuntime(chat, "not-submitted", await storedConversationId(ready)),
     );
     const drafted = await executeIncomingOverboardVertical(runtime, context, {
       name: "RIM.CHANGE_INPUT_DRAFT",
@@ -152,14 +170,16 @@ describe("RIM AI recovery hooks", () => {
 
   it("executes the local attempt when an acceptance-unknown session is opened", async () => {
     const seen: RimAiRequest[] = [];
-    const { runtime, context, chat, sent } = await readyChat(seen);
+    const ready = await readyChat(seen);
+    const { runtime, context, chat, sent } = ready;
     if (chat.aiOperation.status !== "PENDING") {
       return;
     }
+    const conversationId = await storedConversationId(ready);
     await runtime.productStore.saveRimProviderRuntime(
       context.currentUserId,
       sent.revision,
-      notSubmittedRuntime(chat, "acceptance-unknown"),
+      notSubmittedRuntime(chat, "acceptance-unknown", conversationId),
     );
     const opened = await openLobbyIfNeeded(runtime, context);
     const once = await runtime.productStore.loadProductSnapshot(context.currentUserId);
@@ -189,7 +209,7 @@ describe("RIM AI recovery hooks", () => {
     if (transitioned?.initialization.submissionState !== "stored") {
       throw new Error("expected stored initialization");
     }
-    expect(transitioned.initialization.conversationId).toBe("conv-hook");
+    expect(transitioned.initialization.conversationId).toBe(conversationId);
     expect(transitioned?.attempt?.submissionState).toBe("returned-body-observed");
     expect(transitioned?.attempt?.attemptId).not.toBe("attempt-hook");
     expect(transitioned?.attempt?.requestId).toBe(chat.aiOperation.requestId);

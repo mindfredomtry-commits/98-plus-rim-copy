@@ -37,6 +37,7 @@ const CANONICAL_MIGRATIONS = [
   "packages/persistence/schema/007_ban_source_proposal.sql",
   "packages/persistence/schema/008_rim_provider_runtime.sql",
   "packages/persistence/schema/009_share_operation_token_unique.sql",
+  "packages/persistence/schema/010_rim_history.sql",
 ] as const;
 
 function migrationSql(): string {
@@ -122,6 +123,8 @@ describe("MVP17 canonical Postgres schema", () => {
       "notification_items(item_id)",
       "pending_operations(operation_id)",
       "product_user_sessions(user_id)",
+      "rim_chats(rim_chat_id)",
+      "rim_messages(message_key)",
       "share_operations(attempt_id)",
     ]);
     const ddl = migrationSql();

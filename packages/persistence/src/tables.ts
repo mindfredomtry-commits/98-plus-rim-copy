@@ -29,6 +29,28 @@ type BanRecord = Ban & { createdSeq: number; createdAtMs: number };
 type ShareRecord = ShareOperation & { ownerId: UserId };
 type OperationRecord = PendingOperation & { ownerId: UserId };
 
+type RimChatArchiveRow = {
+  rimChatId: string;
+  ownerUserId: string;
+  contactUserId: string;
+  createdAtMs: number;
+  terminatedAtMs: number | null;
+  terminationReason: string | null;
+  openaiConversationId: string | null;
+  resultingBanId: string | null;
+};
+
+type RimMessageArchiveRow = {
+  messageKey: string;
+  rimChatId: string;
+  ordinal: number;
+  kind: string;
+  payload: unknown;
+  sourceAiRequestId: string | null;
+  sourceContextRequestId: string | null;
+  createdAtMs: number;
+};
+
 export type ProductTablesSnapshot = {
   identities: Map<string, IdentityRow>;
   sessions: Map<string, SessionRecord>;
@@ -38,6 +60,8 @@ export type ProductTablesSnapshot = {
   items: Map<string, NotificationItem>;
   operations: Map<string, OperationRecord>;
   shares: Map<string, ShareRecord>;
+  rimChats: Map<string, RimChatArchiveRow>;
+  rimMessages: Map<string, RimMessageArchiveRow>;
   nextBanSeq: number;
 };
 
@@ -55,6 +79,12 @@ function cloneTables(tables: ProductTablesSnapshot): ProductTablesSnapshot {
       [...tables.operations.entries()].map(([key, value]) => [key, cloneJson(value)]),
     ),
     shares: new Map([...tables.shares.entries()].map(([key, value]) => [key, cloneJson(value)])),
+    rimChats: new Map(
+      [...tables.rimChats.entries()].map(([key, value]) => [key, cloneJson(value)]),
+    ),
+    rimMessages: new Map(
+      [...tables.rimMessages.entries()].map(([key, value]) => [key, cloneJson(value)]),
+    ),
     nextBanSeq: tables.nextBanSeq,
   };
 }
@@ -74,6 +104,8 @@ export function emptyTables(): ProductTablesSnapshot {
     items: new Map(),
     operations: new Map(),
     shares: new Map(),
+    rimChats: new Map(),
+    rimMessages: new Map(),
     nextBanSeq: 1,
   };
 }
@@ -430,5 +462,102 @@ export class ProductTables {
           resultingStatus: pair?.resultingStatus ?? null,
         };
       });
+  }
+
+  insertRimChat(rimChatId: string, ownerUserId: string, contactUserId: string): boolean {
+    this.requireUser(ownerUserId, "rim_chats.owner_user_id");
+    this.requireUser(contactUserId, "rim_chats.contact_user_id");
+    if (this.data.rimChats.has(rimChatId)) {
+      return false;
+    }
+    this.data.rimChats.set(rimChatId, {
+      rimChatId,
+      ownerUserId,
+      contactUserId,
+      createdAtMs: 1,
+      terminatedAtMs: null,
+      terminationReason: null,
+      openaiConversationId: null,
+      resultingBanId: null,
+    });
+    return true;
+  }
+
+  getRimChat(rimChatId: string): RimChatArchiveRow | undefined {
+    const row = this.data.rimChats.get(rimChatId);
+    return row ? cloneJson(row) : undefined;
+  }
+
+  listRimMessages(rimChatId: string): RimMessageArchiveRow[] {
+    return [...this.data.rimMessages.values()]
+      .filter((row) => row.rimChatId === rimChatId)
+      .sort((left, right) => left.ordinal - right.ordinal)
+      .map((row) => cloneJson(row));
+  }
+
+  getRimMessage(messageKey: string): RimMessageArchiveRow | undefined {
+    const row = this.data.rimMessages.get(messageKey);
+    return row ? cloneJson(row) : undefined;
+  }
+
+  insertRimMessage(row: RimMessageArchiveRow): boolean {
+    if (!this.data.rimChats.has(row.rimChatId)) {
+      throw new PersistenceError("INVARIANT", "RIM history message requires a chat");
+    }
+    if (this.data.rimMessages.has(row.messageKey)) {
+      return false;
+    }
+    const ordinalTaken = [...this.data.rimMessages.values()].some(
+      (existing) => existing.rimChatId === row.rimChatId && existing.ordinal === row.ordinal,
+    );
+    if (ordinalTaken) {
+      throw new PersistenceError("INVARIANT", "RIM history message ordinal conflict");
+    }
+    this.data.rimMessages.set(row.messageKey, cloneJson(row));
+    return true;
+  }
+
+  terminateRimChat(
+    rimChatId: string,
+    reason: string,
+    resultingBanId: string | null,
+  ): RimChatArchiveRow | undefined {
+    const row = this.data.rimChats.get(rimChatId);
+    if (!row) {
+      return undefined;
+    }
+    if (row.terminationReason !== null && row.terminationReason !== reason) {
+      return undefined;
+    }
+    if (
+      resultingBanId !== null &&
+      row.resultingBanId !== null &&
+      row.resultingBanId !== resultingBanId
+    ) {
+      return undefined;
+    }
+    if (resultingBanId !== null && !this.data.bans.has(resultingBanId)) {
+      throw new PersistenceError("INVARIANT", "RIM history Ban reference is missing");
+    }
+    const next: RimChatArchiveRow = {
+      ...row,
+      terminatedAtMs: row.terminatedAtMs ?? 2,
+      terminationReason: row.terminationReason ?? reason,
+      resultingBanId: resultingBanId ?? row.resultingBanId,
+    };
+    this.data.rimChats.set(rimChatId, next);
+    return cloneJson(next);
+  }
+
+  setRimConversationId(rimChatId: string, conversationId: string): boolean {
+    const row = this.data.rimChats.get(rimChatId);
+    if (!row) {
+      return false;
+    }
+    if (row.openaiConversationId !== null && row.openaiConversationId !== conversationId) {
+      return false;
+    }
+    this.data.rimChats.set(rimChatId, { ...row, openaiConversationId: conversationId });
+    return true;
   }
 }

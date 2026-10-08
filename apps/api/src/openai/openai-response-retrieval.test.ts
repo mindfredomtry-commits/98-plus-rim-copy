@@ -290,7 +290,11 @@ describe("OpenAiResponseRetriever", () => {
   });
 });
 
-function knownRuntime(chat: RimChat, responseId: ProviderResponseId): RimProviderRuntime {
+function knownRuntime(
+  chat: RimChat,
+  responseId: ProviderResponseId,
+  conversationId: ProviderConversationId,
+): RimProviderRuntime {
   if (chat.aiOperation.status !== "PENDING" || !chat.selectedContactId) {
     throw new Error("expected a pending RIM chat");
   }
@@ -301,7 +305,7 @@ function knownRuntime(chat: RimChat, responseId: ProviderResponseId): RimProvide
     initialization: {
       submissionState: "stored",
       attemptId: "init-retrieval" as RimProviderAttemptId,
-      conversationId: "conv-retrieval" as ProviderConversationId,
+      conversationId,
       clientRequestId: null,
     },
     attempt: {
@@ -362,10 +366,19 @@ async function pendingKnownChat(response: OpenAiRetrievedResponse | Error) {
   if (!chat || chat.aiOperation.status !== "PENDING" || !chat.selectedContactId) {
     throw new Error("expected a pending RIM chat");
   }
+  const beforeRuntime = await runtime.productStore.loadProductSnapshot(context.currentUserId);
+  const applicable = applicableRimProviderRuntime(
+    parseRimProviderRuntime(beforeRuntime.rimProviderRuntime),
+    chat.id,
+  );
+  const conversationId =
+    applicable?.initialization.submissionState === "stored"
+      ? applicable.initialization.conversationId
+      : ("conv-retrieval" as ProviderConversationId);
   await runtime.productStore.saveRimProviderRuntime(
     context.currentUserId,
     sent.revision,
-    knownRuntime(chat, RESPONSE_ID),
+    knownRuntime(chat, RESPONSE_ID, conversationId),
   );
   return { runtime, context, chat, seen, transport };
 }

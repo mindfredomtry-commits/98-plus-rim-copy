@@ -320,4 +320,58 @@ WHERE user_id = ANY($1::text[])
 SELECT user_id, telegram_user_id
 FROM identity_users
 `.trim(),
+  insertRimChat: `
+INSERT INTO rim_chats (rim_chat_id, owner_user_id, contact_user_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (rim_chat_id) DO NOTHING
+RETURNING rim_chat_id
+`.trim(),
+  selectRimChat: `
+SELECT rim_chat_id, owner_user_id, contact_user_id, openai_conversation_id,
+       terminated_at, termination_reason, resulting_ban_id
+FROM rim_chats
+WHERE rim_chat_id = $1
+`.trim(),
+  selectRimMessages: `
+SELECT message_key, ordinal, kind, payload, source_ai_request_id, source_context_request_id
+FROM rim_messages
+WHERE rim_chat_id = $1
+ORDER BY ordinal
+`.trim(),
+  insertRimMessage: `
+INSERT INTO rim_messages (
+  message_key, rim_chat_id, ordinal, kind, payload, source_ai_request_id, source_context_request_id
+) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+ON CONFLICT (message_key) DO NOTHING
+RETURNING message_key
+`.trim(),
+  selectRimMessageByKey: `
+SELECT message_key, payload
+FROM rim_messages
+WHERE message_key = $1
+`.trim(),
+  terminateRimChat: `
+UPDATE rim_chats
+SET terminated_at = COALESCE(terminated_at, NOW()),
+    termination_reason = CASE
+      WHEN termination_reason IS NULL THEN $2
+      ELSE termination_reason
+    END,
+    resulting_ban_id = CASE
+      WHEN $3::text IS NULL THEN resulting_ban_id
+      WHEN resulting_ban_id IS NULL THEN $3
+      ELSE resulting_ban_id
+    END
+WHERE rim_chat_id = $1
+  AND (termination_reason IS NULL OR termination_reason = $2)
+  AND ($3::text IS NULL OR resulting_ban_id IS NULL OR resulting_ban_id = $3)
+RETURNING rim_chat_id, termination_reason, resulting_ban_id
+`.trim(),
+  setRimConversationId: `
+UPDATE rim_chats
+SET openai_conversation_id = $2
+WHERE rim_chat_id = $1
+  AND (openai_conversation_id IS NULL OR openai_conversation_id = $2)
+RETURNING rim_chat_id
+`.trim(),
 } as const;

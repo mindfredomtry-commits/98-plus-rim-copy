@@ -56,6 +56,11 @@ export const MIGRATION_CHAIN = [
     file: "packages/persistence/schema/009_share_operation_token_unique.sql",
     path: join(PERSISTENCE_SCHEMA_DIR, "009_share_operation_token_unique.sql"),
   },
+  {
+    authority: "persistence",
+    file: "packages/persistence/schema/010_rim_history.sql",
+    path: join(PERSISTENCE_SCHEMA_DIR, "010_rim_history.sql"),
+  },
 ] as const;
 
 export function identitySchemaSql(): string {
@@ -103,6 +108,10 @@ export function shareOperationTokenUniqueSql(): string {
   return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "009_share_operation_token_unique.sql"), "utf8");
 }
 
+export function rimHistorySql(): string {
+  return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "010_rim_history.sql"), "utf8");
+}
+
 export type CanonicalMigrationScript = Readonly<{
   id: string;
   sql: string;
@@ -127,5 +136,6 @@ export function allMigrationSql(): readonly string[] {
     banSourceProposalSql(),
     rimProviderRuntimeSql(),
     shareOperationTokenUniqueSql(),
+    rimHistorySql(),
   ];
 }

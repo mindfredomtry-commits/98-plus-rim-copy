@@ -1,11 +1,13 @@
 import { callerUserId, type AuthenticatedContext } from "@98plus/identity";
 import {
   PersistenceError,
+  type AppliedProductRule,
   type ProductStore,
   type RuntimeAttemptAuthority,
 } from "@98plus/persistence";
 import {
   asInstant,
+  CANONICAL_EVENT_DEFINITIONS,
   reduce,
   type AppliedRuleTrace,
   type Ban,
@@ -103,6 +105,21 @@ function executionResult(input: {
   };
 }
 
+function appliedRuleFor(event: CanonicalEvent, transition: TransitionResult): AppliedProductRule {
+  const definition = CANONICAL_EVENT_DEFINITIONS.find((item) => item.name === event.name);
+  if (!definition) {
+    throw new ApplicationError("KERNEL_INVARIANT", "Canonical Product event has no id");
+  }
+  const match = [...transition.traces].reverse().find((trace) => trace.eventId === definition.id);
+  if (!match) {
+    throw new ApplicationError(
+      "KERNEL_INVARIANT",
+      "APPLIED transition has no trace for the Product event",
+    );
+  }
+  return { eventId: definition.id, branch: match.branch };
+}
+
 function persistenceApplicationError(error: PersistenceError): ApplicationError {
   if (error.code === "REVISION_CONFLICT" || error.code === "CHECK_PAIR_CONFLICT") {
     return new ApplicationError("REVISION_CONFLICT", error.message, error);
@@ -168,6 +185,7 @@ export async function executeProductEvent(
             result: transition,
             requireAttempt: accepted.authority,
             rimProviderRuntime: accepted.runtime,
+            appliedRule: appliedRuleFor(event, transition),
           });
           if (owned.status === "ATTEMPT_SUPERSEDED") {
             return executionResult({
@@ -197,6 +215,7 @@ export async function executeProductEvent(
         currentUserId,
         expectedRevision: loaded.revision,
         result: transition,
+        appliedRule: appliedRuleFor(event, transition),
       });
       return executionResult({
         status: "APPLIED",
@@ -286,6 +305,7 @@ export async function commitProductEventIfAttemptCurrent(
       expectedRevision: loaded.revision,
       result: transition,
       requireAttempt: input.authority,
+      appliedRule: appliedRuleFor(event, transition),
     });
     if (owned.status !== "COMMITTED") {
       return null;
@@ -419,6 +439,7 @@ export async function executeShareLinkResolved(
         result: transition,
         banId: input.targetBanId,
         receiverId: input.receiverId,
+        appliedRule: appliedRuleFor(event, transition),
       });
       if (persisted.status === "BIND_REJECTED") {
         const durable = await deps.store.loadProductSnapshot(currentUserId);

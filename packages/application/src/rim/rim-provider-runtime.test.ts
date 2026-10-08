@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { MemorySqlClient, type ProductStore } from "@98plus/persistence";
 import {
   CANONICAL_EVENT_COUNT,
+  CANONICAL_EVENT_DEFINITIONS,
   MATRIX_CONTRACT_ROWS,
   PRODUCT_CONTROL_STATE_COUNT,
   emptySnapshot,
   reduce,
+  type BanId,
   type CanonicalEvent,
   type ExecutionContext,
   type ProductSnapshot,
@@ -16,7 +18,7 @@ import { PersistenceTestKit } from "../../../persistence/src/test-kit.ts";
 import {
   AI_REQUEST_ID,
   BAN_ID,
-  CHAT_ID,
+  OP_ID,
   CONTACT_A,
   CONTACT_B,
   OTHER_USER,
@@ -146,10 +148,16 @@ async function apply(
 ) {
   const result = reduce(loaded.snapshot, event, context);
   expect(result.outcome).toBe("APPLIED");
+  const definition = CANONICAL_EVENT_DEFINITIONS.find((item) => item.name === event.name);
+  const trace = [...result.traces].reverse().find((item) => item.eventId === definition?.id);
+  if (!definition || !trace) {
+    throw new Error(`${event.name} has no applied trace`);
+  }
   return store.persistTransition({
     currentUserId: USER_ID,
     expectedRevision: loaded.revision,
     result,
+    appliedRule: { eventId: definition.id, branch: trace.branch },
   });
 }
 
@@ -330,6 +338,7 @@ describe.each(["sql", "memory"] as const)("RimProviderRuntime storage (%s)", (ki
       lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
     });
     const askChat = makeChat({
+      id: "chat-ask" as RimChatId,
       selectedContactId: CONTACT_A,
       relationshipContext: readyContext(CONTACT_A),
       askRimOrigin: {
@@ -361,10 +370,10 @@ describe.each(["sql", "memory"] as const)("RimProviderRuntime storage (%s)", (ki
     );
     const askBack = await apply(harness.store, askSaved, defaultEvent("RIM.PRESS_BACK"), context);
     expect(askBack.snapshot.extended.rimChat).toBeNull();
-    expect(presentRuntime(askBack.rimProviderRuntime, CHAT_ID)).toEqual(runtimeFor(askChat));
+    expect(presentRuntime(askBack.rimProviderRuntime, askChat.id)).toEqual(runtimeFor(askChat));
     expect(presentRuntime(askBack.rimProviderRuntime, null)).toBeNull();
 
-    const confirmChat = readyChat();
+    const confirmChat = { ...readyChat(), id: "chat-confirm" as RimChatId };
     const confirmBase = withOperation(
       withControlState(chatSnapshot(confirmChat), "CREATE_BAN.CONFIRM.RIM"),
       pendingOp({ originatingState: "CREATE_BAN.CONFIRM.RIM" }),
@@ -386,7 +395,10 @@ describe.each(["sql", "memory"] as const)("RimProviderRuntime storage (%s)", (ki
     const banned = await apply(
       harness.store,
       confirmSaved,
-      defaultEvent("CREATE_BAN.SEND_CONFIRMED"),
+      eventOf("CREATE_BAN.SEND_CONFIRMED", {
+        operationId: OP_ID,
+        createdBanId: "ban-from-rim" as BanId,
+      }),
       context,
     );
     expect(banned.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
@@ -395,11 +407,12 @@ describe.each(["sql", "memory"] as const)("RimProviderRuntime storage (%s)", (ki
     expect(presentRuntime(banned.rimProviderRuntime, null)).toBeNull();
     expect(parseRimProviderRuntime(banned.rimProviderRuntime).status).toBe("PRESENT");
 
-    const closeSeed = await harness.install(USER_ID, chatSnapshot(readyChat()));
+    const closeChat = { ...readyChat(), id: "chat-close" as RimChatId };
+    const closeSeed = await harness.install(USER_ID, chatSnapshot(closeChat));
     const closeSaved = await harness.store.saveRimProviderRuntime(
       USER_ID,
       closeSeed.revision,
-      runtimeFor(readyChat()),
+      runtimeFor(closeChat),
     );
     const closed = await apply(harness.store, closeSaved, defaultEvent("APP.FULL_CLOSE"), context);
     expect(closed.snapshot.runtime.session).toBe("CLOSED");

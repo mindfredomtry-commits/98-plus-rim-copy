@@ -14,6 +14,7 @@ import type {
   NotificationItem,
   PendingOperation,
   ProductSnapshot,
+  RimChat,
   SessionStatus,
   ShareOperation,
   UserId,
@@ -37,6 +38,11 @@ import {
 import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
 import { PersistenceError } from "./errors.ts";
 import { runtimeAttemptAllowsCommit } from "./runtime-attempt-authority.ts";
+import {
+  persistOpenAiConversationId,
+  projectRimHistory,
+  rimHistoryChanged,
+} from "./rim-history.ts";
 import { SQL } from "./sql.ts";
 import type {
   BanReceiverBindResult,
@@ -265,7 +271,14 @@ export class PostgresProductStore implements ProductStore {
         "Only an APPLIED Product Kernel TransitionResult may be persisted",
       );
     }
-    return this.write(input.currentUserId, input.expectedRevision, input.result.snapshot, false);
+    return this.write(
+      input.currentUserId,
+      input.expectedRevision,
+      input.result.snapshot,
+      false,
+      undefined,
+      input.appliedRule,
+    );
   }
 
   async commitOwnedTransition(
@@ -303,6 +316,7 @@ export class PostgresProductStore implements ProductStore {
           input.result.snapshot,
           false,
           "rimProviderRuntime" in input ? input.rimProviderRuntime : undefined,
+          input.appliedRule,
         );
         return { status: "COMMITTED" as const, loaded };
       });
@@ -351,6 +365,7 @@ export class PostgresProductStore implements ProductStore {
             "Conflicting writes to the same user's durable ProductSnapshot",
           );
         }
+        await persistOpenAiConversationId(tx, runtime);
         return this.read(tx, currentUserId);
       });
     } catch (error) {
@@ -752,6 +767,8 @@ export class PostgresProductStore implements ProductStore {
           input.expectedRevision,
           input.result.snapshot,
           false,
+          undefined,
+          input.appliedRule,
         );
         return {
           status: "PERSISTED" as const,
@@ -814,10 +831,20 @@ export class PostgresProductStore implements ProductStore {
     expectedRevision: number,
     snapshot: ProductSnapshot,
     seed: boolean,
+    runtimeReplacement?: unknown,
+    appliedRule?: PersistTransitionInput["appliedRule"],
   ): Promise<LoadedSnapshot> {
     try {
       return await this.client.transaction(async (tx) =>
-        this.writeOn(tx, currentUserId, expectedRevision, snapshot, seed),
+        this.writeOn(
+          tx,
+          currentUserId,
+          expectedRevision,
+          snapshot,
+          seed,
+          runtimeReplacement,
+          appliedRule,
+        ),
       );
     } catch (error) {
       if (error instanceof PersistenceError) {
@@ -837,6 +864,7 @@ export class PostgresProductStore implements ProductStore {
     snapshot: ProductSnapshot,
     seed: boolean,
     runtimeReplacement?: unknown,
+    appliedRule?: PersistTransitionInput["appliedRule"],
   ): Promise<LoadedSnapshot> {
     const identity = await tx.query<{ user_id: string }>(SQL.selectIdentity, [currentUserId]);
     if (!identity.rows[0]) {
@@ -855,6 +883,13 @@ export class PostgresProductStore implements ProductStore {
     }
     const nextRevision = currentRevision + 1;
     const entities = snapshot.extended.entities;
+    const priorBanIds = new Set<string>();
+    if (!seed) {
+      const priorBans = await tx.query<{ ban_id: string }>(SQL.selectBansForUser, [currentUserId]);
+      for (const row of priorBans.rows) {
+        priorBanIds.add(row.ban_id);
+      }
+    }
     for (const ban of Object.values(entities.bans)) {
       await tx.query(SQL.upsertBan, [
         ban.id,
@@ -867,6 +902,34 @@ export class PostgresProductStore implements ProductStore {
         ban.boundViaTelegramShareLink,
         ban.sourceProposalId,
       ]);
+    }
+    if (!seed) {
+      const previousLive = parseJson<RimChat>(sessionResult.rows[0]?.rim_chat ?? null);
+      const previousFrozen = parseJson<RimChat>(
+        sessionResult.rows[0]?.saved_frozen_rim_chat ?? null,
+      );
+      const nextLive = snapshot.extended.rimChat;
+      const nextFrozen = snapshot.extended.savedFrozenRimChat;
+      if (
+        rimHistoryChanged(previousLive, previousFrozen, nextLive, nextFrozen) &&
+        appliedRule === undefined
+      ) {
+        throw new PersistenceError("INVARIANT", "RIM history requires the applied Product event");
+      }
+      if (appliedRule) {
+        await projectRimHistory(tx, {
+          ownerUserId: currentUserId,
+          previousLive,
+          previousFrozen,
+          nextLive,
+          nextFrozen,
+          bans: entities.bans,
+          createdBanIds: new Set(
+            Object.keys(entities.bans).filter((banId) => !priorBanIds.has(banId)),
+          ),
+          appliedRule,
+        });
+      }
     }
     if (this.failAfterBans) {
       this.failAfterBans = false;

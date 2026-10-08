@@ -14,7 +14,7 @@ describe("production migration authority", () => {
     expect(MATRIX_CONTRACT_ROWS).toHaveLength(360);
   });
 
-  it("reads 001–009 from the canonical files in order", () => {
+  it("reads 001–010 from the canonical files in order", () => {
     const scripts = canonicalMigrationScripts();
     expect(scripts.map((script) => script.id)).toEqual([
       "packages/identity/schema/001_identity_users.sql",
@@ -26,6 +26,7 @@ describe("production migration authority", () => {
       "packages/persistence/schema/007_ban_source_proposal.sql",
       "packages/persistence/schema/008_rim_provider_runtime.sql",
       "packages/persistence/schema/009_share_operation_token_unique.sql",
+      "packages/persistence/schema/010_rim_history.sql",
     ]);
     expect(scripts.every((script) => script.sql.includes("IF NOT EXISTS"))).toBe(true);
   });
@@ -60,5 +61,20 @@ describe("production migration authority", () => {
       byId.get("packages/persistence/schema/009_share_operation_token_unique.sql") ?? "",
     );
     expect(share).toEqual([{ kind: "index", name: "share_operations_token_key" }]);
+    const history = declaredMigrationObjects(
+      byId.get("packages/persistence/schema/010_rim_history.sql") ?? "",
+    );
+    expect(history).toEqual([
+      { kind: "table", name: "rim_chats" },
+      { kind: "table", name: "rim_messages" },
+      { kind: "index", name: "rim_chats_owner_created_idx" },
+      { kind: "index", name: "rim_chats_resulting_ban_idx" },
+      { kind: "constraint", name: "rim_chats_termination_chk" },
+      { kind: "constraint", name: "rim_chats_termination_reason_chk" },
+      { kind: "constraint", name: "rim_messages_ordinal_positive_chk" },
+      { kind: "constraint", name: "rim_messages_chat_ordinal_key" },
+      { kind: "constraint", name: "rim_messages_kind_chk" },
+      { kind: "constraint", name: "rim_messages_source_chk" },
+    ]);
   });
 });

@@ -1,6 +1,7 @@
 import type { SqlQueryResult } from "@98plus/identity";
 import type {
   Ban,
+  CanonicalEventId,
   CheckPair,
   DomainTimer,
   NotificationItem,
@@ -38,10 +39,17 @@ export type LoadedSnapshot = Readonly<{
   rimProviderRuntime: unknown | null;
 }>;
 
+/** The applied Matrix row that produced this Product commit. History projection uses it. */
+export type AppliedProductRule = Readonly<{
+  eventId: CanonicalEventId;
+  branch: string;
+}>;
+
 export type PersistTransitionInput = Readonly<{
   currentUserId: UserId;
   expectedRevision: number;
   result: TransitionResult;
+  appliedRule?: AppliedProductRule;
 }>;
 
 /**

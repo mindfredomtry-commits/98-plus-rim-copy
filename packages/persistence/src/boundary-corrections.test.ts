@@ -394,6 +394,7 @@ describe("Defect C — single identity migration authority", () => {
       "007_ban_source_proposal.sql",
       "008_rim_provider_runtime.sql",
       "009_share_operation_token_unique.sql",
+      "010_rim_history.sql",
     ]);
     expect(IDENTITY_MIGRATION_AUTHORITY).toBe("packages/identity/schema/001_identity_users.sql");
     expect(MIGRATION_CHAIN.filter((entry) => entry.authority === "identity")).toHaveLength(1);
@@ -419,9 +420,10 @@ describe("Defect C — single identity migration authority", () => {
       ["persistence", "packages/persistence/schema/007_ban_source_proposal.sql"],
       ["persistence", "packages/persistence/schema/008_rim_provider_runtime.sql"],
       ["persistence", "packages/persistence/schema/009_share_operation_token_unique.sql"],
+      ["persistence", "packages/persistence/schema/010_rim_history.sql"],
     ]);
     const sql = allMigrationSql();
-    expect(sql).toHaveLength(9);
+    expect(sql).toHaveLength(10);
     expect(sql[0]).toBe(identitySchemaSql());
     expect(sql[1]).toBe(productPersistenceSql());
   });

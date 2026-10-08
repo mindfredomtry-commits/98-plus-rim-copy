@@ -590,6 +590,87 @@ export class MemorySqlClient implements PersistenceSqlClient {
           })),
         );
       }
+      case SQL.insertRimChat: {
+        const inserted = this.tables.insertRimChat(
+          String(params[0]),
+          String(params[1]),
+          String(params[2]),
+        );
+        return inserted ? rows([{ rim_chat_id: String(params[0]) }]) : rows([]);
+      }
+      case SQL.selectRimChat: {
+        const chat = this.tables.getRimChat(String(params[0]));
+        if (!chat) {
+          return rows([]);
+        }
+        return rows([
+          {
+            rim_chat_id: chat.rimChatId,
+            owner_user_id: chat.ownerUserId,
+            contact_user_id: chat.contactUserId,
+            openai_conversation_id: chat.openaiConversationId,
+            terminated_at: chat.terminatedAtMs,
+            termination_reason: chat.terminationReason,
+            resulting_ban_id: chat.resultingBanId,
+          },
+        ]);
+      }
+      case SQL.selectRimMessages: {
+        return rows(
+          this.tables.listRimMessages(String(params[0])).map((message) => ({
+            message_key: message.messageKey,
+            ordinal: message.ordinal,
+            kind: message.kind,
+            payload: message.payload,
+            source_ai_request_id: message.sourceAiRequestId,
+            source_context_request_id: message.sourceContextRequestId,
+          })),
+        );
+      }
+      case SQL.insertRimMessage: {
+        const payload = parseMaybeJson(params[4]);
+        const inserted = this.tables.insertRimMessage({
+          messageKey: String(params[0]),
+          rimChatId: String(params[1]),
+          ordinal: Number(params[2]),
+          kind: String(params[3]),
+          payload,
+          sourceAiRequestId:
+            params[5] === null || params[5] === undefined ? null : String(params[5]),
+          sourceContextRequestId:
+            params[6] === null || params[6] === undefined ? null : String(params[6]),
+          createdAtMs: 1,
+        });
+        return inserted ? rows([{ message_key: String(params[0]) }]) : rows([]);
+      }
+      case SQL.selectRimMessageByKey: {
+        const message = this.tables.getRimMessage(String(params[0]));
+        if (!message) {
+          return rows([]);
+        }
+        return rows([{ message_key: message.messageKey, payload: message.payload }]);
+      }
+      case SQL.terminateRimChat: {
+        const chat = this.tables.terminateRimChat(
+          String(params[0]),
+          String(params[1]),
+          params[2] === null || params[2] === undefined ? null : String(params[2]),
+        );
+        if (!chat) {
+          return rows([]);
+        }
+        return rows([
+          {
+            rim_chat_id: chat.rimChatId,
+            termination_reason: chat.terminationReason,
+            resulting_ban_id: chat.resultingBanId,
+          },
+        ]);
+      }
+      case SQL.setRimConversationId: {
+        const updated = this.tables.setRimConversationId(String(params[0]), String(params[1]));
+        return updated ? rows([{ rim_chat_id: String(params[0]) }]) : rows([]);
+      }
       case SQL.selectRelationshipBans: {
         const records = this.tables.listRelationshipBans(params[0] as UserId, params[1] as UserId);
         return rows(

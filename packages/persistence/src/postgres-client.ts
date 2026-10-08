@@ -34,7 +34,7 @@ export type PostgresPersistence = Readonly<{
   /** Test harness. Replays every canonical script and does not record history. */
   applyMigrations(): Promise<void>;
   /**
-   * Production runner. Applies canonical migrations 001–009 once, recording
+   * Production runner. Applies canonical migrations 001–010 once, recording
    * schema_migrations. Does not fall back to any other store.
    */
   migrate(options?: {

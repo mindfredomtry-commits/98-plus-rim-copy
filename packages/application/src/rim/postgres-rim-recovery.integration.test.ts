@@ -986,7 +986,6 @@ describe.skipIf(!databaseUrl)("real PostgreSQL RIM restart recovery", () => {
     });
     const live = makeChat({
       ...frozen,
-      id: branded<RimChatId>(`${chatId}-live`),
       inputDraft: "changed-live",
     });
     const snapshot: ProductSnapshot = {
