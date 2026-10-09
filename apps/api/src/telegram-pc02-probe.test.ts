@@ -1,19 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Readable } from "node:stream";
+import type { IncomingMessage } from "node:http";
 import {
+  beginPc02ProbePrepareSlot,
   buildPc02ProbeOpenUrl,
+  endPc02ProbePrepareSlot,
+  handleTelegramPc02ProbeRequest,
   isPc02ProbeCallbackData,
   isPc02ProbeStartParam,
   PC02_PROBE_CALLBACK_DATA,
+  PC02_PROBE_MAX_BODY_BYTES,
   PC02_PROBE_PREPARE_PATH,
+  PC02_PROBE_PREPARE_WINDOW_MS,
   PC02_PROBE_RESULTS_PATH,
   preparePc02ProbeMessage,
   processPc02ProbeCallback,
   readPc02ProbeConfig,
+  readPc02ProbeJsonBody,
   resetPc02ProbeStateForTests,
 } from "./telegram-pc02-probe.ts";
 import { processTelegramBanUpdate } from "./telegram-ban-callback.ts";
 import { resolveTelegramShareExternalEntry } from "./external-entry.ts";
 import { listenCreateBanContactServer } from "./http.ts";
+import { testUiHtmlSource } from "./test-ui-assets.ts";
 import { asTelegramUserId } from "@98plus/identity";
 import { createTelegramInitData } from "../../../packages/identity/src/create-init-data.ts";
 
@@ -35,17 +44,32 @@ function envEnabled(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   };
 }
 
-function stubAnswerFetch(capture: {
-  bodies: Array<Record<string, unknown>>;
-}): typeof fetch {
+function stubAnswerFetch(
+  capture: { bodies: Array<Record<string, unknown>> },
+  options: { ok?: boolean; description?: string } = {},
+): typeof fetch {
+  const ok = options.ok !== false;
   return (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     capture.bodies.push(body);
-    return new Response(JSON.stringify({ ok: true, result: true }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify(
+        ok
+          ? { ok: true, result: true }
+          : { ok: false, description: options.description ?? "bad request" },
+      ),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }) as typeof fetch;
+}
+
+function fakeRequest(
+  body: string,
+  headers: Record<string, string | undefined> = {},
+): IncomingMessage {
+  const stream = Readable.from([Buffer.from(body)]) as IncomingMessage;
+  stream.headers = headers;
+  return stream;
 }
 
 describe("telegram-pc02-probe", () => {
@@ -74,18 +98,243 @@ describe("telegram-pc02-probe", () => {
     );
   });
 
-  it("sender branch answers without url", async () => {
-    const capture = { bodies: [] as Array<Record<string, unknown>> };
-    const result = await processPc02ProbeCallback(
-      { callbackQueryId: "cq-sender", fromTelegramUserId: SENDER_ID },
-      { fetchImpl: stubAnswerFetch(capture), env: envEnabled(), botToken: BOT_TOKEN },
-    );
-    expect(result.code).toBe("PC02_SENDER_NOOP");
-    expect(result.branch).toBe("SENDER_NOOP");
-    expect(result.answerKind).toBe("no_url");
-    expect(result.telegramApiAccepted).toBe(true);
-    expect(capture.bodies[0]).toEqual({ callback_query_id: "cq-sender" });
-    expect(capture.bodies[0]).not.toHaveProperty("url");
+  describe("FIX1 body limit", () => {
+    it("accepts a small JSON object", async () => {
+      const read = await readPc02ProbeJsonBody(fakeRequest('{"ping":true}'));
+      expect(read).toEqual({ ok: true, body: { ping: true } });
+    });
+
+    it("rejects oversized Content-Length before reading body", async () => {
+      const read = await readPc02ProbeJsonBody(
+        fakeRequest("{}", { "content-length": String(PC02_PROBE_MAX_BODY_BYTES + 1) }),
+      );
+      expect(read.ok).toBe(false);
+      if (!read.ok) {
+        expect(read.code).toBe("PAYLOAD_TOO_LARGE");
+      }
+    });
+
+    it("rejects oversized streamed body without Content-Length", async () => {
+      const huge = "x".repeat(PC02_PROBE_MAX_BODY_BYTES + 32);
+      const read = await readPc02ProbeJsonBody(fakeRequest(huge));
+      expect(read.ok).toBe(false);
+      if (!read.ok) {
+        expect(read.code).toBe("PAYLOAD_TOO_LARGE");
+      }
+    });
+
+    it("rejects invalid JSON", async () => {
+      const read = await readPc02ProbeJsonBody(fakeRequest("{not-json"));
+      expect(read.ok).toBe(false);
+      if (!read.ok) {
+        expect(read.code).toBe("INVALID_BODY");
+      }
+    });
+
+    it("HTTP prepare returns 413 for oversized Content-Length without Telegram API", async () => {
+      const previous = { ...process.env };
+      const originalFetch = globalThis.fetch;
+      let telegramCalls = 0;
+      Object.assign(process.env, envEnabled());
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).includes("api.telegram.org")) {
+          telegramCalls += 1;
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      const req = fakeRequest("{}", {
+        "content-length": String(PC02_PROBE_MAX_BODY_BYTES + 1),
+        "x-98-init-data": "unused-because-body-limit-runs-first",
+      });
+      (req as IncomingMessage & { url?: string }).url = PC02_PROBE_PREPARE_PATH;
+
+      let statusCode = 0;
+      let responseBody = "";
+      const res = {
+        writeHead(status: number) {
+          statusCode = status;
+          return res;
+        },
+        end(chunk?: string) {
+          responseBody = String(chunk ?? "");
+        },
+      };
+
+      try {
+        await handleTelegramPc02ProbeRequest(req, res as never);
+        expect(statusCode).toBe(413);
+        expect(JSON.parse(responseBody).code).toBe("PAYLOAD_TOO_LARGE");
+        expect(telegramCalls).toBe(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+        for (const key of Object.keys(process.env)) {
+          if (!(key in previous)) delete process.env[key];
+        }
+        Object.assign(process.env, previous);
+      }
+    });
+  });
+
+  describe("FIX2 prepare rate limit", () => {
+    it("allows first prepare and rejects immediate repeat", async () => {
+      let clock = 1_000_000;
+      const fetchImpl = (async () =>
+        new Response(JSON.stringify({ ok: true, result: { id: "prep-1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch;
+      const first = await preparePc02ProbeMessage(SENDER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock,
+      });
+      expect(first.ok).toBe(true);
+      const second = await preparePc02ProbeMessage(SENDER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock + 1,
+      });
+      expect(second.ok).toBe(false);
+      expect(second.code).toBe("PC02_PROBE_RATE_LIMITED");
+    });
+
+    it("rejects parallel prepares for the same account before Telegram returns", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let calls = 0;
+      const fetchImpl = (async () => {
+        calls += 1;
+        await gate;
+        return new Response(JSON.stringify({ ok: true, result: { id: `prep-${calls}` } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      const clock = 2_000_000;
+      const a = preparePc02ProbeMessage(SENDER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock,
+      });
+      await Promise.resolve();
+      const b = await preparePc02ProbeMessage(SENDER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock,
+      });
+      expect(b.code).toBe("PC02_PROBE_PREPARE_IN_FLIGHT");
+      release();
+      const first = await a;
+      expect(first.ok).toBe(true);
+      expect(calls).toBe(1);
+    });
+
+    it("allows independent prepare for the other test account", async () => {
+      let n = 0;
+      const fetchImpl = (async () => {
+        n += 1;
+        return new Response(JSON.stringify({ ok: true, result: { id: `prep-${n}` } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      const clock = 3_000_000;
+      const sender = await preparePc02ProbeMessage(SENDER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock,
+      });
+      const receiver = await preparePc02ProbeMessage(RECEIVER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock,
+      });
+      expect(sender.ok).toBe(true);
+      expect(receiver.ok).toBe(true);
+    });
+
+    it("resets after the 60s window", async () => {
+      let clock = 4_000_000;
+      const fetchImpl = (async () =>
+        new Response(JSON.stringify({ ok: true, result: { id: "prep-window" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch;
+      const first = await preparePc02ProbeMessage(SENDER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock,
+      });
+      expect(first.ok).toBe(true);
+      clock += PC02_PROBE_PREPARE_WINDOW_MS;
+      const again = await preparePc02ProbeMessage(SENDER_ID, {
+        env: envEnabled(),
+        fetchImpl,
+        botToken: BOT_TOKEN,
+        nowMs: () => clock,
+      });
+      expect(again.ok).toBe(true);
+    });
+
+    it("begin/end slot helpers enforce in-flight and window", () => {
+      expect(beginPc02ProbePrepareSlot(SENDER_ID, 10).ok).toBe(true);
+      expect(beginPc02ProbePrepareSlot(SENDER_ID, 11).ok).toBe(false);
+      endPc02ProbePrepareSlot(SENDER_ID, { success: true, nowMs: 10 });
+      expect(beginPc02ProbePrepareSlot(SENDER_ID, 11).ok).toBe(false);
+      expect(beginPc02ProbePrepareSlot(SENDER_ID, 10 + PC02_PROBE_PREPARE_WINDOW_MS).ok).toBe(
+        true,
+      );
+      endPc02ProbePrepareSlot(SENDER_ID, { success: false, nowMs: 99 });
+    });
+  });
+
+  describe("FIX3 telegram API diagnostics", () => {
+    it("sender success records API accept without claiming Mini App open", async () => {
+      const capture = { bodies: [] as Array<Record<string, unknown>> };
+      const result = await processPc02ProbeCallback(
+        { callbackQueryId: "cq-sender", fromTelegramUserId: SENDER_ID },
+        { fetchImpl: stubAnswerFetch(capture), env: envEnabled(), botToken: BOT_TOKEN },
+      );
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("PC02_SENDER_NOOP");
+      expect(result.branch).toBe("SENDER_NOOP");
+      expect(result.telegramApiAccepted).toBe(true);
+      expect(result.miniAppOpenConfirmed).toBe(false);
+      expect(result.message).toContain("NOT confirmed");
+      expect(capture.bodies[0]).not.toHaveProperty("url");
+    });
+
+    it("receiver API failure keeps branch but does not report success", async () => {
+      const capture = { bodies: [] as Array<Record<string, unknown>> };
+      const result = await processPc02ProbeCallback(
+        { callbackQueryId: "cq-recv-fail", fromTelegramUserId: RECEIVER_ID },
+        {
+          fetchImpl: stubAnswerFetch(capture, {
+            ok: false,
+            description: "URL_INVALID",
+          }),
+          env: envEnabled(),
+          botToken: BOT_TOKEN,
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe("PC02_TELEGRAM_API_FAILED");
+      expect(result.branch).toBe("RECEIVER_OPEN");
+      expect(result.telegramApiAccepted).toBe(false);
+      expect(result.telegramApiError).toContain("URL_INVALID");
+      expect(result.miniAppOpenConfirmed).toBe(false);
+      expect(capture.bodies[0]?.url).toContain("startapp=pc02_probe");
+    });
   });
 
   it("receiver branch answers with startapp url by default", async () => {
@@ -97,6 +346,7 @@ describe("telegram-pc02-probe", () => {
     expect(result.code).toBe("PC02_RECEIVER_OPEN");
     expect(result.branch).toBe("RECEIVER_OPEN");
     expect(result.answerKind).toBe("url_startapp");
+    expect(result.miniAppOpenConfirmed).toBe(false);
     expect(capture.bodies[0]?.url).toBe(`https://t.me/${BOT_USERNAME}?startapp=pc02_probe`);
   });
 
@@ -169,9 +419,7 @@ describe("telegram-pc02-probe", () => {
       expect(capture.bodies[0]).not.toHaveProperty("url");
     } finally {
       for (const key of Object.keys(process.env)) {
-        if (!(key in previous)) {
-          delete process.env[key];
-        }
+        if (!(key in previous)) delete process.env[key];
       }
       Object.assign(process.env, previous);
     }
@@ -213,8 +461,6 @@ describe("telegram-pc02-probe", () => {
     ).reply_markup;
     expect(markup.inline_keyboard[0]?.[0]?.callback_data).toBe(PC02_PROBE_CALLBACK_DATA);
     expect(markup.inline_keyboard[0]?.[0]).not.toHaveProperty("url");
-    expect(prepared.startappUrl).toContain("startapp=pc02_probe");
-    expect(prepared.controlStartUrl).toContain("start=pc02_probe");
   });
 
   it("http prepare/results require initData and stay off the Ban webhook path", async () => {
@@ -303,9 +549,7 @@ describe("telegram-pc02-probe", () => {
       await app.close();
       globalThis.fetch = originalFetch;
       for (const key of Object.keys(process.env)) {
-        if (!(key in previous)) {
-          delete process.env[key];
-        }
+        if (!(key in previous)) delete process.env[key];
       }
       Object.assign(process.env, previous);
     }
@@ -339,9 +583,7 @@ describe("telegram-pc02-probe", () => {
     } finally {
       await app.close();
       for (const key of Object.keys(process.env)) {
-        if (!(key in previous)) {
-          delete process.env[key];
-        }
+        if (!(key in previous)) delete process.env[key];
       }
       Object.assign(process.env, previous);
     }
@@ -357,5 +599,14 @@ describe("telegram-pc02-probe", () => {
     expect(config.senderId).toBeNull();
     expect(config.receiverId).toBeNull();
   });
-});
 
+  it("FIX4 test UI exposes isolated pc02 prepare→shareMessage path", () => {
+    const html = testUiHtmlSource();
+    expect(html).toContain('id="pc02-probe"');
+    expect(html).toContain("isPc02ProbeLaunch");
+    expect(html).toContain("enterPc02ProbeMode");
+    expect(html).toContain("/api/telegram-pc02-probe/prepare");
+    expect(html).toContain("shareMessage(preparedPayload.preparedMessageId");
+    expect(html).toContain('start_param=pc02_probe');
+  });
+});

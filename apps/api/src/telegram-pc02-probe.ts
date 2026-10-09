@@ -22,6 +22,8 @@ export const PC02_PROBE_MESSAGE_TEXT =
   "98+ PC-02 PROBE\nIsolated role-gated Mini App open test.\nNot a Ban.";
 export const PC02_PROBE_PREPARE_PATH = "/api/telegram-pc02-probe/prepare";
 export const PC02_PROBE_RESULTS_PATH = "/api/telegram-pc02-probe/results";
+export const PC02_PROBE_MAX_BODY_BYTES = 16 * 1024;
+export const PC02_PROBE_PREPARE_WINDOW_MS = 60_000;
 
 const MAX_DIAGNOSTIC_EVENTS = 40;
 const PREPARE_ID_BYTES = 8;
@@ -39,12 +41,19 @@ export type Pc02ProbeAnswerKind = "no_url" | "url_startapp" | "url_start";
 
 export type Pc02ProbeDiagnosticEvent = Readonly<{
   atMs: number;
+  /** Server received and classified the callback_query. */
   callbackReceived: true;
   branch: Pc02ProbeRoleBranch;
   answerKind: Pc02ProbeAnswerKind;
   openUrlHostPath: string | null;
+  /** True only when Telegram Bot API accepted answerCallbackQuery. */
   telegramApiAccepted: boolean | null;
   telegramApiError: string | null;
+  /**
+   * Always false on the server. Mini App open can only be confirmed on-device
+   * (client observation / start_param intake), never from Bot API HTTP 200.
+   */
+  miniAppOpenConfirmed: false;
 }>;
 
 export type Pc02ProbeCallbackResult = Readonly<{
@@ -53,8 +62,10 @@ export type Pc02ProbeCallbackResult = Readonly<{
   message: string;
   branch: Pc02ProbeRoleBranch;
   answerKind: Pc02ProbeAnswerKind;
+  callbackHandled: true;
   telegramApiAccepted: boolean | null;
   telegramApiError: string | null;
+  miniAppOpenConfirmed: false;
 }>;
 
 export type Pc02ProbePrepareResult = Readonly<{
@@ -77,6 +88,10 @@ export type Pc02ProbeResultsResult = Readonly<{
   events: readonly Pc02ProbeDiagnosticEvent[];
 }>;
 
+export type Pc02ProbeBodyReadResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; code: "PAYLOAD_TOO_LARGE" | "INVALID_BODY"; message: string };
+
 type ProbeDeps = Readonly<{
   fetchImpl?: typeof fetch;
   botToken?: string;
@@ -85,7 +100,13 @@ type ProbeDeps = Readonly<{
   nowMs?: () => number;
 }>;
 
+type PrepareSlot = {
+  inFlight: boolean;
+  lastSuccessAtMs: number | null;
+};
+
 const diagnosticEvents: Pc02ProbeDiagnosticEvent[] = [];
+const prepareSlots = new Map<string, PrepareSlot>();
 
 const identityClock = {
   nowSeconds: () => Math.floor(Date.now() / 1000),
@@ -105,6 +126,7 @@ export function isPc02ProbeStartParam(raw: string | null | undefined): boolean {
 
 export function resetPc02ProbeStateForTests(): void {
   diagnosticEvents.length = 0;
+  prepareSlots.clear();
 }
 
 export function readPc02ProbeConfig(env: NodeJS.ProcessEnv = process.env): Readonly<{
@@ -138,6 +160,91 @@ export function buildPc02ProbeOpenUrl(input: {
     return `https://t.me/${bot}?start=${PC02_PROBE_START_PARAM}`;
   }
   return `https://t.me/${bot}?startapp=${PC02_PROBE_START_PARAM}`;
+}
+
+/** Visible for unit tests — Content-Length + streaming byte cap. */
+export async function readPc02ProbeJsonBody(
+  req: IncomingMessage,
+  maxBytes: number = PC02_PROBE_MAX_BODY_BYTES,
+): Promise<Pc02ProbeBodyReadResult> {
+  const declared = parseContentLength(req.headers["content-length"]);
+  if (declared !== null && declared > maxBytes) {
+    req.resume();
+    return {
+      ok: false,
+      code: "PAYLOAD_TOO_LARGE",
+      message: `Request body exceeds ${maxBytes} bytes`,
+    };
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for await (const chunk of req) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
+      if (total > maxBytes) {
+        req.resume();
+        return {
+          ok: false,
+          code: "PAYLOAD_TOO_LARGE",
+          message: `Request body exceeds ${maxBytes} bytes`,
+        };
+      }
+      chunks.push(buf);
+    }
+  } catch {
+    return { ok: false, code: "INVALID_BODY", message: "Failed to read request body" };
+  }
+
+  if (chunks.length === 0 || total === 0) {
+    return { ok: true, body: {} };
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (raw.length === 0) {
+    return { ok: true, body: {} };
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, code: "INVALID_BODY", message: "JSON body must be an object" };
+    }
+    return { ok: true, body: parsed as Record<string, unknown> };
+  } catch {
+    return { ok: false, code: "INVALID_BODY", message: "JSON body is not parseable" };
+  }
+}
+
+export function beginPc02ProbePrepareSlot(
+  telegramUserId: string,
+  nowMs: number,
+  windowMs: number = PC02_PROBE_PREPARE_WINDOW_MS,
+): { ok: true } | { ok: false; code: "PC02_PROBE_RATE_LIMITED" | "PC02_PROBE_PREPARE_IN_FLIGHT" } {
+  const slot = prepareSlots.get(telegramUserId) ?? { inFlight: false, lastSuccessAtMs: null };
+  if (slot.inFlight) {
+    return { ok: false, code: "PC02_PROBE_PREPARE_IN_FLIGHT" };
+  }
+  if (
+    slot.lastSuccessAtMs !== null &&
+    nowMs - slot.lastSuccessAtMs < windowMs
+  ) {
+    return { ok: false, code: "PC02_PROBE_RATE_LIMITED" };
+  }
+  slot.inFlight = true;
+  prepareSlots.set(telegramUserId, slot);
+  return { ok: true };
+}
+
+export function endPc02ProbePrepareSlot(
+  telegramUserId: string,
+  input: { success: boolean; nowMs: number },
+): void {
+  const slot = prepareSlots.get(telegramUserId) ?? { inFlight: false, lastSuccessAtMs: null };
+  slot.inFlight = false;
+  if (input.success) {
+    slot.lastSuccessAtMs = input.nowMs;
+  }
+  prepareSlots.set(telegramUserId, slot);
 }
 
 export async function processPc02ProbeCallback(
@@ -185,7 +292,7 @@ export async function processPc02ProbeCallback(
       answerKind: "no_url",
       openUrl: null,
       code: "PC02_SENDER_NOOP",
-      message: "Sender branch: answerCallbackQuery without url",
+      message: "Sender branch: answerCallbackQuery without url (Mini App must not open)",
       nowMs: nowMs(),
     });
   }
@@ -218,8 +325,8 @@ export async function processPc02ProbeCallback(
       code: "PC02_RECEIVER_OPEN",
       message:
         config.urlMode === "start"
-          ? "Receiver branch: answerCallbackQuery with ?start= control url"
-          : "Receiver branch: answerCallbackQuery with ?startapp= url",
+          ? "Receiver branch: answerCallbackQuery with ?start= control url (bot chat; not Mini App success)"
+          : "Receiver branch: answerCallbackQuery with ?startapp= url requested (Mini App open not confirmed by server)",
       nowMs: nowMs(),
     });
   }
@@ -241,12 +348,13 @@ export async function handleTelegramPc02ProbeRequest(
   res: ServerResponse,
 ): Promise<void> {
   const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
-  const body = await readJsonBody(req);
-  if (body === null) {
-    writeJson(res, 400, {
+  const bodyRead = await readPc02ProbeJsonBody(req);
+  if (!bodyRead.ok) {
+    const status = bodyRead.code === "PAYLOAD_TOO_LARGE" ? 413 : 400;
+    writeJson(res, status, {
       ok: false,
-      code: "INVALID_BODY",
-      message: "JSON body must be an object",
+      code: bodyRead.code,
+      message: bodyRead.message,
       preparedMessageId: null,
       callbackData: null,
       urlMode: null,
@@ -287,6 +395,8 @@ export async function preparePc02ProbeMessage(
 ): Promise<Pc02ProbePrepareResult> {
   const env = deps.env ?? process.env;
   const config = readPc02ProbeConfig(env);
+  const nowMs = (deps.nowMs ?? Date.now)();
+
   if (!config.enabled) {
     return prepareFail(
       "PC02_PROBE_DISABLED",
@@ -323,39 +433,78 @@ export async function preparePc02ProbeMessage(
     return prepareFail("INVALID_TELEGRAM_USER", "Telegram user id must be a positive integer");
   }
 
-  const articleId = randomBytes(PREPARE_ID_BYTES).toString("hex");
-  const telegram = await callTelegram(
-    deps.fetchImpl ?? fetch,
-    botToken,
-    "savePreparedInlineMessage",
-    {
-      user_id: userId,
-      result: {
-        type: "article",
-        id: articleId,
-        title: "98+ PC02 PROBE",
-        description: "Isolated PC-02 callback probe",
-        input_message_content: {
-          message_text: PC02_PROBE_MESSAGE_TEXT,
+  const slot = beginPc02ProbePrepareSlot(callerTelegramUserId, nowMs);
+  if (!slot.ok) {
+    return prepareFail(
+      slot.code,
+      slot.code === "PC02_PROBE_PREPARE_IN_FLIGHT"
+        ? "Another PC02 prepare is already in flight for this test account"
+        : "PC02 prepare rate limit: one successful prepare per test account per 60 seconds",
+    );
+  }
+
+  try {
+    const articleId = randomBytes(PREPARE_ID_BYTES).toString("hex");
+    const telegram = await callTelegram(
+      deps.fetchImpl ?? fetch,
+      botToken,
+      "savePreparedInlineMessage",
+      {
+        user_id: userId,
+        result: {
+          type: "article",
+          id: articleId,
+          title: "98+ PC02 PROBE",
+          description: "Isolated PC-02 callback probe",
+          input_message_content: {
+            message_text: PC02_PROBE_MESSAGE_TEXT,
+          },
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: PC02_PROBE_BUTTON_TEXT, callback_data: PC02_PROBE_CALLBACK_DATA }],
+            ],
+          },
         },
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: PC02_PROBE_BUTTON_TEXT, callback_data: PC02_PROBE_CALLBACK_DATA }],
-          ],
-        },
+        allow_user_chats: true,
+        allow_bot_chats: false,
+        allow_group_chats: false,
+        allow_channel_chats: false,
       },
-      allow_user_chats: true,
-      allow_bot_chats: false,
-      allow_group_chats: false,
-      allow_channel_chats: false,
-    },
-  );
-  if (!telegram.ok) {
+    );
+    if (!telegram.ok) {
+      endPc02ProbePrepareSlot(callerTelegramUserId, { success: false, nowMs });
+      return {
+        ok: false,
+        code: "TELEGRAM_API",
+        message: `savePreparedInlineMessage failed: ${telegram.description}`,
+        preparedMessageId: null,
+        callbackData: PC02_PROBE_CALLBACK_DATA,
+        urlMode: config.urlMode,
+        controlStartUrl: buildPc02ProbeOpenUrl({
+          botUsername: config.botUsername,
+          mode: "start",
+        }),
+        startappUrl: buildPc02ProbeOpenUrl({
+          botUsername: config.botUsername,
+          mode: "startapp",
+        }),
+      };
+    }
+    const preparedMessageId = readPreparedId(telegram.result);
+    if (!preparedMessageId) {
+      endPc02ProbePrepareSlot(callerTelegramUserId, { success: false, nowMs });
+      return prepareFail(
+        "TELEGRAM_API",
+        "savePreparedInlineMessage did not return result.id",
+      );
+    }
+    endPc02ProbePrepareSlot(callerTelegramUserId, { success: true, nowMs });
     return {
-      ok: false,
-      code: "TELEGRAM_API",
-      message: "savePreparedInlineMessage failed",
-      preparedMessageId: null,
+      ok: true,
+      code: "PREPARED",
+      message:
+        "PC02 probe prepared. Share via Mini App shareMessage to a test peer chat. Not a Ban.",
+      preparedMessageId,
       callbackData: PC02_PROBE_CALLBACK_DATA,
       urlMode: config.urlMode,
       controlStartUrl: buildPc02ProbeOpenUrl({
@@ -367,31 +516,11 @@ export async function preparePc02ProbeMessage(
         mode: "startapp",
       }),
     };
+  } catch (error) {
+    endPc02ProbePrepareSlot(callerTelegramUserId, { success: false, nowMs });
+    const message = error instanceof Error ? error.message : "prepare failed";
+    return prepareFail("TELEGRAM_API", message);
   }
-  const preparedMessageId = readPreparedId(telegram.result);
-  if (!preparedMessageId) {
-    return prepareFail(
-      "TELEGRAM_API",
-      "savePreparedInlineMessage did not return result.id",
-    );
-  }
-  return {
-    ok: true,
-    code: "PREPARED",
-    message:
-      "PC02 probe prepared. Share via Mini App shareMessage to a test peer chat. Not a Ban.",
-    preparedMessageId,
-    callbackData: PC02_PROBE_CALLBACK_DATA,
-    urlMode: config.urlMode,
-    controlStartUrl: buildPc02ProbeOpenUrl({
-      botUsername: config.botUsername,
-      mode: "start",
-    }),
-    startappUrl: buildPc02ProbeOpenUrl({
-      botUsername: config.botUsername,
-      mode: "startapp",
-    }),
-  };
 }
 
 function readResultsForCaller(callerTelegramUserId: string): Pc02ProbeResultsResult {
@@ -432,7 +561,8 @@ function readResultsForCaller(callerTelegramUserId: string): Pc02ProbeResultsRes
   return {
     ok: true,
     code: "PC02_PROBE_RESULTS",
-    message: "Recent PC02 probe callback diagnostics (no Telegram user ids)",
+    message:
+      "Recent PC02 probe callback diagnostics (no Telegram user ids). miniAppOpenConfirmed is always false server-side.",
     enabled: true,
     urlMode: config.urlMode,
     events: [...diagnosticEvents],
@@ -450,6 +580,8 @@ async function finishProbe(input: {
   nowMs: number;
 }): Promise<Pc02ProbeCallbackResult> {
   const answered = await answerCallbackQuery(input.deps, input.callbackQueryId, input.openUrl);
+  const apiAccepted = answered.accepted === true;
+  const apiFailed = answered.accepted === false;
   pushDiagnostic({
     atMs: input.nowMs,
     callbackReceived: true,
@@ -458,15 +590,47 @@ async function finishProbe(input: {
     openUrlHostPath: sanitizeOpenUrl(input.openUrl),
     telegramApiAccepted: answered.accepted,
     telegramApiError: answered.error,
+    miniAppOpenConfirmed: false,
   });
+
+  if (apiFailed) {
+    return {
+      ok: false,
+      code: "PC02_TELEGRAM_API_FAILED",
+      message: `Callback classified as ${input.branch}, but answerCallbackQuery was rejected by Telegram API: ${answered.error ?? "unknown"}`,
+      branch: input.branch,
+      answerKind: input.answerKind,
+      callbackHandled: true,
+      telegramApiAccepted: false,
+      telegramApiError: answered.error,
+      miniAppOpenConfirmed: false,
+    };
+  }
+
+  if (!apiAccepted) {
+    return {
+      ok: false,
+      code: "PC02_TELEGRAM_API_SKIPPED",
+      message: `Callback classified as ${input.branch}, but answerCallbackQuery was not sent: ${answered.error ?? "unknown"}`,
+      branch: input.branch,
+      answerKind: input.answerKind,
+      callbackHandled: true,
+      telegramApiAccepted: null,
+      telegramApiError: answered.error,
+      miniAppOpenConfirmed: false,
+    };
+  }
+
   return {
     ok: true,
     code: input.code,
-    message: input.message,
+    message: `${input.message}. Telegram API accepted answerCallbackQuery. Mini App open is NOT confirmed by this response.`,
     branch: input.branch,
     answerKind: input.answerKind,
-    telegramApiAccepted: answered.accepted,
-    telegramApiError: answered.error,
+    callbackHandled: true,
+    telegramApiAccepted: true,
+    telegramApiError: null,
+    miniAppOpenConfirmed: false,
   };
 }
 
@@ -510,6 +674,18 @@ function sanitizeOpenUrl(url: string | null): string | null {
   } catch {
     return "invalid-url";
   }
+}
+
+function parseContentLength(raw: string | string[] | undefined): number | null {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
 }
 
 function positiveId(raw: string | undefined): string | null {
@@ -645,6 +821,11 @@ function statusForPrepare(code: string): number {
     case "PC02_PROBE_CALLER_FORBIDDEN":
     case "PC02_PROBE_START_PARAM_REQUIRED":
       return 403;
+    case "PC02_PROBE_RATE_LIMITED":
+    case "PC02_PROBE_PREPARE_IN_FLIGHT":
+      return 429;
+    case "PAYLOAD_TOO_LARGE":
+      return 413;
     case "PC02_PROBE_IDS_MISSING":
     case "PC02_PROBE_BOT_USERNAME_MISSING":
     case "INVALID_TELEGRAM_USER":
@@ -667,29 +848,6 @@ function headerValue(req: IncomingMessage, name: string): string | null {
     return value[0].trim();
   }
   return null;
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  if (chunks.length === 0) {
-    return {};
-  }
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
-  if (raw.length === 0) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {

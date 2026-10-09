@@ -107,6 +107,25 @@
       <pre id="inline-probe-diagnostics">(not started)</pre>
     </section>
 
+    <section id="pc02-probe" hidden>
+      <h2>PC-02 PROBE</h2>
+      <p>
+        Isolated device probe only. Visible solely when launched with
+        <code>start_param=pc02_probe</code>. Does not create a Ban, does not run
+        Product Events, and does not open the normal product screens.
+      </p>
+      <div class="row">
+        <button id="pc02-probe-prepare-share" type="button">Prepare &amp; share PC02 probe</button>
+        <button id="pc02-probe-results" type="button">Refresh probe results</button>
+      </div>
+      <p>
+        After share, the peer chat shows one <code>PC02 TEST</code> callback button.
+        Server never confirms Mini App open — observe the client manually.
+      </p>
+      <h3>DIAGNOSTICS</h3>
+      <pre id="pc02-probe-diagnostics">(not started)</pre>
+    </section>
+
     <section id="product-screen-section">
       <h2>PRODUCT SCREEN</h2>
       <div id="product-screen" data-screen="DisconnectedTestScreen" data-nav="controlState"></div>
@@ -501,21 +520,47 @@
         return fromTelegramQuery === "inline_probe";
       }
 
-      function enterInlineProbeMode() {
-        const probeEl = document.getElementById("inline-probe");
-        if (probeEl) probeEl.hidden = false;
+      function isPc02ProbeLaunch() {
+        if (telegramStartParam() === "pc02_probe") {
+          return true;
+        }
+        const fromTelegramQuery = new URLSearchParams(window.location.search).get(
+          "tgWebAppStartParam",
+        );
+        return fromTelegramQuery === "pc02_probe";
+      }
+
+      function hideNormalProductChrome() {
         for (const id of [
           "dev-auth",
           "product-screen-section",
           "machine-diagnostics",
           "share-signal-log",
           "raw-diagnostics",
+          "inline-probe",
+          "pc02-probe",
         ]) {
           const el = document.getElementById(id);
           if (el) el.hidden = true;
         }
+      }
+
+      function enterInlineProbeMode() {
+        hideNormalProductChrome();
+        const probeEl = document.getElementById("inline-probe");
+        if (probeEl) probeEl.hidden = false;
         const button = document.getElementById("inline-probe-send");
         if (button) button.addEventListener("click", () => void runInlineProbe());
+      }
+
+      function enterPc02ProbeMode() {
+        hideNormalProductChrome();
+        const probeEl = document.getElementById("pc02-probe");
+        if (probeEl) probeEl.hidden = false;
+        const prepareBtn = document.getElementById("pc02-probe-prepare-share");
+        if (prepareBtn) prepareBtn.addEventListener("click", () => void runPc02ProbePrepareShare());
+        const resultsBtn = document.getElementById("pc02-probe-results");
+        if (resultsBtn) resultsBtn.addEventListener("click", () => void runPc02ProbeResults());
       }
 
       async function probePost(path, body) {
@@ -623,6 +668,90 @@
           paint();
         } finally {
           if (button) button.disabled = false;
+        }
+      }
+
+      async function runPc02ProbePrepareShare() {
+        const button = document.getElementById("pc02-probe-prepare-share");
+        const diagEl = document.getElementById("pc02-probe-diagnostics");
+        const report = [];
+        function paint() {
+          if (diagEl) diagEl.textContent = JSON.stringify(report, null, 2);
+        }
+        if (button) button.disabled = true;
+        try {
+          const prepared = await probePost("/api/telegram-pc02-probe/prepare", {});
+          report.push({ phase: "prepare", ...prepared });
+          paint();
+          const preparedPayload = prepared.payload;
+          if (!preparedPayload || preparedPayload.ok !== true || !preparedPayload.preparedMessageId) {
+            return;
+          }
+          const webApp = telegramWebApp();
+          if (!webApp || typeof webApp.shareMessage !== "function") {
+            report.push({
+              phase: "share",
+              ok: false,
+              code: "SHARE_MESSAGE_UNAVAILABLE",
+              message: "Telegram.WebApp.shareMessage is unavailable in this runtime.",
+            });
+            paint();
+            return;
+          }
+          report.push({
+            phase: "share",
+            ok: null,
+            code: "SHARE_MESSAGE_OPENED",
+            message: "Waiting for Telegram.WebApp.shareMessage callback. Not a Ban share.",
+          });
+          paint();
+          let shared = false;
+          try {
+            shared = await new Promise((resolve, reject) => {
+              try {
+                webApp.shareMessage(preparedPayload.preparedMessageId, (success) => {
+                  resolve(success === true);
+                });
+              } catch (error) {
+                reject(error);
+              }
+            });
+          } catch (error) {
+            report.push({
+              phase: "share",
+              ok: false,
+              code: "SHARE_MESSAGE_THREW",
+              message: String((error && error.message) || error),
+            });
+            paint();
+            return;
+          }
+          report.push({
+            phase: "share",
+            ok: shared,
+            code: shared ? "SHARE_MESSAGE_SENT" : "SHARE_MESSAGE_DECLINED",
+            message: shared
+              ? "shareMessage callback was true. Ask the peer to tap PC02 TEST."
+              : "shareMessage callback was false.",
+          });
+          paint();
+        } finally {
+          if (button) button.disabled = false;
+        }
+      }
+
+      async function runPc02ProbeResults() {
+        const diagEl = document.getElementById("pc02-probe-diagnostics");
+        const results = await probePost("/api/telegram-pc02-probe/results", {});
+        if (diagEl) {
+          diagEl.textContent = JSON.stringify(
+            {
+              note: "Server never sets miniAppOpenConfirmed=true. Observe Mini App open on-device.",
+              results,
+            },
+            null,
+            2,
+          );
         }
       }
 
@@ -734,6 +863,8 @@
       render();
       if (isInlineProbeLaunch()) {
         enterInlineProbeMode();
+      } else if (isPc02ProbeLaunch()) {
+        enterPc02ProbeMode();
       } else if (inTelegramRuntime()) {
         void openSession(true).catch((error) => {
           diagnostics = {
