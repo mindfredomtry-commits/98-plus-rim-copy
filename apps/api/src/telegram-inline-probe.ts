@@ -232,6 +232,16 @@ export async function watchTelegramInlineProbe(
       callbackData: probe.callbackData,
     });
   }
+  if ((process.env.TELEGRAM_WEBHOOK_SECRET ?? "").trim().length > 0) {
+    return result({
+      code: "PROBE_WEBHOOK_CONFIGURED",
+      message:
+        "TELEGRAM_WEBHOOK_SECRET is set. Probe getUpdates must not run beside the Ban webhook.",
+      probeId: probe.probeId,
+      preparedMessageId: probe.preparedMessageId,
+      callbackData: probe.callbackData,
+    });
+  }
 
   polling = true;
   const now = deps.now ?? Date.now;

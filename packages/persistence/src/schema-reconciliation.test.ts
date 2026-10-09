@@ -39,6 +39,7 @@ const CANONICAL_MIGRATIONS = [
   "packages/persistence/schema/009_share_operation_token_unique.sql",
   "packages/persistence/schema/010_rim_history.sql",
   "packages/persistence/schema/011_rim_provider_ownership.sql",
+  "packages/persistence/schema/012_telegram_ban_message.sql",
 ] as const;
 
 function migrationSql(): string {

@@ -12,6 +12,10 @@
  * those APIs do not provide a reliable success vs cancel distinction.
  */
 
+export const TELEGRAM_BAN_OVERBOARD_CALLBACK_PREFIX = "ob:";
+export const TELEGRAM_BAN_OVERBOARD_BUTTON_TEXT = "ПЕРЕБОР";
+export const TELEGRAM_BAN_REPLY_BUTTON_TEXT = "ЗАПРЕТИТЬ В ОТВЕТ";
+
 export type TelegramSharePrepareInput = Readonly<{
   attemptId: string;
   token: string;
@@ -53,6 +57,59 @@ export function buildTemplateShareDeepLink(input: { botUsername: string; token: 
   return `https://t.me/${botUsername}?startapp=${encodeURIComponent(startapp)}`;
 }
 
+export function buildTelegramBanOverboardCallbackData(token: string): string {
+  const data = `${TELEGRAM_BAN_OVERBOARD_CALLBACK_PREFIX}${token}`;
+  if (Buffer.byteLength(data) > 64) {
+    throw new TelegramShareConfigurationError(
+      "OVERBOARD callback_data exceeds Telegram's 64-byte limit",
+    );
+  }
+  return data;
+}
+
+export function parseTelegramBanOverboardCallbackData(data: string): string | null {
+  if (!data.startsWith(TELEGRAM_BAN_OVERBOARD_CALLBACK_PREFIX)) {
+    return null;
+  }
+  const token = data.slice(TELEGRAM_BAN_OVERBOARD_CALLBACK_PREFIX.length);
+  return token.length > 0 ? token : null;
+}
+
+export function buildTelegramBanMessageText(input: {
+  banText: string;
+  durationMinutes: number;
+  shareUrl: string;
+  statusLine?: string | null;
+}): string {
+  const lines = ["98+ Template Ban", input.banText, `Duration: ${input.durationMinutes} min`];
+  if (input.statusLine) {
+    lines.push(input.statusLine);
+  }
+  lines.push(input.shareUrl);
+  return lines.join("\n");
+}
+
+export function buildTelegramBanReplyMarkup(input: {
+  shareUrl: string;
+  token: string;
+  includeOverboard: boolean;
+}): {
+  inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
+} {
+  const row: Array<{ text: string; callback_data?: string; url?: string }> = [];
+  if (input.includeOverboard) {
+    row.push({
+      text: TELEGRAM_BAN_OVERBOARD_BUTTON_TEXT,
+      callback_data: buildTelegramBanOverboardCallbackData(input.token),
+    });
+  }
+  row.push({
+    text: TELEGRAM_BAN_REPLY_BUTTON_TEXT,
+    url: input.shareUrl,
+  });
+  return { inline_keyboard: [row] };
+}
+
 /**
  * Prepare a Telegram shareable prepared-inline message for WebApp.shareMessage.
  * Requires TELEGRAM_BOT_TOKEN. Tests should inject a mock prepare function instead.
@@ -88,17 +145,21 @@ export async function prepareTelegramShareMessage(
           title: "98+ Ban",
           description: input.banText,
           input_message_content: {
-            message_text: [
-              "98+ Template Ban",
-              input.banText,
-              `Duration: ${input.durationMinutes} min`,
+            message_text: buildTelegramBanMessageText({
+              banText: input.banText,
+              durationMinutes: input.durationMinutes,
               shareUrl,
-            ].join("\n"),
+            }),
           },
+          reply_markup: buildTelegramBanReplyMarkup({
+            shareUrl,
+            token: input.token,
+            includeOverboard: true,
+          }),
         },
         allow_user_chats: true,
         allow_bot_chats: false,
-        allow_group_chats: true,
+        allow_group_chats: false,
         allow_channel_chats: false,
       }),
     },

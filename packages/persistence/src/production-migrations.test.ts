@@ -28,6 +28,7 @@ describe("production migration authority", () => {
       "packages/persistence/schema/009_share_operation_token_unique.sql",
       "packages/persistence/schema/010_rim_history.sql",
       "packages/persistence/schema/011_rim_provider_ownership.sql",
+      "packages/persistence/schema/012_telegram_ban_message.sql",
     ]);
     expect(scripts.every((script) => script.sql.includes("IF NOT EXISTS"))).toBe(true);
   });
@@ -90,6 +91,20 @@ describe("production migration authority", () => {
       { kind: "constraint", name: "rim_provider_ownership_release_reason_chk" },
       { kind: "constraint", name: "rim_provider_ownership_release_pair_chk" },
       { kind: "constraint", name: "rim_provider_ownership_user_fk" },
+    ]);
+    const banMessage = declaredMigrationObjects(
+      byId.get("packages/persistence/schema/012_telegram_ban_message.sql") ?? "",
+    );
+    expect(banMessage).toEqual([
+      { kind: "table", name: "telegram_ban_message_deliveries" },
+      { kind: "table", name: "telegram_ban_callback_receipts" },
+      { kind: "index", name: "telegram_ban_message_deliveries_token_key" },
+      { kind: "index", name: "telegram_ban_message_deliveries_ban_idx" },
+      { kind: "index", name: "telegram_ban_callback_receipts_attempt_idx" },
+      { kind: "constraint", name: "telegram_ban_message_deliveries_token_chk" },
+      { kind: "constraint", name: "telegram_ban_message_deliveries_inline_chk" },
+      { kind: "constraint", name: "telegram_ban_callback_receipts_telegram_user_chk" },
+      { kind: "constraint", name: "telegram_ban_callback_receipts_outcome_chk" },
     ]);
   });
 });

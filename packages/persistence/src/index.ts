@@ -30,6 +30,7 @@ export {
   rimProviderOwnershipSql,
   rimProviderRuntimeSql,
   shareOperationTokenUniqueSql,
+  telegramBanMessageSql,
   telegramPersistentReentryCtaOpportunitySql,
   telegramPersistentReentrySql,
 } from "./migrations.ts";

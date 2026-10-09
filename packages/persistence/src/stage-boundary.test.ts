@@ -69,6 +69,7 @@ describe("Stage 4 migrations", () => {
       "packages/persistence/schema/009_share_operation_token_unique.sql",
       "packages/persistence/schema/010_rim_history.sql",
       "packages/persistence/schema/011_rim_provider_ownership.sql",
+      "packages/persistence/schema/012_telegram_ban_message.sql",
     ]);
     expect(MIGRATION_CHAIN[0]?.authority).toBe("identity");
     expect(MIGRATION_CHAIN[1]?.authority).toBe("persistence");
@@ -81,6 +82,7 @@ describe("Stage 4 migrations", () => {
     expect(MIGRATION_CHAIN[8]?.authority).toBe("persistence");
     expect(MIGRATION_CHAIN[9]?.authority).toBe("persistence");
     expect(MIGRATION_CHAIN[10]?.authority).toBe("persistence");
+    expect(MIGRATION_CHAIN[11]?.authority).toBe("persistence");
     expect(identitySchemaSql()).toContain("identity_users");
     expect(identitySchemaSql()).toContain("telegram_user_id");
   });

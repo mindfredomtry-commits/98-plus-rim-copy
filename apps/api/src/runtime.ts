@@ -40,6 +40,10 @@ import {
   type RimProviderSelection,
 } from "./openai/compose-rim-provider.ts";
 import type { TelegramPersistentReentryBootstrapIntent } from "./telegram-persistent-reentry.ts";
+import {
+  createTelegramBanMessageStore,
+  type TelegramBanMessageStore,
+} from "./telegram-ban-message-store.ts";
 
 export const DEFAULT_DEV_AUTH_SECRET = "test-secret";
 export const DEFAULT_TEST_TELEGRAM_USERS = ["1001", "1002"] as const;
@@ -93,6 +97,7 @@ export type CreateBanContactRuntime = Readonly<{
   /** Known-response retrieval. Null in Fake mode. */
   rimProviderRetrieval: RimProviderRetrievalPort | null;
   rimContextFailures: RimContextFailures;
+  telegramBanMessageStore: TelegramBanMessageStore;
 }>;
 
 export type CreateBanContactRuntimeOptions = Readonly<{
@@ -124,6 +129,7 @@ export type CreateBanContactRuntimeOptions = Readonly<{
    * Invoked only when RIM_PROVIDER=openai and no explicit port is injected.
    */
   createOpenAiClient?: (apiKey: string) => OpenAiSdkClient;
+  telegramBanMessageStore?: TelegramBanMessageStore;
 }>;
 
 export function developmentIdentityConfig(
@@ -230,6 +236,8 @@ export function createCreateBanContactRuntime(
     rimConversationInitialization: provider.rimConversationInitialization,
     rimProviderRetrieval: provider.rimProviderRetrieval,
     rimContextFailures: options.rimContextFailures ?? { remainingFailures: 0 },
+    telegramBanMessageStore:
+      options.telegramBanMessageStore ?? createTelegramBanMessageStore(sql),
   };
 }
 

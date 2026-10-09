@@ -78,6 +78,16 @@ describe("Telegram Share adapter boundary", () => {
       const body = JSON.parse(capturedBody);
       expect(body.user_id).toBe(1001);
       expect(body.result.type).toBe("article");
+      expect(body.allow_user_chats).toBe(true);
+      expect(body.allow_group_chats).toBe(false);
+      expect(body.allow_bot_chats).toBe(false);
+      expect(body.allow_channel_chats).toBe(false);
+      const keyboard = body.result.reply_markup.inline_keyboard[0];
+      expect(keyboard).toHaveLength(2);
+      expect(keyboard[0].text).toBe("ПЕРЕБОР");
+      expect(keyboard[0].callback_data).toBe("ob:tok-1");
+      expect(keyboard[1].text).toBe("ЗАПРЕТИТЬ В ОТВЕТ");
+      expect(keyboard[1].url).toContain("startapp=share_tok-1");
     } finally {
       vi.unstubAllGlobals();
     }

@@ -59,6 +59,10 @@ import {
   handleTelegramInlineProbeRequest,
   isTelegramInlineProbePath,
 } from "./telegram-inline-probe.ts";
+import {
+  handleTelegramBanWebhookRequest,
+  isTelegramBanWebhookPath,
+} from "./telegram-ban-callback.ts";
 
 const TEST_UI_HTML = testUiHtmlSource();
 
@@ -183,6 +187,10 @@ export async function handleCreateBanContactRequest(
         STAGE_6_EXCLUDES,
         ui: "TEST",
       });
+      return;
+    }
+    if (req.method === "POST" && isTelegramBanWebhookPath(url.pathname)) {
+      await handleTelegramBanWebhookRequest(runtime, req, res);
       return;
     }
     if (req.method === "POST" && isTelegramInlineProbePath(url.pathname)) {

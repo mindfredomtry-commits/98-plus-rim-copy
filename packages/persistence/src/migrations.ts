@@ -66,6 +66,11 @@ export const MIGRATION_CHAIN = [
     file: "packages/persistence/schema/011_rim_provider_ownership.sql",
     path: join(PERSISTENCE_SCHEMA_DIR, "011_rim_provider_ownership.sql"),
   },
+  {
+    authority: "persistence",
+    file: "packages/persistence/schema/012_telegram_ban_message.sql",
+    path: join(PERSISTENCE_SCHEMA_DIR, "012_telegram_ban_message.sql"),
+  },
 ] as const;
 
 export function identitySchemaSql(): string {
@@ -121,6 +126,10 @@ export function rimProviderOwnershipSql(): string {
   return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "011_rim_provider_ownership.sql"), "utf8");
 }
 
+export function telegramBanMessageSql(): string {
+  return readFileSync(join(PERSISTENCE_SCHEMA_DIR, "012_telegram_ban_message.sql"), "utf8");
+}
+
 export type CanonicalMigrationScript = Readonly<{
   id: string;
   sql: string;
@@ -147,5 +156,6 @@ export function allMigrationSql(): readonly string[] {
     shareOperationTokenUniqueSql(),
     rimHistorySql(),
     rimProviderOwnershipSql(),
+    telegramBanMessageSql(),
   ];
 }

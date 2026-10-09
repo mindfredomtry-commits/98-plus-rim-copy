@@ -8,6 +8,7 @@ import {
   prepareTelegramShareMessage,
   type TelegramSharePrepareResult,
 } from "./telegram-share.ts";
+import type { TelegramBanMessageStore } from "./telegram-ban-message-store.ts";
 
 function telegramBotUsernameFromEnv(): string | null {
   const raw = process.env.TELEGRAM_BOT_USERNAME;
@@ -62,6 +63,7 @@ export async function buildTelegramShareInvocation(
     api: "shareMessage" as const,
   };
   if (runtime.telegramSharePrepare === "mock") {
+    await rememberBanMessageDelivery(runtime.telegramBanMessageStore, share);
     return {
       ...base,
       preparedMessageId: `mock-prepared-${share.attemptId}`,
@@ -75,7 +77,7 @@ export async function buildTelegramShareInvocation(
     };
   }
   try {
-    return await prepareTelegramShareMessage({
+    const prepared = await prepareTelegramShareMessage({
       attemptId: String(share.attemptId),
       token: String(share.token),
       banText: share.draft.banText,
@@ -84,6 +86,8 @@ export async function buildTelegramShareInvocation(
       botToken,
       botUsername,
     });
+    await rememberBanMessageDelivery(runtime.telegramBanMessageStore, share);
+    return prepared;
   } catch {
     // The Ban is already committed and the sender is SHARE_PENDING. A failed prepare must not roll the Ban back.
     return {
@@ -91,6 +95,20 @@ export async function buildTelegramShareInvocation(
       preparedMessageId: "",
     };
   }
+}
+
+async function rememberBanMessageDelivery(
+  store: TelegramBanMessageStore,
+  share: NonNullable<ReturnType<typeof activeTemplateShareOperation>>,
+): Promise<void> {
+  if (!share.createdBanId) {
+    return;
+  }
+  await store.upsertDelivery({
+    attemptId: String(share.attemptId),
+    banId: String(share.createdBanId),
+    shareToken: String(share.token),
+  });
 }
 
 export async function completeTelegramShare(
