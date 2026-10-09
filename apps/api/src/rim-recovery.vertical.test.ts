@@ -7,6 +7,7 @@ import {
   type RimProviderAttemptId,
   type RimProviderRuntime,
 } from "@98plus/application";
+import { MemorySqlClient } from "@98plus/persistence";
 import { grantContactBetweenTelegramUsers } from "./seed-contact.ts";
 import { executeIncomingOverboardVertical } from "./overboard.ts";
 import {
@@ -168,7 +169,7 @@ describe("RIM AI recovery hooks", () => {
     expect(seen[0]?.requestId).toBe(chat.aiOperation.requestId);
   });
 
-  it("executes the local attempt when an acceptance-unknown session is opened", async () => {
+  it("executes the local attempt when a renewal-lapsed acceptance-unknown session is opened", async () => {
     const seen: RimAiRequest[] = [];
     const ready = await readyChat(seen);
     const { runtime, context, chat, sent } = ready;
@@ -181,6 +182,22 @@ describe("RIM AI recovery hooks", () => {
       sent.revision,
       notSubmittedRuntime(chat, "acceptance-unknown", conversationId),
     );
+    if (!(runtime.sql instanceof MemorySqlClient)) {
+      throw new Error("this vertical seed requires the memory SQL client");
+    }
+    const seeded = runtime.sql.tables.insertOwnership({
+      userId: context.currentUserId,
+      operationKind: "user-attempt",
+      attemptId: "attempt-hook",
+      requestId: chat.aiOperation.requestId,
+      ownerToken: "00000000-0000-4000-8000-0000000000aa",
+      leasedUntilMs: Date.now() - 1_000,
+      releasedAtMs: null,
+      releaseReason: null,
+    });
+    if (!seeded) {
+      throw new Error("attempt-hook ownership was already present");
+    }
     const opened = await openLobbyIfNeeded(runtime, context);
     const once = await runtime.productStore.loadProductSnapshot(context.currentUserId);
     const transitioned = applicableRimProviderRuntime(

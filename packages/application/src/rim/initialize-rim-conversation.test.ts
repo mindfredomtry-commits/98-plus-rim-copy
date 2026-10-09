@@ -32,6 +32,7 @@ import {
 import { statusControlState } from "../../../product-model/src/kernel/snapshot.ts";
 import type { ProductSnapshot, RimChatId } from "@98plus/product-model";
 import { executeProductEvent, type ProductExecutorDependencies } from "../execute.ts";
+import { seedLapsedOwnership } from "./ownership-test-seed.ts";
 import {
   authContext,
   eventOf,
@@ -635,6 +636,7 @@ describe("DC-01 conversation initialization", () => {
         clientRequestId: "client-lost",
       }),
     );
+    seedLapsedOwnership(lost.store, USER_ID, "initialization", attempt("init-lost"));
     const lostFake = new RecordingFake(
       [],
       [{ kind: "SUCCESS", conversationId: "conv-should-not" }],
@@ -899,6 +901,13 @@ describe("DC-01 conversation initialization", () => {
         clientRequestId: "client-user",
       },
     });
+    seedLapsedOwnership(
+      opened.store,
+      USER_ID,
+      "user-attempt",
+      attempt("attempt-user"),
+      AI_REQUEST_ID,
+    );
     const log: RimInitializationObservation[] = [];
     let initialized = false;
     const seen: RimAiRequest[] = [];
@@ -1160,6 +1169,7 @@ describe("DC-01 conversation initialization", () => {
         clientRequestId: "client-invalid",
       }),
     );
+    seedLapsedOwnership(opened.store, USER_ID, "initialization", attempt("init-invalid"));
     const fake = new RecordingFake([], [{ kind: "SUCCESS", conversationId: "conv-invalid" }]);
     const ended = await reconcileRimInitialization({
       context: opened.context,

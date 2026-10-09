@@ -8,7 +8,13 @@ import {
   type RimChat,
 } from "@98plus/product-model";
 import type { ApplicationExecutionResult, ProductExecutorDependencies } from "../execute.ts";
-import { executeProductEvent } from "../execute.ts";
+import { persistAppliedOnSnapshot } from "../execute.ts";
+import {
+  RIM_OWNERSHIP_LEASE_SECONDS,
+  rimOwnershipRecoveryPermitted,
+  startRimOwnershipHeartbeat,
+  tokensEqual,
+} from "./rim-ownership-lease.ts";
 import type { RimAiPort } from "./rim-ai-port.ts";
 import {
   conversationPortFrom,
@@ -33,12 +39,6 @@ export type RimInitializationObservation =
   | "stale-initialization-success-discarded";
 
 const MAX_INIT_REENTRY = 4;
-
-/**
- * In-process creates that have claimed acceptance-unknown and not yet finished.
- * A crash drops this set, so the next recovery treats acceptance-unknown as final.
- */
-const inFlightInitialization = new Map<string, Promise<void>>();
 
 type ReadyChat = Readonly<{
   chat: RimChat;
@@ -98,7 +98,7 @@ export async function reconcileRimInitialization(
   if (applicable.initialization.submissionState === "not-submitted") {
     return claimAndInitialize(tools, loaded, applicable, reentry);
   }
-  return recoverAcceptanceUnknown(tools, loaded, applicable, reentry);
+  return recoverAcceptanceUnknown(tools, applicable);
 }
 
 function readyChat(snapshot: ProductSnapshot): ReadyChat | null {
@@ -155,58 +155,61 @@ async function claimAndInitialize(
   if (runtime.initialization.submissionState !== "not-submitted") {
     return null;
   }
-  const key = flightKey(tools.context.currentUserId, runtime.initialization.attemptId);
-  const existing = inFlightInitialization.get(key);
-  if (existing) {
-    await existing;
-    return reconcileRimInitialization(tools, reentry + 1);
-  }
-  // Reserve before the claim CAS yields. A revision loser can otherwise observe
-  // acceptance-unknown before this map entry exists and dispatch E-64.
-  let resolveFlight: () => void = () => undefined;
-  const flight = new Promise<void>((resolve) => {
-    resolveFlight = resolve;
-  });
-  inFlightInitialization.set(key, flight);
-  let retry = false;
-  let result: ApplicationExecutionResult | null = null;
+  const claimed: RimProviderRuntime = {
+    rimChatId: runtime.rimChatId,
+    selectedContactId: runtime.selectedContactId,
+    contextRequestId: runtime.contextRequestId,
+    initialization: {
+      submissionState: "acceptance-unknown",
+      attemptId: runtime.initialization.attemptId,
+      clientRequestId: runtime.initialization.clientRequestId,
+    },
+    attempt: runtime.attempt,
+    continuityMode: runtime.continuityMode,
+    retiredAttemptId: runtime.retiredAttemptId,
+    ...(runtime.retryIntent ? { retryIntent: runtime.retryIntent } : {}),
+  };
+  let acquired: Awaited<
+    ReturnType<ProductExecutorDependencies["store"]["acquireRimProviderOwnership"]>
+  >;
   try {
-    const claimed: RimProviderRuntime = {
-      rimChatId: runtime.rimChatId,
-      selectedContactId: runtime.selectedContactId,
-      contextRequestId: runtime.contextRequestId,
-      initialization: {
-        submissionState: "acceptance-unknown",
-        attemptId: runtime.initialization.attemptId,
-        clientRequestId: runtime.initialization.clientRequestId,
-      },
-      attempt: runtime.attempt,
-      continuityMode: runtime.continuityMode,
-      retiredAttemptId: runtime.retiredAttemptId,
-      ...(runtime.retryIntent ? { retryIntent: runtime.retryIntent } : {}),
-    };
-    const saved = await trySave(tools, loaded.revision, claimed);
-    if (!saved.ok) {
-      retry = true;
-    } else {
-      note(tools, "initialization-claimed");
-      result = await submitClaimedInitialization(tools, claimed);
+    acquired = await tools.deps.store.acquireRimProviderOwnership({
+      currentUserId: tools.context.currentUserId,
+      expectedRevision: loaded.revision,
+      runtime: claimed,
+      operationKind: "initialization",
+      attemptId: claimed.initialization.attemptId,
+      requestId: null,
+      leaseSeconds: RIM_OWNERSHIP_LEASE_SECONDS,
+    });
+  } catch (error) {
+    if (error instanceof PersistenceError && error.code === "REVISION_CONFLICT") {
+      return reconcileRimInitialization(tools, reentry + 1);
     }
-  } finally {
-    resolveFlight();
-    if (inFlightInitialization.get(key) === flight) {
-      inFlightInitialization.delete(key);
-    }
+    throw error;
   }
-  if (retry) {
+  if (acquired.status === "ALREADY_PRESENT") {
     return reconcileRimInitialization(tools, reentry + 1);
   }
-  return result;
+  note(tools, "initialization-claimed");
+  const ownerToken = acquired.ownership.ownerToken;
+  const stopHeartbeat = startRimOwnershipHeartbeat(tools.deps.store, {
+    currentUserId: tools.context.currentUserId,
+    operationKind: "initialization",
+    attemptId: claimed.initialization.attemptId,
+    ownerToken,
+  });
+  try {
+    return await submitClaimedInitialization(tools, claimed, ownerToken);
+  } finally {
+    stopHeartbeat();
+  }
 }
 
 async function submitClaimedInitialization(
   tools: RimInitializationTools,
   claimed: RimProviderRuntime,
+  ownerToken: string,
 ): Promise<ApplicationExecutionResult | null> {
   if (claimed.initialization.submissionState !== "acceptance-unknown") {
     return null;
@@ -226,10 +229,9 @@ async function submitClaimedInitialization(
   const port = conversationPortFrom(tools.rimAi, tools.conversation);
   try {
     const result = await port.initialize(request);
-    return persistStoredInitialization(tools, request, result.conversationId);
+    return persistStoredInitialization(tools, request, result.conversationId, ownerToken);
   } catch {
-    note(tools, "initialization-acceptance-unknown");
-    return dispatchUnrecoverable(tools, request);
+    return recoverAcceptanceUnknown(tools, claimed, ownerToken);
   }
 }
 
@@ -237,88 +239,113 @@ async function persistStoredInitialization(
   tools: RimInitializationTools,
   request: RimConversationInitializationRequest,
   conversationId: ProviderConversationId,
+  ownerToken: string,
 ): Promise<ApplicationExecutionResult | null> {
-  const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
-  const current = correlatedAcceptanceUnknown(loaded, request);
-  if (!current) {
-    note(tools, "stale-initialization-success-discarded");
-    return null;
-  }
-  const stored: RimProviderRuntime = {
-    rimChatId: current.rimChatId,
-    selectedContactId: current.selectedContactId,
-    contextRequestId: current.contextRequestId,
-    initialization: {
-      submissionState: "stored",
+  const saved = await tools.deps.store.withRimProviderOwnershipCoordination(
+    {
+      currentUserId: tools.context.currentUserId,
+      operationKind: "initialization",
       attemptId: request.attemptId,
-      conversationId,
-      clientRequestId: request.clientRequestId,
     },
-    attempt: current.attempt,
-    continuityMode: current.continuityMode,
-    retiredAttemptId: current.retiredAttemptId,
-    ...(current.retryIntent ? { retryIntent: current.retryIntent } : {}),
-  };
-  const saved = await trySave(tools, loaded.revision, stored);
-  if (!saved.ok) {
-    note(tools, "stale-initialization-success-discarded");
-    return null;
-  }
-  note(tools, "initialization-stored");
+    async (coordination) => {
+      const loaded = await coordination.load();
+      const current = correlatedAcceptanceUnknown(loaded, request);
+      const ownership = coordination.ownership;
+      if (
+        !current ||
+        !ownership ||
+        !tokensEqual(ownership.ownerToken, ownerToken) ||
+        ownership.phase === "released"
+      ) {
+        return false;
+      }
+      const stored: RimProviderRuntime = {
+        rimChatId: current.rimChatId,
+        selectedContactId: current.selectedContactId,
+        contextRequestId: current.contextRequestId,
+        initialization: {
+          submissionState: "stored",
+          attemptId: request.attemptId,
+          conversationId,
+          clientRequestId: request.clientRequestId,
+        },
+        attempt: current.attempt,
+        continuityMode: current.continuityMode,
+        retiredAttemptId: current.retiredAttemptId,
+        ...(current.retryIntent ? { retryIntent: current.retryIntent } : {}),
+      };
+      await coordination.replaceRuntime(stored);
+      await coordination.release(ownerToken, "completed");
+      return true;
+    },
+  );
+  note(tools, saved ? "initialization-stored" : "stale-initialization-success-discarded");
   return null;
 }
 
 async function recoverAcceptanceUnknown(
   tools: RimInitializationTools,
-  loaded: LoadedSnapshot,
   runtime: RimProviderRuntime,
-  reentry: number,
+  ownerToken?: string,
 ): Promise<ApplicationExecutionResult | null> {
   if (runtime.initialization.submissionState !== "acceptance-unknown") {
     return null;
   }
-  const key = flightKey(tools.context.currentUserId, runtime.initialization.attemptId);
-  const flight = inFlightInitialization.get(key);
-  if (flight) {
-    await flight;
-    return reconcileRimInitialization(tools, reentry + 1);
-  }
-  const ready = readyChat(loaded.snapshot);
-  if (!ready || !runtimeMatches(runtime, ready)) {
-    return null;
-  }
-  note(tools, "initialization-acceptance-unknown");
-  return dispatchUnrecoverable(
-    tools,
-    initializationRequest(loaded.snapshot, ready, runtime, tools.context.currentUserId),
-  );
-}
-
-async function dispatchUnrecoverable(
-  tools: RimInitializationTools,
-  request: RimConversationInitializationRequest,
-): Promise<ApplicationExecutionResult | null> {
-  const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
-  if (!correlatedAcceptanceUnknown(loaded, request)) {
-    return null;
-  }
-  note(tools, "e64-dispatched");
-  return executeProductEvent(
+  return tools.deps.store.withRimProviderOwnershipCoordination(
     {
-      context: tools.context,
-      event: {
-        name: "RIM.INITIALIZATION_UNRECOVERABLE",
-        payload: {
-          rimChatId: request.rimChatId,
-          selectedContactId: request.selectedContactId,
-          contextRequestId: request.contextRequestId,
-        },
-      },
-      ...(tools.clientClaimedUserId === undefined
-        ? {}
-        : { clientClaimedUserId: tools.clientClaimedUserId }),
+      currentUserId: tools.context.currentUserId,
+      operationKind: "initialization",
+      attemptId: runtime.initialization.attemptId,
     },
-    tools.deps,
+    async (coordination) => {
+      const loaded = await coordination.load();
+      const ready = readyChat(loaded.snapshot);
+      if (!ready || !runtimeMatches(runtime, ready)) {
+        return null;
+      }
+      const request = initializationRequest(
+        loaded.snapshot,
+        ready,
+        runtime,
+        tools.context.currentUserId,
+      );
+      if (!correlatedAcceptanceUnknown(loaded, request)) {
+        return null;
+      }
+      if (!rimOwnershipRecoveryPermitted(coordination.ownership, ownerToken)) {
+        return null;
+      }
+      const ended = await persistAppliedOnSnapshot(
+        {
+          context: tools.context,
+          event: {
+            name: "RIM.INITIALIZATION_UNRECOVERABLE",
+            payload: {
+              rimChatId: request.rimChatId,
+              selectedContactId: request.selectedContactId,
+              contextRequestId: request.contextRequestId,
+            },
+          },
+          ...(tools.clientClaimedUserId === undefined
+            ? {}
+            : { clientClaimedUserId: tools.clientClaimedUserId }),
+        },
+        tools.deps,
+        loaded,
+        (input) => coordination.persistApplied(input),
+        async () => {
+          if (coordination.ownership && coordination.ownership.phase !== "released") {
+            await coordination.invalidate("chat-abandoned");
+          }
+        },
+      );
+      if (!ended.persisted) {
+        return null;
+      }
+      note(tools, "initialization-acceptance-unknown");
+      note(tools, "e64-dispatched");
+      return ended;
+    },
   );
 }
 
@@ -376,10 +403,6 @@ function initializationRequest(
     relationshipContext: ready.data,
     origin: validAskRimOrigin(snapshot, currentUserId),
   };
-}
-
-function flightKey(userId: string, attemptId: string): string {
-  return `${userId}:${attemptId}`;
 }
 
 function note(tools: RimInitializationTools, observation: RimInitializationObservation): void {

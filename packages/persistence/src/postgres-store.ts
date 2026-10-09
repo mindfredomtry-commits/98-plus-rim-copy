@@ -54,6 +54,7 @@ import {
   persistOpenAiConversationId,
   projectRimHistory,
   rejectTerminatedRimChats,
+  rimChatTerminationReason,
   rimHistoryChanged,
 } from "./rim-history.ts";
 import { SQL } from "./sql.ts";
@@ -623,11 +624,75 @@ export class PostgresProductStore implements ProductStore {
           SQL.selectRimProviderOwnershipForUpdate,
           params,
         );
+        const userId = key.currentUserId;
         const context: RimOwnershipCoordinationContext = {
           revision: Number(session.revision),
           runtime: parseJson(session.rim_provider_runtime ?? null),
           ownership: locked.rows[0] ? ownershipFromSqlRow(locked.rows[0]) : null,
           invalidate: (reason) => invalidateOwnershipOn(tx, params, reason),
+          load: () => this.read(tx, userId),
+          replaceRuntime: async (runtime) => {
+            const current = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [userId]);
+            const revision = Number(current.rows[0]?.revision ?? 0);
+            const updated = await tx.query<{ user_id: string }>(SQL.updateRimProviderRuntime, [
+              userId,
+              revision,
+              jsonParam(runtime),
+            ]);
+            if (!updated.rows[0]) {
+              throw new PersistenceError(
+                "REVISION_CONFLICT",
+                "Conflicting writes to the same user's durable ProductSnapshot",
+              );
+            }
+            await persistOpenAiConversationId(tx, runtime);
+            return this.read(tx, userId);
+          },
+          release: async (ownerToken, reason) => {
+            const releaseReason = assertRimOwnershipTokenReleaseReason(reason);
+            if (!isRimOwnershipToken(ownerToken)) {
+              const current = await tx.query<RimOwnershipSqlRow>(SQL.selectRimProviderOwnership, [
+                ...params,
+              ]);
+              const row = current.rows[0];
+              return {
+                status: "REJECTED" as const,
+                reason: "TOKEN_MISMATCH" as const,
+                ownership: row ? ownershipFromSqlRow(row) : null,
+              };
+            }
+            const released = await tx.query<RimOwnershipSqlRow>(SQL.releaseRimProviderOwnership, [
+              ...params,
+              ownerToken,
+              releaseReason,
+            ]);
+            const row = released.rows[0];
+            if (row) {
+              return { status: "RELEASED" as const, ownership: ownershipFromSqlRow(row) };
+            }
+            const current = await tx.query<RimOwnershipSqlRow>(
+              SQL.selectRimProviderOwnershipTokenState,
+              [...params, ownerToken],
+            );
+            return releaseRejection(current.rows[0]);
+          },
+          persistApplied: async (input) => {
+            if (input.result.outcome !== "APPLIED") {
+              throw new PersistenceError(
+                "APPLIED_TRANSITION_REQUIRED",
+                "Only an APPLIED Product Kernel TransitionResult may be persisted",
+              );
+            }
+            return this.writeOn(
+              tx,
+              input.currentUserId,
+              input.expectedRevision,
+              input.result.snapshot,
+              false,
+              undefined,
+              input.appliedRule,
+            );
+          },
         };
         return run(context);
       });
@@ -1203,6 +1268,9 @@ export class PostgresProductStore implements ProductStore {
         appliedRule === undefined
       ) {
         throw new PersistenceError("INVARIANT", "RIM history requires the applied Product event");
+      }
+      if (appliedRule && rimChatTerminationReason(appliedRule)) {
+        await tx.query(SQL.abandonOpenRimProviderOwnership, [currentUserId]);
       }
       if (appliedRule) {
         await projectRimHistory(tx, {

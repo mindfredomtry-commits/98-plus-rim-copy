@@ -24,6 +24,7 @@ import {
   ownershipPhase,
 } from "./rim-ownership.ts";
 import { ProductTables, type OwnershipMemoryRow } from "./tables.ts";
+import { rimChatTerminationReason } from "./rim-history.ts";
 import { runtimeAttemptAllowsCommit } from "./runtime-attempt-authority.ts";
 import type {
   CheckPairLockContext,
@@ -87,7 +88,13 @@ export class InMemoryProductStore implements ProductStore {
 
   async persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot> {
     const snapshot = requireApplied(input.result);
-    return this.write(input.currentUserId, input.expectedRevision, snapshot, false);
+    return this.write(
+      input.currentUserId,
+      input.expectedRevision,
+      snapshot,
+      false,
+      input.appliedRule,
+    );
   }
 
   async commitOwnedTransition(
@@ -115,6 +122,7 @@ export class InMemoryProductStore implements ProductStore {
           snapshot,
           false,
           "rimProviderRuntime" in input ? input.rimProviderRuntime : undefined,
+          input.appliedRule,
         );
         return { status: "COMMITTED" as const, loaded };
       }),
@@ -348,12 +356,67 @@ export class InMemoryProductStore implements ProductStore {
       try {
         const session = this.requireSession(key.currentUserId);
         const row = this.tables.getOwnership(key.currentUserId, operationKind, attemptId);
+        const userId = key.currentUserId;
         const context: RimOwnershipCoordinationContext = {
           revision: session.revision,
           runtime: session.rimProviderRuntime ?? null,
           ownership: row ? ownershipFromMemory(row) : null,
           invalidate: async (reason) =>
-            this.invalidateOwnershipUnlocked(key.currentUserId, operationKind, attemptId, reason),
+            this.invalidateOwnershipUnlocked(userId, operationKind, attemptId, reason),
+          load: async () => this.read(userId),
+          replaceRuntime: async (runtime) => {
+            const current = this.requireSession(userId);
+            this.tables.writeSession({
+              ...current,
+              revision: current.revision + 1,
+              rimProviderRuntime: runtime === null ? null : cloneJson(runtime),
+            });
+            return this.read(userId);
+          },
+          release: async (ownerToken, reason) => {
+            const releaseReason = assertRimOwnershipTokenReleaseReason(reason);
+            const current = this.tables.getOwnership(userId, operationKind, attemptId);
+            if (!current) {
+              return { status: "REJECTED" as const, reason: "ABSENT" as const, ownership: null };
+            }
+            if (!sameOwnershipToken(current.ownerToken, ownerToken)) {
+              return {
+                status: "REJECTED" as const,
+                reason: "TOKEN_MISMATCH" as const,
+                ownership: ownershipFromMemory(current),
+              };
+            }
+            if (current.releasedAtMs !== null) {
+              return {
+                status: "REJECTED" as const,
+                reason: "ALREADY_RELEASED" as const,
+                ownership: ownershipFromMemory(current),
+              };
+            }
+            const next: OwnershipMemoryRow = {
+              ...current,
+              releasedAtMs: Date.now(),
+              releaseReason,
+            };
+            this.tables.replaceOwnership(next);
+            return { status: "RELEASED" as const, ownership: ownershipFromMemory(next) };
+          },
+          persistApplied: async (input) => {
+            if (input.result.outcome !== "APPLIED") {
+              throw new PersistenceError(
+                "APPLIED_TRANSITION_REQUIRED",
+                "Only an APPLIED Product Kernel TransitionResult may be persisted",
+              );
+            }
+            return this.writeUnlocked(
+              input.currentUserId,
+              input.expectedRevision,
+              input.result.snapshot,
+              false,
+              undefined,
+              input.appliedRule,
+            );
+          },
         };
         return await run(context);
       } catch (error) {
@@ -769,10 +832,11 @@ export class InMemoryProductStore implements ProductStore {
     expectedRevision: number,
     snapshot: ProductSnapshot,
     seed: boolean,
+    appliedRule?: PersistTransitionInput["appliedRule"],
   ): Promise<LoadedSnapshot> {
     return this.withUserLock(currentUserId, () =>
       this.tables.transaction(() =>
-        this.writeUnlocked(currentUserId, expectedRevision, snapshot, seed),
+        this.writeUnlocked(currentUserId, expectedRevision, snapshot, seed, undefined, appliedRule),
       ),
     );
   }
@@ -783,6 +847,7 @@ export class InMemoryProductStore implements ProductStore {
     snapshot: ProductSnapshot,
     seed: boolean,
     runtimeReplacement?: unknown,
+    appliedRule?: PersistTransitionInput["appliedRule"],
   ): LoadedSnapshot {
     if (!this.tables.hasUser(currentUserId)) {
       throw new PersistenceError(
@@ -817,6 +882,9 @@ export class InMemoryProductStore implements ProductStore {
     this.tables.replaceOwnedItems(currentUserId, Object.values(entities.notificationItems));
     this.tables.replaceOwnedShares(currentUserId, Object.values(entities.shareOperations));
     this.tables.replaceOperations(currentUserId, Object.values(snapshot.runtime.pendingOperations));
+    if (appliedRule && rimChatTerminationReason(appliedRule)) {
+      this.tables.abandonOpenOwnership(currentUserId, Date.now());
+    }
     this.tables.writeSession(
       sessionFromSnapshot(currentUserId, snapshot, nextRevision, {
         telegramPersistentReentryBootstrapSent:

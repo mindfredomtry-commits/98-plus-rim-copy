@@ -82,6 +82,12 @@ export function rimHistoryChanged(
   return false;
 }
 
+export function rimChatTerminationReason(
+  rule: AppliedProductRule,
+): RimTerminationReason | null {
+  return terminationReason(rule);
+}
+
 function terminationReason(rule: AppliedProductRule): RimTerminationReason | null {
   switch (rule.eventId) {
     case "E-49":

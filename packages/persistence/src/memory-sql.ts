@@ -15,11 +15,31 @@ import type { SessionRecord } from "./codec.ts";
 import { decodeNotificationItem } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
 import { SQL } from "./sql.ts";
-import { ProductTables } from "./tables.ts";
+import { ProductTables, type OwnershipMemoryRow } from "./tables.ts";
+import type { RimOwnershipOperationKind } from "./types.ts";
 import type { PersistenceSqlClient } from "./types.ts";
 
 function rows<T>(values: readonly T[]): SqlQueryResult<T> {
   return { rows: values };
+}
+
+function ownershipTokensMatch(stored: string, supplied: string): boolean {
+  return stored.toLowerCase() === supplied.toLowerCase();
+}
+
+function ownershipMemoryToSql(row: OwnershipMemoryRow) {
+  const released = row.releasedAtMs !== null;
+  return {
+    user_id: row.userId,
+    operation_kind: row.operationKind,
+    attempt_id: row.attemptId,
+    request_id: row.requestId,
+    owner_token: row.ownerToken,
+    leased_until: new Date(row.leasedUntilMs),
+    released_at: released ? new Date(row.releasedAtMs ?? 0) : null,
+    release_reason: row.releaseReason,
+    lease_active: !released && row.leasedUntilMs > Date.now(),
+  };
 }
 
 function parseMaybeJson<T>(value: unknown): T {
@@ -84,19 +104,31 @@ export class MemorySqlClient implements PersistenceSqlClient {
   private failOnce = false;
   private telegramByUser = new Map<string, string>();
   private transactionTail: Promise<unknown> = Promise.resolve();
+  private transactionDepth = 0;
 
   failNextQuery(): void {
     this.failOnce = true;
   }
 
   async transaction<T>(fn: (tx: PersistenceSqlClient) => Promise<T>): Promise<T> {
+    if (this.transactionDepth > 0) {
+      this.transactionDepth += 1;
+      try {
+        return await fn(this);
+      } finally {
+        this.transactionDepth -= 1;
+      }
+    }
     const run = async () => {
       const before = this.tables.snapshot();
+      this.transactionDepth += 1;
       try {
         return await fn(this);
       } catch (error) {
         this.tables.restore(before);
         throw error;
+      } finally {
+        this.transactionDepth -= 1;
       }
     };
     const current = this.transactionTail.then(run, run);
@@ -113,6 +145,14 @@ export class MemorySqlClient implements PersistenceSqlClient {
       throw new PersistenceError("TRANSACTION_FAILED", "injected SQL failure");
     }
     return this.execute(sql, params) as SqlQueryResult<T>;
+  }
+
+  private ownershipRow(params: readonly unknown[]): OwnershipMemoryRow | undefined {
+    return this.tables.getOwnership(
+      String(params[0]),
+      String(params[1]) as RimOwnershipOperationKind,
+      String(params[2]),
+    );
   }
 
   private execute(sql: string, params: readonly unknown[]): SqlQueryResult<unknown> {
@@ -157,6 +197,90 @@ export class MemorySqlClient implements PersistenceSqlClient {
             telegram_user_id: row.telegramUserId,
           })),
         );
+      }
+      case SQL.abandonOpenRimProviderOwnership: {
+        this.tables.abandonOpenOwnership(String(params[0]), Date.now());
+        return rows([]);
+      }
+      case SQL.selectRimProviderOwnership:
+      case SQL.selectRimProviderOwnershipForUpdate: {
+        const row = this.ownershipRow(params);
+        return rows(row ? [ownershipMemoryToSql(row)] : []);
+      }
+      case SQL.selectRimProviderOwnershipTokenState: {
+        const row = this.ownershipRow(params);
+        if (!row) {
+          return rows([]);
+        }
+        return rows([
+          {
+            ...ownershipMemoryToSql(row),
+            token_matches: ownershipTokensMatch(row.ownerToken, String(params[3])),
+          },
+        ]);
+      }
+      case SQL.insertRimProviderOwnership: {
+        const inserted: OwnershipMemoryRow = {
+          userId: String(params[0]),
+          operationKind: String(params[1]) as RimOwnershipOperationKind,
+          attemptId: String(params[2]),
+          requestId: params[3] === null || params[3] === undefined ? null : String(params[3]),
+          ownerToken: String(params[4]),
+          leasedUntilMs: Date.now() + Number(params[5]) * 1000,
+          releasedAtMs: null,
+          releaseReason: null,
+        };
+        if (!this.tables.insertOwnership(inserted)) {
+          return rows([]);
+        }
+        return rows([ownershipMemoryToSql(inserted)]);
+      }
+      case SQL.renewRimProviderOwnership: {
+        const row = this.ownershipRow(params);
+        if (
+          !row ||
+          row.releasedAtMs !== null ||
+          row.leasedUntilMs <= Date.now() ||
+          !ownershipTokensMatch(row.ownerToken, String(params[3]))
+        ) {
+          return rows([]);
+        }
+        const next: OwnershipMemoryRow = {
+          ...row,
+          leasedUntilMs: Date.now() + Number(params[4]) * 1000,
+        };
+        this.tables.replaceOwnership(next);
+        return rows([ownershipMemoryToSql(next)]);
+      }
+      case SQL.releaseRimProviderOwnership: {
+        const row = this.ownershipRow(params);
+        if (
+          !row ||
+          row.releasedAtMs !== null ||
+          !ownershipTokensMatch(row.ownerToken, String(params[3]))
+        ) {
+          return rows([]);
+        }
+        const next: OwnershipMemoryRow = {
+          ...row,
+          releasedAtMs: Date.now(),
+          releaseReason: String(params[4]) as OwnershipMemoryRow["releaseReason"],
+        };
+        this.tables.replaceOwnership(next);
+        return rows([ownershipMemoryToSql(next)]);
+      }
+      case SQL.invalidateRimProviderOwnership: {
+        const row = this.ownershipRow(params);
+        if (!row || row.releasedAtMs !== null) {
+          return rows([]);
+        }
+        const next: OwnershipMemoryRow = {
+          ...row,
+          releasedAtMs: Date.now(),
+          releaseReason: String(params[3]) as OwnershipMemoryRow["releaseReason"],
+        };
+        this.tables.replaceOwnership(next);
+        return rows([ownershipMemoryToSql(next)]);
       }
       case SQL.selectSessionForUpdate: {
         const session = this.tables.lockSession(String(params[0]));

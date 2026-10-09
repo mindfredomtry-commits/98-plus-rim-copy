@@ -223,7 +223,8 @@ export type InvalidateRimProviderOwnershipResult =
 
 /**
  * Session row, then ownership row. The callback decides what to do.
- * This context does not choose E-64 or a local successor.
+ * Writes stay on this transaction. The store does not choose E-64 or a successor.
+ * `revision`, `runtime`, and `ownership` are the values at lock time.
  */
 export type RimOwnershipCoordinationContext = Readonly<{
   revision: number;
@@ -232,6 +233,13 @@ export type RimOwnershipCoordinationContext = Readonly<{
   invalidate(
     reason: "chat-abandoned" | "superseded",
   ): Promise<InvalidateRimProviderOwnershipResult>;
+  load(): Promise<LoadedSnapshot>;
+  replaceRuntime(runtime: unknown): Promise<LoadedSnapshot>;
+  release(
+    ownerToken: string,
+    reason: "completed" | "owner-terminated",
+  ): Promise<ReleaseRimProviderOwnershipResult>;
+  persistApplied(input: PersistTransitionInput): Promise<LoadedSnapshot>;
 }>;
 
 /** Durable mark of confirmed bootstrap Bot API delivery (not a Product Event). */

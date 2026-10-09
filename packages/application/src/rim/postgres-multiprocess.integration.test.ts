@@ -1031,7 +1031,7 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     await runtimeB.kill();
   });
 
-  it("dispatches E-64 from a second process while the first process is still initializing", async () => {
+  it("does not dispatch E-64 from a second process while initialization ownership is held", async () => {
     const user = await actor("init-user");
     const contact = await actor("init-contact");
     const chat = makeChat({
@@ -1079,21 +1079,26 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
         text: "unused",
       });
       const recovered = await other.done;
-      expect(recovered.eventName).toBe("RIM.INITIALIZATION_UNRECOVERABLE");
-      expect(recovered.log).toEqual(["initialization-acceptance-unknown", "e64-dispatched"]);
+      expect(recovered.eventName).toBeNull();
+      expect(recovered.log).toEqual([]);
       expect(recovered.initializes).toBe(0);
-      expect(recovered.controlState).toBe("RIM.SELECT_CONTACT");
+      expect(recovered.controlState).toBe("RIM.CHAT");
       alive.release();
       const finished = await alive.done;
-      expect(finished.log).toContain("stale-initialization-success-discarded");
+      expect(finished.initializes).toBe(1);
+      expect(finished.log).toContain("initialization-stored");
+      expect(finished.log).not.toContain("e64-dispatched");
       expect(finished.eventName).toBeNull();
       const loaded = await new PostgresProductStore(admin.sql).loadProductSnapshot(user.userId);
-      expect(loaded.snapshot.controlState).toBe("RIM.SELECT_CONTACT");
-      expect(loaded.snapshot.extended.rimChat).toBeNull();
+      expect(loaded.snapshot.controlState).toBe("RIM.CHAT");
+      expect(loaded.snapshot.extended.rimChat?.id).toBe(chat.id);
       const runtime = parseRimProviderRuntime(loaded.rimProviderRuntime);
       expect(runtime.status).toBe("PRESENT");
       if (runtime.status === "PRESENT") {
-        expect(runtime.runtime.initialization.submissionState).toBe("acceptance-unknown");
+        expect(runtime.runtime.initialization.submissionState).toBe("stored");
+        if (runtime.runtime.initialization.submissionState === "stored") {
+          expect(runtime.runtime.initialization.conversationId).toBe(conversation("conv-child"));
+        }
       }
     } finally {
       alive.release();
@@ -1101,7 +1106,7 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     }
   }, 20_000);
 
-  it("abandons a live provider attempt from a second process and fences the late result", async () => {
+  it("does not install a local successor while a USER attempt ownership lease is held", async () => {
     const user = await actor("attempt-user");
     const contact = await actor("attempt-contact");
     const chat = pendingChat(contact, "живой вызов");
@@ -1150,28 +1155,30 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
         text: "from-b",
       });
       const recovered = await other.done;
-      expect(recovered.continuity).toBe("local-canonical-history");
-      expect(recovered.retiredAttemptId).toBe(original);
-      expect(recovered.attemptId).not.toBe(original);
-      expect(recovered.responds).toBe(1);
-      expect(recovered.rimTexts).toEqual(["from-b"]);
+      expect(recovered.continuity).toBe("provider-conversation");
+      expect(recovered.retiredAttemptId).toBeNull();
+      expect(recovered.attemptId).toBe(original);
+      expect(recovered.responds).toBe(0);
+      expect(recovered.rimTexts).toEqual([]);
+      expect(recovered.eventName).toBeNull();
       alive.release();
       const finished = await alive.done;
       expect(finished.responds).toBe(1);
-      expect(finished.rimTexts).toEqual(["from-b"]);
-      expect(finished.eventName).toBeNull();
+      expect(finished.rimTexts).toEqual(["from-a"]);
+      expect(finished.eventName).toBe("RIM.AI_RESULT_RECEIVED");
       const loaded = await new PostgresProductStore(admin.sql).loadProductSnapshot(user.userId);
       const runtime = parseRimProviderRuntime(loaded.rimProviderRuntime);
       expect(runtime.status).toBe("PRESENT");
       if (runtime.status === "PRESENT") {
-        expect(runtime.runtime.continuityMode).toBe("local-canonical-history");
-        expect(runtime.runtime.retiredAttemptId).toBe(original);
+        expect(runtime.runtime.continuityMode).toBe("provider-conversation");
+        expect(runtime.runtime.retiredAttemptId).toBeNull();
+        expect(runtime.runtime.attempt?.attemptId).toBe(original);
       }
       expect(
         (loaded.snapshot.extended.rimChat?.messages ?? []).flatMap((message) =>
           message.kind === "RIM" ? [message.text] : [],
         ),
-      ).toEqual(["from-b"]);
+      ).toEqual(["from-a"]);
     } finally {
       alive.release();
       alive.child.kill();
@@ -1332,6 +1339,195 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     await runtimeA.kill();
     await runtimeB.kill();
   });
+
+  it("lets exactly one of two processes initialize one chat", async () => {
+    const user = await actor("race-init-user");
+    const contact = await actor("race-init-contact");
+    const chat = makeChat({
+      id: branded<RimChatId>(`race-init-${randomUUID()}`),
+      selectedContactId: contact.userId,
+      relationshipContext: readyContext(
+        contact.userId,
+        branded<ContextRequestId>(`race-init-ctx-${randomUUID()}`),
+      ),
+      messages: [{ kind: "USER", text: "один старт" }],
+    });
+    await seed(
+      user.userId,
+      withChat(withControlState(emptySnapshot(), "RIM.CHAT"), chat),
+      runtimeFor(
+        chat,
+        {
+          submissionState: "not-submitted",
+          attemptId: attempt("init-race"),
+          clientRequestId: "client-race",
+        },
+        null,
+      ),
+    );
+    const left = child({
+      action: "init-recover",
+      userId: user.userId,
+      telegram: user.telegram,
+      text: "unused",
+    });
+    const right = child({
+      action: "init-recover",
+      userId: user.userId,
+      telegram: user.telegram,
+      text: "unused",
+    });
+    const [a, b] = await Promise.all([left.done, right.done]);
+    expect(a.initializes + b.initializes).toBe(1);
+    expect(a.eventName).toBeNull();
+    expect(b.eventName).toBeNull();
+    const loaded = await new PostgresProductStore(admin.sql).loadProductSnapshot(user.userId);
+    expect(loaded.snapshot.extended.rimChat?.id).toBe(chat.id);
+    const runtime = parseRimProviderRuntime(loaded.rimProviderRuntime);
+    expect(runtime.status).toBe("PRESENT");
+    if (runtime.status === "PRESENT") {
+      expect(runtime.runtime.initialization.submissionState).toBe("stored");
+    }
+    expect(
+      (loaded.snapshot.extended.rimChat?.messages ?? []).filter((message) => message.kind === "RIM"),
+    ).toEqual([]);
+  }, 20_000);
+
+  it("dispatches Class U E-64 from a second process and fences the late conversation id", async () => {
+    const user = await actor("class-u-init-user");
+    const contact = await actor("class-u-init-contact");
+    const chat = makeChat({
+      id: branded<RimChatId>(`class-u-init-${randomUUID()}`),
+      selectedContactId: contact.userId,
+      relationshipContext: readyContext(
+        contact.userId,
+        branded<ContextRequestId>(`class-u-init-ctx-${randomUUID()}`),
+      ),
+      messages: [{ kind: "USER", text: "истек" }],
+    });
+    await seed(
+      user.userId,
+      withChat(withControlState(emptySnapshot(), "RIM.CHAT"), chat),
+      runtimeFor(
+        chat,
+        {
+          submissionState: "not-submitted",
+          attemptId: attempt("init-u"),
+          clientRequestId: "client-u",
+        },
+        null,
+      ),
+    );
+    const alive = child({
+      action: "init-hold",
+      userId: user.userId,
+      telegram: user.telegram,
+      text: "unused",
+    });
+    try {
+      await alive.provider;
+      await admin.sql.query(
+        `UPDATE rim_provider_ownership
+         SET leased_until = clock_timestamp() - INTERVAL '1 second'
+         WHERE user_id = $1 AND operation_kind = 'initialization' AND released_at IS NULL`,
+        [user.userId],
+      );
+      const other = child({
+        action: "init-recover",
+        userId: user.userId,
+        telegram: user.telegram,
+        text: "unused",
+      });
+      const recovered = await other.done;
+      expect(recovered.eventName).toBe("RIM.INITIALIZATION_UNRECOVERABLE");
+      expect(recovered.initializes).toBe(0);
+      expect(recovered.controlState).toBe("RIM.SELECT_CONTACT");
+      alive.release();
+      const finished = await alive.done;
+      expect(finished.initializes).toBe(1);
+      expect(finished.log).toContain("stale-initialization-success-discarded");
+      expect(finished.eventName).toBeNull();
+      const loaded = await new PostgresProductStore(admin.sql).loadProductSnapshot(user.userId);
+      expect(loaded.snapshot.controlState).toBe("RIM.SELECT_CONTACT");
+      expect(loaded.snapshot.extended.rimChat).toBeNull();
+    } finally {
+      alive.release();
+      alive.child.kill();
+    }
+  }, 20_000);
+
+  it("installs one Class U local successor from a second process and fences the late provider result", async () => {
+    const user = await actor("class-u-user");
+    const contact = await actor("class-u-contact");
+    const chat = pendingChat(contact, "поздний ответ");
+    const original = "attempt-u";
+    await seed(
+      user.userId,
+      withChat(withControlState(emptySnapshot(), "RIM.CHAT"), chat),
+      runtimeFor(
+        chat,
+        storedInit("conv-u"),
+        {
+          requestId: requestOf(chat),
+          attemptId: attempt(original),
+          submissionState: "not-submitted",
+          clientRequestId: "client-u",
+        },
+      ),
+    );
+    const alive = child({
+      action: "user-hold",
+      userId: user.userId,
+      telegram: user.telegram,
+      text: "from-old",
+    });
+    try {
+      await alive.provider;
+      await admin.sql.query(
+        `UPDATE rim_provider_ownership
+         SET leased_until = clock_timestamp() - INTERVAL '1 second'
+         WHERE user_id = $1 AND operation_kind = 'user-attempt' AND released_at IS NULL`,
+        [user.userId],
+      );
+      const other = child({
+        action: "user-recover",
+        userId: user.userId,
+        telegram: user.telegram,
+        text: "from-local",
+      });
+      const recovered = await other.done;
+      expect(recovered.continuity).toBe("local-canonical-history");
+      expect(recovered.retiredAttemptId).toBe(original);
+      expect(recovered.attemptId).not.toBe(original);
+      expect(recovered.responds).toBe(1);
+      expect(recovered.initializes).toBe(0);
+      expect(recovered.rimTexts).toEqual(["from-local"]);
+      alive.release();
+      const finished = await alive.done;
+      expect(finished.responds).toBe(1);
+      expect(recovered.responds + finished.responds).toBe(2);
+      expect(finished.eventName).toBeNull();
+      const loaded = await new PostgresProductStore(admin.sql).loadProductSnapshot(user.userId);
+      const texts = (loaded.snapshot.extended.rimChat?.messages ?? []).flatMap((message) =>
+        message.kind === "RIM" ? [message.text] : [],
+      );
+      const userTexts = (loaded.snapshot.extended.rimChat?.messages ?? []).flatMap((message) =>
+        message.kind === "USER" ? [message.text] : [],
+      );
+      expect(texts).toEqual(["from-local"]);
+      expect(userTexts).toEqual(["поздний ответ"]);
+      const runtime = parseRimProviderRuntime(loaded.rimProviderRuntime);
+      expect(runtime.status).toBe("PRESENT");
+      if (runtime.status === "PRESENT") {
+        expect(runtime.runtime.continuityMode).toBe("local-canonical-history");
+        expect(runtime.runtime.retiredAttemptId).toBe(original);
+        expect(runtime.runtime.initialization.submissionState).toBe("stored");
+      }
+    } finally {
+      alive.release();
+      alive.child.kill();
+    }
+  }, 20_000);
 });
 
 function storedInit(conv: string): RimProviderRuntime["initialization"] {

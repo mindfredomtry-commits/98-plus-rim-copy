@@ -1,3 +1,4 @@
+import { releaseTrackedRimOwnershipForShutdown } from "@98plus/application";
 import {
   MemorySqlClient,
   openPostgresPersistence,
@@ -149,6 +150,7 @@ export async function startApiProcess(options: StartApiOptions = {}): Promise<Ru
       closed = true;
       process.removeListener("SIGTERM", onSignal);
       process.removeListener("SIGINT", onSignal);
+      await releaseTrackedRimOwnershipForShutdown(runtime.productStore);
       await listening.close();
       await postgres?.close();
     };

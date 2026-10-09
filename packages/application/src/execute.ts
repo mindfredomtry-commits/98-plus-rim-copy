@@ -2,6 +2,8 @@ import { callerUserId, type AuthenticatedContext } from "@98plus/identity";
 import {
   PersistenceError,
   type AppliedProductRule,
+  type LoadedSnapshot,
+  type PersistTransitionInput,
   type ProductStore,
   type RuntimeAttemptAuthority,
 } from "@98plus/persistence";
@@ -257,6 +259,64 @@ export async function executeProductEvent(
       error,
     );
   }
+}
+
+/**
+ * Reduce and persist using a snapshot already loaded under the caller's lock.
+ * The persist callback must write on that same transaction.
+ */
+export async function persistAppliedOnSnapshot(
+  input: ExecuteProductEventInput,
+  deps: ProductExecutorDependencies,
+  loaded: LoadedSnapshot,
+  persist: (input: PersistTransitionInput) => Promise<LoadedSnapshot>,
+  beforePersist?: () => Promise<void>,
+): Promise<ApplicationExecutionResult> {
+  const event = toCanonicalEvent(input.event);
+  const currentUserId = callerUserId(input.context, input.clientClaimedUserId);
+  const transition = reduce(loaded.snapshot, event, {
+    now: asInstant(deps.clock.nowMs()),
+    currentUserId,
+    allocateId: deps.allocateId,
+  });
+  if (transition.outcome !== "APPLIED") {
+    return executionResult({
+      status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+      currentUserId,
+      event,
+      transition,
+      snapshot: loaded.snapshot,
+      revision: loaded.revision,
+      persisted: false,
+      error:
+        transition.outcome === "KERNEL_INVARIANT"
+          ? new ApplicationError(
+              "KERNEL_INVARIANT",
+              transition.error?.message ?? "Product Kernel invariant failed",
+              transition.error,
+            )
+          : null,
+    });
+  }
+  if (beforePersist) {
+    await beforePersist();
+  }
+  const saved = await persist({
+    currentUserId,
+    expectedRevision: loaded.revision,
+    result: transition,
+    appliedRule: appliedRuleFor(event, transition),
+  });
+  return executionResult({
+    status: "APPLIED",
+    currentUserId,
+    event,
+    transition,
+    snapshot: saved.snapshot,
+    revision: saved.revision,
+    persisted: true,
+    error: null,
+  });
 }
 
 /**

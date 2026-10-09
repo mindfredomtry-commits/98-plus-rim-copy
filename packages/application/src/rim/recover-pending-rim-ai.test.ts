@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  InMemoryProductStore,
   PersistenceError,
   type CommitOwnedTransitionInput,
   type ProductStore,
@@ -43,6 +44,7 @@ import {
 } from "../../../product-model/src/kernel.fixtures.ts";
 import { ApplicationError } from "../errors.ts";
 import { executeProductEvent, type ProductExecutorDependencies } from "../execute.ts";
+import { seedLapsedOwnership } from "./ownership-test-seed.ts";
 import {
   authContext,
   eventOf,
@@ -540,7 +542,7 @@ describe("pending RIM AI recovery", () => {
       const parsed = parseRimProviderRuntime(saved);
       return parsed.status === "PRESENT" ? parsed.runtime.attempt?.submissionState : parsed.status;
     });
-    expect(states).toEqual(["not-submitted", "acceptance-unknown", "returned-body-observed"]);
+    expect(states).toEqual(["not-submitted", "returned-body-observed"]);
     expect(order).toEqual(["respond"]);
     expect(seen[0]?.continuityMode).toBe("provider-conversation");
     if (seen[0]?.continuityMode !== "provider-conversation") {
@@ -642,7 +644,13 @@ describe("pending RIM AI recovery", () => {
       );
     });
     expect(conflicts.count).toBe(0);
-    expect(claimSaves).toHaveLength(1);
+    expect(claimSaves).toHaveLength(0);
+    if (!(kit.store instanceof InMemoryProductStore)) {
+      throw new Error("expected the in-memory store");
+    }
+    expect(
+      kit.store.inspect().getOwnership(USER_ID, "user-attempt", "attempt-1")?.releaseReason,
+    ).toBe("completed");
     expect(seen).toHaveLength(1);
     const completions = [first, second].filter(
       (result) => result?.event.name === "RIM.AI_RESULT_RECEIVED",
@@ -741,6 +749,7 @@ describe("pending RIM AI recovery", () => {
     const seeded = await store.loadProductSnapshot(USER_ID);
     const before = runtimeFor(chat, "acceptance-unknown");
     await store.saveRimProviderRuntime(USER_ID, seeded.revision, before);
+    seedLapsedOwnership(store, USER_ID, "user-attempt", attempt("attempt-1"), AI_REQUEST_ID);
     const seen: RimAiRequest[] = [];
     let initialized = false;
     const conversation: RimConversationInitializationPort = {
@@ -1601,6 +1610,7 @@ describe("DC-02 ambiguity transition", () => {
       retiredAttemptId: null,
     };
     await store.saveRimProviderRuntime(USER_ID, installed.revision, seeded);
+    seedLapsedOwnership(store, USER_ID, "initialization", attempt("init-lost"));
     const seen: RimAiRequest[] = [];
     let initialized = false;
     const ended = await recoverPendingRimAi({
@@ -2007,7 +2017,7 @@ describe("DC-02 ambiguity transition", () => {
       const parsed = parseRimProviderRuntime(saved);
       return parsed.status === "PRESENT" ? parsed.runtime.attempt?.submissionState : parsed.status;
     });
-    expect(states).toEqual(["acceptance-unknown", "returned-body-observed"]);
+    expect(states).toEqual(["returned-body-observed"]);
     const after = await readRuntime(opened.store, USER_ID);
     expect(after.runtime.continuityMode).toBe("local-canonical-history");
     expect(after.runtime.attempt?.attemptId).toBe(attempt("attempt-local"));

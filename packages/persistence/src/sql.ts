@@ -439,6 +439,13 @@ RETURNING user_id, operation_kind, attempt_id, request_id, owner_token::text AS 
           leased_until, released_at, release_reason,
           (released_at IS NULL AND leased_until > clock_timestamp()) AS lease_active
 `.trim(),
+  abandonOpenRimProviderOwnership: `
+UPDATE rim_provider_ownership
+SET released_at = clock_timestamp(),
+    release_reason = 'chat-abandoned'
+WHERE user_id = $1
+  AND released_at IS NULL
+`.trim(),
   invalidateRimProviderOwnership: `
 UPDATE rim_provider_ownership
 SET released_at = clock_timestamp(),

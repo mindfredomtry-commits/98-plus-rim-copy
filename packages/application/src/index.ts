@@ -25,6 +25,7 @@ export { buildRelationshipContextData } from "./rim/relationship-context.ts";
 export { FakeRimAiAdapter, FakeRimAiFailure } from "./rim/fake-rim-ai-adapter.ts";
 export type { FakeConversationInitStep, FakeRimAiStep } from "./rim/fake-rim-ai-adapter.ts";
 export { reconcileRimInitialization } from "./rim/initialize-rim-conversation.ts";
+export { releaseTrackedRimOwnershipForShutdown } from "./rim/rim-ownership-lease.ts";
 export type { RimInitializationObservation } from "./rim/initialize-rim-conversation.ts";
 export { continueRimEffects } from "./rim/continue-rim.ts";
 export type { RimContextFailures } from "./rim/continue-rim.ts";

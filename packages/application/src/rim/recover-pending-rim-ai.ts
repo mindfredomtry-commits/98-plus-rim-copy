@@ -12,6 +12,11 @@ import {
 } from "@98plus/product-model";
 import type { ApplicationExecutionResult, ProductExecutorDependencies } from "../execute.ts";
 import { commitProductEventIfAttemptCurrent } from "../execute.ts";
+import {
+  RIM_OWNERSHIP_LEASE_SECONDS,
+  rimOwnershipRecoveryPermitted,
+  startRimOwnershipHeartbeat,
+} from "./rim-ownership-lease.ts";
 import type { ProductEventInput } from "../event.ts";
 import { FakeRimAiFailure } from "./fake-rim-ai-adapter.ts";
 import {
@@ -45,15 +50,6 @@ import {
 import { RIM_AI_OUTPUT_INVALID, validateRimAiOutput } from "./validate-rim-ai-output.ts";
 
 const MAX_CLAIM_REENTRY = 1;
-
-/**
- * Process-local USER execution calls, keyed by user and technical attemptId.
- * The entry is registered before the acceptance-unknown claim is written and
- * cleared when that call exits, including its existing completion dispatch.
- * It is not persisted and it is not a Product fact. A restart drops it.
- * Initialization keeps its own separate flight map.
- */
-const inFlightUserAttempts = new Map<string, Promise<void>>();
 
 const AMBIGUOUS_PROVIDER_ATTEMPT = "ambiguous-provider-attempt";
 const RETURNED_BODY_SAVE_CONFLICT = "returned-body-save-conflict";
@@ -142,9 +138,11 @@ export async function continuePendingRimAi(
  * Recovers Conversation initialization, then a durable PENDING logical request.
  * Does not create a Product request, append a USER message, or dispatch E-52 or E-54.
  * Recovery does not create a missing USER attempt.
- * An ambiguous provider USER attempt with no in-process flight is switched once
- * to local-canonical-history. That new not-submitted attempt is claimed and
- * executed from Application canonical history, without the stored conversation id.
+ * An ambiguous provider USER attempt is switched once to local-canonical-history
+ * only when durable ownership permits Class C or Class U recovery, or when the
+ * owning process observed the provider failure. A held lease does not install a
+ * successor. The new not-submitted attempt is claimed and executed from
+ * Application canonical history, without the stored conversation id.
  * A live provider throw with no durable responseId takes that same path and does
  * not dispatch E-59 for the provider call. A later local throw also does not
  * dispatch E-59: the same attempt stays acceptance-unknown and Product stays
@@ -254,8 +252,8 @@ async function reconcile(
     return claimThenSubmit(tools, loaded, applicable, reentry);
   }
   if (applicable.attempt.submissionState === "acceptance-unknown") {
-    if (ambiguousProviderUserAttempt(tools, pending, applicable)) {
-      return transitionAmbiguousUserAttempt(tools, loaded, applicable, reentry);
+    if (ambiguousProviderUserAttempt(pending, applicable)) {
+      return transitionAmbiguousUserAttempt(tools, applicable, reentry);
     }
     return null;
   }
@@ -272,15 +270,10 @@ async function reconcile(
 }
 
 /**
- * CAS predicate for the one provider → local transition.
- * Every fact is taken from the loaded Product snapshot and the applicable runtime.
- * The save itself commits only if that snapshot revision is still current.
+ * Shape of the one provider → local transition.
+ * Durable ownership, rechecked under the session lock, decides whether it runs.
  */
-function ambiguousProviderUserAttempt(
-  tools: ReconcileTools,
-  pending: PendingChat,
-  runtime: RimProviderRuntime,
-): boolean {
+function ambiguousProviderUserAttempt(pending: PendingChat, runtime: RimProviderRuntime): boolean {
   const attempt = runtime.attempt;
   if (!attempt || attempt.submissionState !== "acceptance-unknown") {
     return false;
@@ -294,46 +287,72 @@ function ambiguousProviderUserAttempt(
   if (attempt.requestId !== pending.snapshot.requestId) {
     return false;
   }
-  if (
-    runtime.rimChatId !== pending.chat.id ||
-    runtime.selectedContactId !== pending.chat.selectedContactId ||
-    runtime.contextRequestId !== pending.snapshot.contextRequestId
-  ) {
-    return false;
-  }
-  return !inFlightUserAttempts.has(userFlightKey(tools.context.currentUserId, attempt.attemptId));
+  return (
+    runtime.rimChatId === pending.chat.id &&
+    runtime.selectedContactId === pending.chat.selectedContactId &&
+    runtime.contextRequestId === pending.snapshot.contextRequestId
+  );
 }
 
 async function transitionAmbiguousUserAttempt(
   tools: ReconcileTools,
-  loaded: LoadedSnapshot,
   runtime: RimProviderRuntime,
   reentry: number,
+  ownerToken?: string,
 ): Promise<ApplicationExecutionResult | null> {
-  const current = runtime.attempt;
-  const pending = pendingChat(loaded.snapshot);
-  if (!current || !pending || !ambiguousProviderUserAttempt(tools, pending, runtime)) {
+  const retiredAttemptId = runtime.attempt?.attemptId;
+  if (!retiredAttemptId) {
     return null;
   }
-  const next: RimProviderRuntime = {
-    rimChatId: runtime.rimChatId,
-    selectedContactId: runtime.selectedContactId,
-    contextRequestId: runtime.contextRequestId,
-    initialization: runtime.initialization,
-    attempt: {
-      requestId: current.requestId,
-      attemptId: tools.deps.allocateId("rim-provider-attempt") as RimProviderAttemptId,
-      submissionState: "not-submitted",
-      clientRequestId: null,
+  const replaced = await tools.deps.store.withRimProviderOwnershipCoordination(
+    {
+      currentUserId: tools.context.currentUserId,
+      operationKind: "user-attempt",
+      attemptId: retiredAttemptId,
     },
-    continuityMode: "local-canonical-history",
-    retiredAttemptId: current.attemptId,
-  };
-  const saved = await trySave(tools, loaded.revision, next);
-  if (!saved.ok) {
-    return reentry >= MAX_CLAIM_REENTRY ? null : reconcile(tools, reentry + 1);
+    async (coordination) => {
+      const loaded = await coordination.load();
+      const pending = pendingChat(loaded.snapshot);
+      const parsed = parseRimProviderRuntime(loaded.rimProviderRuntime);
+      const applicable =
+        parsed.status === "PRESENT" && pending
+          ? applicableRimProviderRuntime(parsed, pending.chat.id)
+          : null;
+      if (!pending || !applicable || !ambiguousProviderUserAttempt(pending, applicable)) {
+        return null;
+      }
+      if (!rimOwnershipRecoveryPermitted(coordination.ownership, ownerToken)) {
+        return null;
+      }
+      const current = applicable.attempt;
+      if (!current) {
+        return null;
+      }
+      const next: RimProviderRuntime = {
+        rimChatId: applicable.rimChatId,
+        selectedContactId: applicable.selectedContactId,
+        contextRequestId: applicable.contextRequestId,
+        initialization: applicable.initialization,
+        attempt: {
+          requestId: current.requestId,
+          attemptId: tools.deps.allocateId("rim-provider-attempt") as RimProviderAttemptId,
+          submissionState: "not-submitted",
+          clientRequestId: null,
+        },
+        continuityMode: "local-canonical-history",
+        retiredAttemptId: current.attemptId,
+      };
+      if (coordination.ownership && coordination.ownership.phase !== "released") {
+        await coordination.invalidate("superseded");
+      }
+      const saved = await coordination.replaceRuntime(next);
+      return { loaded: saved, runtime: next };
+    },
+  );
+  if (!replaced) {
+    return null;
   }
-  return claimThenSubmit(tools, saved.loaded, next, reentry);
+  return claimThenSubmit(tools, replaced.loaded, replaced.runtime, reentry);
 }
 
 function acceptedDurableRetry(pending: PendingChat, runtime: RimProviderRuntime): boolean {
@@ -412,66 +431,103 @@ async function claimThenSubmit(
   if (!request) {
     return null;
   }
-  const key = userFlightKey(tools.context.currentUserId, runtime.attempt.attemptId);
-  if (inFlightUserAttempts.has(key)) {
+  const claimed = withAttempt(runtime, {
+    requestId: runtime.attempt.requestId,
+    attemptId: runtime.attempt.attemptId,
+    submissionState: "acceptance-unknown",
+    clientRequestId: runtime.attempt.clientRequestId,
+  });
+  const claimedAttempt = claimed.attempt;
+  if (!claimedAttempt) {
     return null;
   }
-  // Reserve before the claim CAS yields. Otherwise a concurrent recovery can
-  // observe acceptance-unknown with no flight and treat the live call as abandoned.
-  let resolveFlight: () => void = () => undefined;
-  const flight = new Promise<void>((resolve) => {
-    resolveFlight = resolve;
-  });
-  inFlightUserAttempts.set(key, flight);
-  let retry = false;
-  let ambiguousFailure = false;
-  let returnedBodyConflict = false;
-  let result: ApplicationExecutionResult | null = null;
+  let acquired: Awaited<
+    ReturnType<ProductExecutorDependencies["store"]["acquireRimProviderOwnership"]>
+  >;
   try {
-    const claimed = withAttempt(runtime, {
-      requestId: runtime.attempt.requestId,
-      attemptId: runtime.attempt.attemptId,
-      submissionState: "acceptance-unknown",
-      clientRequestId: runtime.attempt.clientRequestId,
+    acquired = await tools.deps.store.acquireRimProviderOwnership({
+      currentUserId: tools.context.currentUserId,
+      expectedRevision: loaded.revision,
+      runtime: claimed,
+      operationKind: "user-attempt",
+      attemptId: claimedAttempt.attemptId,
+      requestId: claimedAttempt.requestId,
+      leaseSeconds: RIM_OWNERSHIP_LEASE_SECONDS,
     });
-    const saved = await trySave(tools, loaded.revision, claimed);
-    if (!saved.ok) {
-      retry = true;
-    } else {
-      const pendingAfterClaim = pendingChat(saved.loaded.snapshot);
-      if (
-        pendingAfterClaim &&
-        pendingAfterClaim.snapshot.requestId === claimed.attempt?.requestId
-      ) {
-        const submitted = await submitClaimed(tools, pendingAfterClaim, claimed, request);
-        if (submitted === AMBIGUOUS_PROVIDER_ATTEMPT) {
-          ambiguousFailure = true;
-        } else if (submitted === RETURNED_BODY_SAVE_CONFLICT) {
-          returnedBodyConflict = true;
-        } else {
-          result = submitted;
-        }
-      }
+  } catch (error) {
+    if (error instanceof PersistenceError && error.code === "REVISION_CONFLICT") {
+      return reentry >= MAX_CLAIM_REENTRY
+        ? null
+        : reconcile({ ...tools, mode: "recover" }, reentry + 1);
     }
-  } finally {
-    resolveFlight();
-    if (inFlightUserAttempts.get(key) === flight) {
-      inFlightUserAttempts.delete(key);
-    }
+    throw error;
   }
-  if (retry) {
+  if (acquired.status === "ALREADY_PRESENT") {
+    const finishedOtherRequest =
+      acquired.ownership.phase === "released" &&
+      acquired.ownership.releaseReason === "completed" &&
+      acquired.ownership.requestId !== claimedAttempt.requestId;
+    if (finishedOtherRequest && reentry < MAX_CLAIM_REENTRY) {
+      const fresh = withAttempt(runtime, {
+        requestId: claimedAttempt.requestId,
+        attemptId: tools.deps.allocateId("rim-provider-attempt") as RimProviderAttemptId,
+        submissionState: "not-submitted",
+        clientRequestId: null,
+      });
+      const current = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
+      const saved = await trySave(tools, current.revision, fresh);
+      if (!saved.ok) {
+        return reconcile({ ...tools, mode: "recover" }, reentry + 1);
+      }
+      return claimThenSubmit(tools, saved.loaded, fresh, reentry + 1);
+    }
     return reentry >= MAX_CLAIM_REENTRY
       ? null
       : reconcile({ ...tools, mode: "recover" }, reentry + 1);
   }
-  if (ambiguousFailure || returnedBodyConflict) {
+  const ownerToken = acquired.ownership.ownerToken;
+  const stopHeartbeat = startRimOwnershipHeartbeat(tools.deps.store, {
+    currentUserId: tools.context.currentUserId,
+    operationKind: "user-attempt",
+    attemptId: claimedAttempt.attemptId,
+    ownerToken,
+  });
+  let ambiguousFailure = false;
+  let returnedBodyConflict = false;
+  let result: ApplicationExecutionResult | null = null;
+  try {
+    const pendingAfterClaim = pendingChat(acquired.loaded.snapshot);
+    if (pendingAfterClaim && pendingAfterClaim.snapshot.requestId === claimedAttempt.requestId) {
+      const submitted = await submitClaimed(tools, pendingAfterClaim, claimed, request);
+      if (submitted === AMBIGUOUS_PROVIDER_ATTEMPT) {
+        ambiguousFailure = true;
+      } else if (submitted === RETURNED_BODY_SAVE_CONFLICT) {
+        returnedBodyConflict = true;
+      } else {
+        result = submitted;
+      }
+    }
+  } finally {
+    stopHeartbeat();
+  }
+  if (ambiguousFailure) {
+    return transitionAmbiguousUserAttempt(tools, claimed, reentry, ownerToken);
+  }
+  if (returnedBodyConflict) {
     return reconcile(tools, reentry);
   }
+  if (result?.persisted) {
+    await tools.deps.store
+      .releaseRimProviderOwnership({
+        currentUserId: tools.context.currentUserId,
+        operationKind: "user-attempt",
+        attemptId: claimedAttempt.attemptId,
+        ownerToken,
+        releaseReason: "completed",
+      })
+      .catch(() => undefined);
+  }
   return result;
-}
-
-function userFlightKey(userId: string, attemptId: string): string {
-  return `${userId}:${attemptId}`;
 }
 
 async function submitClaimed(

@@ -51,6 +51,7 @@ import { executeProductEvent, type ProductExecutorDependencies } from "../execut
 import { commitProductEventIfAttemptCurrent } from "../execute.ts";
 import { authContext } from "../test-harness.ts";
 import { continueRimEffects } from "./continue-rim.ts";
+import { insertPostgresOwnership } from "./ownership-test-seed.ts";
 import { continuePendingRimAi, recoverPendingRimAi } from "./recover-pending-rim-ai.ts";
 import type { RimAiRequest } from "./rim-ai-port.ts";
 import type { RimInitializationObservation } from "./initialize-rim-conversation.ts";
@@ -413,7 +414,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL RIM restart recovery", () => {
     }
   });
 
-  it("dispatches E-64 for acceptance-unknown initialization after the flight map is gone", async () => {
+  it("dispatches E-64 for Class U lapsed initialization and does not create another conversation", async () => {
     const user = await actor("e64-user");
     const contact = await actor("e64-contact");
     const chat = makeChat({
@@ -436,6 +437,13 @@ describe.skipIf(!databaseUrl)("real PostgreSQL RIM restart recovery", () => {
     );
     const first = await startProcess();
     await seed(first, user, withChat(withControlState(emptySnapshot(), "RIM.CHAT"), chat), runtime);
+    await insertPostgresOwnership(admin.sql, {
+      userId: user.userId,
+      operationKind: "initialization",
+      attemptId: "init-unknown",
+      requestId: null,
+      phase: "lapsed",
+    });
     await first.kill();
 
     const second = await startProcess();
@@ -574,6 +582,13 @@ describe.skipIf(!databaseUrl)("real PostgreSQL RIM restart recovery", () => {
     );
     const first = await startProcess();
     await seed(first, user, withChat(withControlState(emptySnapshot(), "RIM.CHAT"), chat), runtime);
+    await insertPostgresOwnership(admin.sql, {
+      userId: user.userId,
+      operationKind: "user-attempt",
+      attemptId: oldAttempt,
+      requestId: chat.aiOperation.status === "PENDING" ? chat.aiOperation.requestId : null,
+      phase: "lapsed",
+    });
     const revisionBefore = (await first.store.loadProductSnapshot(user.userId)).revision;
     await first.kill();
 

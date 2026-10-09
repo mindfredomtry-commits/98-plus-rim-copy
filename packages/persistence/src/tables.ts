@@ -606,6 +606,18 @@ export class ProductTables {
     this.data.ownership.set(key, cloneJson(row));
   }
 
+  abandonOpenOwnership(userId: string, nowMs: number): void {
+    for (const [key, row] of this.data.ownership) {
+      if (row.userId === userId && row.releasedAtMs === null) {
+        this.data.ownership.set(key, {
+          ...row,
+          releasedAtMs: nowMs,
+          releaseReason: "chat-abandoned",
+        });
+      }
+    }
+  }
+
   /** Test seam. Moves the in-memory lease deadline. PostgreSQL uses clock_timestamp(). */
   retimeOwnershipLease(
     userId: string,
