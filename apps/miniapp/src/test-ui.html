@@ -91,6 +91,22 @@
       </div>
     </section>
 
+    <section id="inline-probe" hidden>
+      <h2>INLINE PROBE</h2>
+      <p>
+        Test only. This screen does not create a Ban and does not post
+        <code>inline_probe</code> to <code>/api/session</code>.
+      </p>
+      <div class="row">
+        <button id="inline-probe-send" type="button">Send inline probe</button>
+      </div>
+      <p>
+        Success replaces the shared message text with <code>98+ INLINE PROBE — EDITED</code>.
+      </p>
+      <h3>DIAGNOSTICS</h3>
+      <pre id="inline-probe-diagnostics">(not started)</pre>
+    </section>
+
     <section id="product-screen-section">
       <h2>PRODUCT SCREEN</h2>
       <div id="product-screen" data-screen="DisconnectedTestScreen" data-nav="controlState"></div>
@@ -475,6 +491,141 @@
         }
       }
 
+      function isInlineProbeLaunch() {
+        if (telegramStartParam() === "inline_probe") {
+          return true;
+        }
+        const fromTelegramQuery = new URLSearchParams(window.location.search).get(
+          "tgWebAppStartParam",
+        );
+        return fromTelegramQuery === "inline_probe";
+      }
+
+      function enterInlineProbeMode() {
+        const probeEl = document.getElementById("inline-probe");
+        if (probeEl) probeEl.hidden = false;
+        for (const id of [
+          "dev-auth",
+          "product-screen-section",
+          "machine-diagnostics",
+          "share-signal-log",
+          "raw-diagnostics",
+        ]) {
+          const el = document.getElementById(id);
+          if (el) el.hidden = true;
+        }
+        const button = document.getElementById("inline-probe-send");
+        if (button) button.addEventListener("click", () => void runInlineProbe());
+      }
+
+      async function probePost(path, body) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify(body),
+        });
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (error) {
+          payload = {
+            ok: false,
+            code: "NON_JSON",
+            message: String((error && error.message) || error),
+          };
+        }
+        return { httpStatus: response.status, payload };
+      }
+
+      async function runInlineProbe() {
+        const button = document.getElementById("inline-probe-send");
+        const diagEl = document.getElementById("inline-probe-diagnostics");
+        const report = [];
+        function paint() {
+          if (diagEl) diagEl.textContent = JSON.stringify(report, null, 2);
+        }
+        if (button) button.disabled = true;
+        try {
+          const prepared = await probePost("/api/telegram-inline-probe/prepare", {});
+          report.push({ phase: "prepare", ...prepared });
+          paint();
+          const preparedPayload = prepared.payload;
+          if (!preparedPayload || preparedPayload.ok !== true || !preparedPayload.preparedMessageId) {
+            return;
+          }
+          const webApp = telegramWebApp();
+          if (!webApp || typeof webApp.shareMessage !== "function") {
+            report.push({
+              phase: "share",
+              ok: false,
+              code: "SHARE_MESSAGE_UNAVAILABLE",
+              message: "Telegram.WebApp.shareMessage is unavailable in this runtime.",
+            });
+            paint();
+            return;
+          }
+          report.push({
+            phase: "share",
+            ok: null,
+            code: "SHARE_MESSAGE_OPENED",
+            message: "Waiting for Telegram.WebApp.shareMessage callback.",
+          });
+          paint();
+          let shared = false;
+          try {
+            shared = await new Promise((resolve, reject) => {
+              try {
+                webApp.shareMessage(preparedPayload.preparedMessageId, (success) => {
+                  resolve(success === true);
+                });
+              } catch (error) {
+                reject(error);
+              }
+            });
+          } catch (error) {
+            report.push({
+              phase: "share",
+              ok: false,
+              code: "SHARE_MESSAGE_THREW",
+              message: String((error && error.message) || error),
+            });
+            paint();
+            return;
+          }
+          if (!shared) {
+            report.push({
+              phase: "share",
+              ok: false,
+              code: "SHARE_MESSAGE_DECLINED",
+              message: "Telegram.WebApp.shareMessage callback was false. Watch was not started.",
+            });
+            paint();
+            return;
+          }
+          report.push({
+            phase: "share",
+            ok: true,
+            code: "SHARE_MESSAGE_SENT",
+            message: "shareMessage callback was true.",
+          });
+          report.push({
+            phase: "watch",
+            ok: null,
+            code: "WATCHING",
+            message:
+              "Polling getUpdates for about 20 seconds. The other account must tap the probe button now. Keep this Mini App open.",
+          });
+          paint();
+          const watched = await probePost("/api/telegram-inline-probe/watch", {
+            probeId: preparedPayload.probeId,
+          });
+          report.push({ phase: "watch", ...watched });
+          paint();
+        } finally {
+          if (button) button.disabled = false;
+        }
+      }
+
       async function sendOverboard() {
         sending = true;
         render();
@@ -581,7 +732,9 @@
       paintShareSignals();
       syncAuthChrome();
       render();
-      if (inTelegramRuntime()) {
+      if (isInlineProbeLaunch()) {
+        enterInlineProbeMode();
+      } else if (inTelegramRuntime()) {
         void openSession(true).catch((error) => {
           diagnostics = {
             controlState: null,

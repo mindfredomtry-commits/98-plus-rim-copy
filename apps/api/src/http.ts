@@ -55,6 +55,10 @@ import {
   type ExternalEntryExecution,
   type ExternalEntryOrchestration,
 } from "./external-entry.ts";
+import {
+  handleTelegramInlineProbeRequest,
+  isTelegramInlineProbePath,
+} from "./telegram-inline-probe.ts";
 
 const TEST_UI_HTML = testUiHtmlSource();
 
@@ -179,6 +183,10 @@ export async function handleCreateBanContactRequest(
         STAGE_6_EXCLUDES,
         ui: "TEST",
       });
+      return;
+    }
+    if (req.method === "POST" && isTelegramInlineProbePath(url.pathname)) {
+      await handleTelegramInlineProbeRequest(req, res);
       return;
     }
     const attempt = parseAuthAttempt(req);
