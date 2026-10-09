@@ -16,6 +16,7 @@ import {
   executorDeps,
   type CreateBanContactRuntime,
 } from "./runtime.ts";
+import { isPc02ProbeStartParam } from "./telegram-pc02-probe.ts";
 
 export type ParsedShareStartParam =
   { kind: "share"; token: string } | { kind: "invalid"; raw: string } | { kind: "absent" };
@@ -382,6 +383,15 @@ export async function resolveTelegramShareExternalEntry(
   };
 
   if (parsed.kind === "absent") {
+    return {
+      first: null,
+      last: null,
+      orchestration: { ...emptyBase, outcome: "NOOP", steps: [] },
+    };
+  }
+
+  // PC-02 device probe start_param must never dispatch share Product Events.
+  if (isPc02ProbeStartParam(startParam)) {
     return {
       first: null,
       last: null,

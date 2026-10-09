@@ -63,6 +63,11 @@ import {
   handleTelegramBanWebhookRequest,
   isTelegramBanWebhookPath,
 } from "./telegram-ban-callback.ts";
+import {
+  handleTelegramPc02ProbeRequest,
+  isPc02ProbeHttpPath,
+  isPc02ProbeStartParam,
+} from "./telegram-pc02-probe.ts";
 
 const TEST_UI_HTML = testUiHtmlSource();
 
@@ -197,6 +202,10 @@ export async function handleCreateBanContactRequest(
       await handleTelegramInlineProbeRequest(req, res);
       return;
     }
+    if (req.method === "POST" && isPc02ProbeHttpPath(url.pathname)) {
+      await handleTelegramPc02ProbeRequest(req, res);
+      return;
+    }
     const attempt = parseAuthAttempt(req);
     if (!attempt) {
       json(res, 401, { error: { code: "UNAUTHENTICATED", message: "Authentication required" } });
@@ -282,8 +291,13 @@ export async function handleCreateBanContactRequest(
         runtime,
         context,
       );
+      const pc02Matched = isPc02ProbeStartParam(startParam);
       const startParamIntake = {
         ...buildStartParamIntakeProbe(startParam, entryExecution),
+        pc02Probe: {
+          matched: pc02Matched,
+          productEventsSkipped: pc02Matched,
+        },
         ...(clientLaunch
           ? {
               client: {
@@ -344,7 +358,14 @@ export async function handleCreateBanContactRequest(
       ) {
         await openLobbyIfNeeded(runtime, context);
       }
-      const startParamIntake = buildStartParamIntakeProbe(startParam, resolved);
+      const pc02Matched = isPc02ProbeStartParam(startParam);
+      const startParamIntake = {
+        ...buildStartParamIntakeProbe(startParam, resolved),
+        pc02Probe: {
+          matched: pc02Matched,
+          productEventsSkipped: pc02Matched,
+        },
+      };
       const { diagnostics } = await loadDiagnostics(
         runtime,
         context,

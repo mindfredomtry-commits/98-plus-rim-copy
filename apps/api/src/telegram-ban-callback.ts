@@ -19,6 +19,10 @@ import { resolveTelegramShareExternalEntry } from "./external-entry.ts";
 import { executeIncomingOverboardVertical } from "./overboard.ts";
 import type { CreateBanContactRuntime } from "./runtime.ts";
 import type { TelegramBanCallbackOutcome } from "./telegram-ban-message-store.ts";
+import {
+  isPc02ProbeCallbackData,
+  processPc02ProbeCallback,
+} from "./telegram-pc02-probe.ts";
 
 export const TELEGRAM_BAN_WEBHOOK_PATH = "/api/telegram/webhook";
 export const TELEGRAM_WEBHOOK_SECRET_HEADER = "x-telegram-bot-api-secret-token";
@@ -124,6 +128,22 @@ export async function processTelegramBanUpdate(
     typeof query.inline_message_id === "string" && query.inline_message_id.length > 0
       ? query.inline_message_id
       : null;
+
+  // PC-02 isolated probe branch — must run before Ban OVERBOARD parsing.
+  // Unknown / disabled probe paths never reach Product Engine or Ban stores.
+  if (callbackQueryId && telegramUserId && isPc02ProbeCallbackData(callbackData)) {
+    const probe = await processPc02ProbeCallback(
+      { callbackQueryId, fromTelegramUserId: telegramUserId },
+      deps,
+    );
+    return result({
+      ok: probe.ok,
+      code: probe.code,
+      message: probe.message,
+      telegramDescription: probe.telegramApiError,
+    });
+  }
+
   const token = parseTelegramBanOverboardCallbackData(callbackData);
   if (!callbackQueryId || !telegramUserId || !token) {
     await answerCallbackQuery(deps, callbackQueryId || "missing", "Unsupported button");

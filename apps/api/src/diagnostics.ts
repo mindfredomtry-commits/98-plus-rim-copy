@@ -58,6 +58,11 @@ export type TestUiDiagnostics = Readonly<{
     e44Dispatched: boolean;
     tokenLookup: string;
     outcome: string;
+    /** PC-02 device probe only: Mini App opened with start_param=pc02_probe. */
+    pc02Probe?: Readonly<{
+      matched: boolean;
+      productEventsSkipped: boolean;
+    }>;
     client?: Readonly<{
       unsafeStartParamPresent: boolean;
       initDataStartParamPresent: boolean;
