@@ -59,6 +59,10 @@ export {
   resolvePendingExternalEntryIfOnline,
   applyPendingExternalEntryExpiry,
 } from "./external-entry.ts";
+export {
+  isTelegramShareReplyEntryEligible,
+  orchestrateTelegramShareReplyEntry,
+} from "./telegram-reply-entry.ts";
 export { executeCreateBanContactVertical, pendingCreateBanSend } from "./contact-send.ts";
 export { pendingReplyBanSend, shouldCompleteReplyBanSend } from "./reply-ban.ts";
 export {

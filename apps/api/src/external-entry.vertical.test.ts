@@ -192,7 +192,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect(receiver.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(receiver.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     expect(receiver.diagnostics.bootstrapStatus).toBe("COMPLETE");
     const bans = receiver.diagnostics.bans as Array<{
       id: string;
@@ -235,7 +235,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect(again.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(again.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     expect(again.diagnostics.bans).toHaveLength(1);
     expect(
       (again.diagnostics.incomingItems as Array<{ banId: string }>).filter(
@@ -252,6 +252,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       startParam: `share_${created.token}`,
     });
     const banId = (opened.diagnostics.bans as Array<{ id: string }>)[0]?.id;
+    await dispatch(app.url, USER_B_TG, "REPLY_BAN.PRESS_BACK");
     const afterOverboard = (await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_OVERBOARD"))
       .diagnostics!;
     const statusState = afterOverboard.controlState;
@@ -261,7 +262,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect(stayed.diagnostics.controlState).toBe(statusState);
+    expect(stayed.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_STATUS");
     expect(stayed.externalEntry).toMatchObject({ outcome: "RESOLVED" });
     expect(
       (stayed.diagnostics.incomingItems as Array<{ banId: string }>).filter(
@@ -312,7 +313,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect(resolved.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(resolved.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     expect(resolved.externalEntry).toMatchObject({ outcome: "RESOLVED", bindStatus: "BOUND" });
   });
 
@@ -429,7 +430,8 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(sender.snapshot.extended.successfulBanId).toBe(
       Object.values(sender.snapshot.extended.entities.bans)[0]?.id,
     );
-    const winner = first.diagnostics.controlState === "NOTIFICATIONS.INCOMING_BAN" ? first : second;
+    const winner =
+      first.diagnostics.controlState === "REPLY_BAN.WHAT.FROM_INCOMING_BAN" ? first : second;
     const loser = winner === first ? second : first;
     expect(winner.diagnostics.incomingItems).toHaveLength(1);
     expect(loser.diagnostics.incomingItems).toEqual([]);
@@ -485,7 +487,7 @@ describe("Stage 12 Telegram Share Link External Entry", () => {
     expect(claimedBan.acceptance).toBe("PENDING");
     expect(claimedBan.status).toBeNull();
     expect(claimed.diagnostics.incomingItems).toHaveLength(1);
-    expect(claimed.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(claimed.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     expect(claimed.externalEntry).toMatchObject({
       outcome: "RESOLVED",
       bindStatus: "BOUND",

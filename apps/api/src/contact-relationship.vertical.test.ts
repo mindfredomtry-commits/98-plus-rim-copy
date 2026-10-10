@@ -324,7 +324,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect(resolved.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(resolved.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     const bound = Object.values(
       (await app.runtime.productStore.loadProductSnapshot(aId)).snapshot.extended.entities.bans,
     );
@@ -407,7 +407,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
       openIfNeeded: true,
       startParam: `share_${created.token}`,
     });
-    expect(resolved.diagnostics.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(resolved.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     const aId = (await userIdOf(app.runtime, USER_A_TG))!;
     const bId = (await userIdOf(app.runtime, USER_B_TG))!;
     expect(contactIds(resolved.diagnostics)).toEqual([aId]);

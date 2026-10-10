@@ -156,8 +156,11 @@ async function createShareBoundBan(
     openIfNeeded: true,
     startParam: `share_${share!.token}`,
   });
-  expect(receiver.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
-  const ban = (receiver.bans as Array<{ id: string }>)[0];
+  expect(receiver.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
+  await dispatch(url, USER_B_TG, "REPLY_BAN.PRESS_BACK");
+  const onIncoming = await session(url, USER_B_TG, { openIfNeeded: false });
+  expect(onIncoming.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+  const ban = (onIncoming.bans as Array<{ id: string }>)[0];
   expect(ban?.id).toBeTruthy();
   return { banId: ban!.id, token: share!.token };
 }
@@ -170,6 +173,10 @@ async function openShareAsReceiver(url: string, token: string): Promise<TestUiDi
 }
 
 async function qualifyViaOverboard(url: string): Promise<TestUiDiagnostics> {
+  const current = await session(url, USER_B_TG, { openIfNeeded: false });
+  if (current.controlState === "REPLY_BAN.WHAT.FROM_INCOMING_BAN") {
+    await dispatch(url, USER_B_TG, "REPLY_BAN.PRESS_BACK");
+  }
   const result = await dispatch(url, USER_B_TG, "NOTIFICATIONS.PRESS_OVERBOARD");
   expect(result.httpStatus).toBe(200);
   expect(result.diagnostics).not.toBeNull();
@@ -200,7 +207,7 @@ describe("Stage 13A Telegram Persistent Re-entry vertical", () => {
     const app = await start(runtime);
     const created = await createShareBoundBan(app.url);
     const receiver = await openShareAsReceiver(app.url, created.token);
-    expect(receiver.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(receiver.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     expect(receiver.telegramPersistentReentryEligible).toBe(false);
     expect(receiver.telegramPersistentReentryEstablished).toBe(false);
     expect(receiver.telegramPersistentReentry.showCta).toBe(false);

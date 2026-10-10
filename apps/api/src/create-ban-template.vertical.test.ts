@@ -337,7 +337,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(created[0]?.banText).toBe(BAN_TEXT);
     expect(created[0]?.senderId).toBe(await userIdOf(app.runtime, USER_A_TG));
     expect(created[0]?.receiverId).toBe(await userIdOf(app.runtime, USER_B_TG));
-    expect(receiver.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(receiver.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     expect(receiver.incomingItems).toHaveLength(1);
 
     const sender = await app.runtime.productStore.loadProductSnapshot(

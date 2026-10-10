@@ -68,6 +68,10 @@ import {
   isPc02ProbeHttpPath,
   isPc02ProbeStartParam,
 } from "./telegram-pc02-probe.ts";
+import {
+  mergeTelegramShareReplyEntry,
+  orchestrateTelegramShareReplyEntry,
+} from "./telegram-reply-entry.ts";
 
 const TEST_UI_HTML = testUiHtmlSource();
 
@@ -269,6 +273,18 @@ export async function handleCreateBanContactRequest(
           lastExecution = resolved.last;
           firstExecution = resolved.first ?? resolved.last;
         }
+        const replyEntry = await orchestrateTelegramShareReplyEntry(
+          runtime,
+          context,
+          resolved,
+          startParam,
+          claimedUserId,
+        );
+        if (replyEntry.kind === "applied") {
+          entryExecution = mergeTelegramShareReplyEntry(resolved, replyEntry);
+          externalEntry = entryExecution.orchestration;
+          lastExecution = replyEntry.execution;
+        }
       } else {
         const pending = await resolvePendingExternalEntryIfOnline(runtime, context, claimedUserId);
         if (pending) {
@@ -346,12 +362,22 @@ export async function handleCreateBanContactRequest(
           : (claimed ?? undefined);
       await applyElapsedDomainTimers(runtime, context);
       await applyPendingExternalEntryExpiry(runtime, context, claimedUserId);
-      const resolved = await resolveTelegramShareExternalEntry(
+      let resolved = await resolveTelegramShareExternalEntry(
         runtime,
         context,
         startParam,
         claimedUserId,
       );
+      const replyEntry = await orchestrateTelegramShareReplyEntry(
+        runtime,
+        context,
+        resolved,
+        startParam,
+        claimedUserId,
+      );
+      if (replyEntry.kind === "applied") {
+        resolved = mergeTelegramShareReplyEntry(resolved, replyEntry);
+      }
       if (
         resolved.orchestration.outcome === "NOOP" ||
         resolved.orchestration.outcome === "PENDING"

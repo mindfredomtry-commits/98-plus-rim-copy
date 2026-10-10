@@ -223,6 +223,7 @@ describe("MVP10 corrective Pass 1 — begin CTA opportunity boundary", () => {
       pending.shareOperations as Array<{ attemptId: string; token: string; status: string }>
     ).find((operation) => operation.status === "ACTIVE")!;
     await session(app.url, USER_TG, { openIfNeeded: true, startParam: `share_${share.token}` });
+    await dispatch(app.url, USER_TG, "REPLY_BAN.PRESS_BACK");
     const qualified = (await dispatch(app.url, USER_TG, "NOTIFICATIONS.PRESS_OVERBOARD"))
       .diagnostics!;
     expect(qualified.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.RECEIVER");
