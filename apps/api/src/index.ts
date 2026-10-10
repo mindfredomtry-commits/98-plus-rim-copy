@@ -62,6 +62,7 @@ export {
 export {
   isTelegramShareReplyEntryEligible,
   orchestrateTelegramShareReplyEntry,
+  shortCircuitShareReentryWhileInReplyBan,
 } from "./telegram-reply-entry.ts";
 export { executeCreateBanContactVertical, pendingCreateBanSend } from "./contact-send.ts";
 export { pendingReplyBanSend, shouldCompleteReplyBanSend } from "./reply-ban.ts";

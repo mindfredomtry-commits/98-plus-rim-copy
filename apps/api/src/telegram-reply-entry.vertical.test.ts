@@ -18,6 +18,9 @@ const WEBHOOK_SECRET = "webhook-secret-test";
 const BAN_TEXT = "pc02 variant a ban";
 const REPLY_TEXT = "ответный запрет";
 const REPLY_DURATION = 12;
+const BAN_DURATION = 10;
+const AUTHORITATIVE_NOW = 9_000_000;
+const DURATION_MS = BAN_DURATION * 60 * 1000;
 
 type Started = Awaited<ReturnType<typeof listenCreateBanContactServer>>;
 const started: Started[] = [];
@@ -119,22 +122,66 @@ async function dispatch(
   return json.diagnostics!;
 }
 
-async function createTemplateBanWithToken(url: string): Promise<{ token: string }> {
+async function createTemplateBanWithToken(
+  url: string,
+): Promise<{ token: string; attemptId: string }> {
   await session(url, USER_A_TG);
   await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_START");
   await dispatch(url, USER_A_TG, "CREATE_BAN.SELECT_TEMPLATE", { templateContext: {} });
   await dispatch(url, USER_A_TG, "CREATE_BAN.CHANGE_BAN_TEXT", { banText: BAN_TEXT });
-  await dispatch(url, USER_A_TG, "CREATE_BAN.CHANGE_DURATION", { durationMinutes: 10 });
+  await dispatch(url, USER_A_TG, "CREATE_BAN.CHANGE_DURATION", {
+    durationMinutes: BAN_DURATION,
+  });
   await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_NEXT");
   const pending = await dispatch(url, USER_A_TG, "CREATE_BAN.PRESS_FORBID");
   const share = (
-    pending.shareOperations as Array<{ token: string; createdBanId: string | null }>
+    pending.shareOperations as Array<{
+      token: string;
+      attemptId: string;
+      createdBanId: string | null;
+    }>
   )[0]!;
-  return { token: share.token };
+  return { token: share.token, attemptId: share.attemptId };
+}
+
+async function snapshot(url: string, telegramUserId: string): Promise<TestUiDiagnostics> {
+  const response = await fetch(`${url}/api/snapshot`, {
+    headers: authHeaders(telegramUserId),
+  });
+  const json = (await response.json()) as { diagnostics?: TestUiDiagnostics };
+  expect(response.status).toBe(200);
+  return json.diagnostics!;
 }
 
 function stepNames(externalEntry: { steps?: Array<{ eventName: string }> } | undefined): string[] {
   return externalEntry?.steps?.map((step) => step.eventName) ?? [];
+}
+
+function banFingerprint(diagnostics: TestUiDiagnostics) {
+  return (diagnostics.bans as Array<{ id: string; receiverId: string | null; acceptance: string }>)
+    .map((ban) => `${ban.id}:${ban.receiverId}:${ban.acceptance}`)
+    .sort();
+}
+
+function notificationFingerprint(diagnostics: TestUiDiagnostics) {
+  return (
+    diagnostics.notificationItems as Array<{
+      id: string;
+      kind: string;
+      lifecycle: { status: string };
+    }>
+  )
+    .map((item) => `${item.id}:${item.kind}:${item.lifecycle.status}`)
+    .sort();
+}
+
+async function completeReplyFromWhat(url: string): Promise<TestUiDiagnostics> {
+  await dispatch(url, USER_B_TG, "REPLY_BAN.CHANGE_BAN_TEXT", { banText: REPLY_TEXT });
+  await dispatch(url, USER_B_TG, "REPLY_BAN.CHANGE_DURATION", {
+    durationMinutes: REPLY_DURATION,
+  });
+  await dispatch(url, USER_B_TG, "REPLY_BAN.PRESS_NEXT");
+  return dispatch(url, USER_B_TG, "REPLY_BAN.PRESS_FORBID");
 }
 
 describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
@@ -350,5 +397,230 @@ describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
     const viaPost = await externalEntryPost(app.url, USER_B_TG, `share_${created.token}`);
     expect(viaPost.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
     expect(stepNames(viaPost.externalEntry)).toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+  });
+
+  describe("Stage 2B — OA-1 sender characterization (no Lobby reset)", () => {
+    it("SENDER on SHARE_PENDING: no WHAT/E-14/E-18; PE stays SHARE_PENDING (not Lobby)", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      const first = await session(app.url, USER_A_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(first.externalEntry).toMatchObject({ outcome: "REJECTED" });
+      expect(first.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+      expect(first.diagnostics.controlState).not.toBe("RIM.LOBBY");
+      expect(stepNames(first.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(stepNames(first.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_BAN_MORE");
+      expect(stepNames(first.externalEntry)).not.toContain("APP.NORMAL_OPEN");
+      const again = await session(app.url, USER_A_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(again.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+      expect(stepNames(again.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+    });
+
+    it("SENDER on CREATE_BAN.SUCCESS after SHARE_RETURNED: stays SUCCESS; no Reply events", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      const success = await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_RETURNED", {
+        shareAttemptId: created.attemptId,
+      });
+      expect(success.controlState).toBe("CREATE_BAN.SUCCESS");
+      const opened = await session(app.url, USER_A_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(opened.externalEntry).toMatchObject({ outcome: "REJECTED" });
+      expect(opened.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
+      expect(opened.diagnostics.controlState).not.toBe("RIM.LOBBY");
+      expect(stepNames(opened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(stepNames(opened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_BAN_MORE");
+    });
+  });
+
+  describe("Stage 2B — CHECK / TIMER protection", () => {
+    it("RECEIVER on CHECK + valid share token → no E-14, no WHAT, Check unchanged", async () => {
+      const now = { value: AUTHORITATIVE_NOW };
+      const runtime = createCreateBanContactRuntime({
+        telegramSharePrepare: "mock",
+        clock: { nowMs: () => now.value },
+      });
+      const app = await start(runtime);
+      const created = await createTemplateBanWithToken(app.url);
+      await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      await completeReplyFromWhat(app.url);
+      await dispatch(app.url, USER_B_TG, "REPLY_BAN.PRESS_FORBID_MORE");
+      expect((await snapshot(app.url, USER_B_TG)).controlState).toBe("NOTIFICATIONS.TIMER");
+      now.value += DURATION_MS;
+      const afterExpire = await snapshot(app.url, USER_B_TG);
+      expect(afterExpire.controlState).toBe("NOTIFICATIONS.TIMER");
+      const onCheck = await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_TO_BANS");
+      expect(onCheck.controlState).toBe("NOTIFICATIONS.CHECK.RECEIVER");
+      const beforeBans = banFingerprint(onCheck);
+      const beforeItems = notificationFingerprint(onCheck);
+      const beforeActive = onCheck.activeNotificationItemId;
+      const reopened = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(reopened.diagnostics.controlState).toBe("NOTIFICATIONS.CHECK.RECEIVER");
+      expect(reopened.diagnostics.controlState).not.toMatch(/^REPLY_BAN\.WHAT/);
+      expect(stepNames(reopened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(stepNames(reopened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_BAN_MORE");
+      expect(banFingerprint(reopened.diagnostics)).toEqual(beforeBans);
+      expect(notificationFingerprint(reopened.diagnostics)).toEqual(beforeItems);
+      expect(reopened.diagnostics.activeNotificationItemId).toBe(beforeActive);
+      expect(reopened.diagnostics.replyBanDraft).toBeNull();
+    });
+
+    it("RECEIVER on TIMER remains protected (no E-14) after re-open", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      await completeReplyFromWhat(app.url);
+      await dispatch(app.url, USER_B_TG, "REPLY_BAN.PRESS_FORBID_MORE");
+      const onTimer = await snapshot(app.url, USER_B_TG);
+      expect(onTimer.controlState).toBe("NOTIFICATIONS.TIMER");
+      const beforeItems = notificationFingerprint(onTimer);
+      const first = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      const second = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(first.diagnostics.controlState).toBe("NOTIFICATIONS.TIMER");
+      expect(second.diagnostics.controlState).toBe("NOTIFICATIONS.TIMER");
+      expect(stepNames(first.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(stepNames(second.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(notificationFingerprint(second.diagnostics)).toEqual(beforeItems);
+    });
+  });
+
+  describe("Stage 2B — re-entry / idempotency", () => {
+    it("RECEIVER already in Reply WHAT: repeated URL short-circuits without E-44/E-45/E-14", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      const first = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(first.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
+      expect(stepNames(first.externalEntry)).toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      await dispatch(app.url, USER_B_TG, "REPLY_BAN.CHANGE_BAN_TEXT", {
+        banText: "draft in progress",
+      });
+      const second = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(second.diagnostics.controlState).toBe("REPLY_BAN.WHAT.FROM_INCOMING_BAN");
+      expect(second.externalEntry).toMatchObject({ outcome: "NOOP" });
+      expect(stepNames(second.externalEntry)).toEqual([]);
+      expect(second.diagnostics.incomingItems).toHaveLength(1);
+      expect(second.diagnostics.replyBanDraft).toEqual({
+        banText: "draft in progress",
+        durationMinutes: null,
+      });
+    });
+
+    it("RECEIVER after E-30: repeated URL stays SUCCESS without E-14", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      await completeReplyFromWhat(app.url);
+      const first = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      const second = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(first.diagnostics.controlState).toBe("REPLY_BAN.SUCCESS.FROM_INCOMING_BAN");
+      expect(second.diagnostics.controlState).toBe("REPLY_BAN.SUCCESS.FROM_INCOMING_BAN");
+      expect(stepNames(first.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(stepNames(second.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+    });
+
+    it("RECEIVER with processed Status source: no WHAT after leaving Status", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      await dispatch(app.url, USER_B_TG, "REPLY_BAN.PRESS_BACK");
+      await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_OVERBOARD");
+      const afterStatus = await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_TO_BANS");
+      expect(afterStatus.controlState).not.toMatch(/^NOTIFICATIONS\.STATUS\./);
+      const beforeState = afterStatus.controlState;
+      const beforeItems = notificationFingerprint(afterStatus);
+      const reopen = await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(reopen.diagnostics.controlState).toBe(beforeState);
+      expect(reopen.diagnostics.controlState).not.toMatch(/^REPLY_BAN\.WHAT/);
+      expect(stepNames(reopen.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(notificationFingerprint(reopen.diagnostics)).toEqual(beforeItems);
+    });
+
+    it("SENDER opening the same URL repeatedly stays SHARE_PENDING without Reply events", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      const opens = [];
+      for (let i = 0; i < 3; i += 1) {
+        opens.push(
+          await session(app.url, USER_A_TG, {
+            openIfNeeded: true,
+            startParam: `share_${created.token}`,
+          }),
+        );
+      }
+      for (const opened of opens) {
+        expect(opened.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+        expect(opened.externalEntry).toMatchObject({ outcome: "REJECTED" });
+        expect(stepNames(opened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+        expect(stepNames(opened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_BAN_MORE");
+      }
+    });
+
+    it("THIRD PARTY opening the same URL repeatedly stays Lobby without Reply", async () => {
+      const app = await start();
+      const created = await createTemplateBanWithToken(app.url);
+      await session(app.url, USER_B_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      const first = await session(app.url, USER_C_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      const second = await session(app.url, USER_C_TG, {
+        openIfNeeded: true,
+        startParam: `share_${created.token}`,
+      });
+      expect(first.diagnostics.controlState).toBe("RIM.LOBBY");
+      expect(second.diagnostics.controlState).toBe("RIM.LOBBY");
+      expect(first.externalEntry).toMatchObject({ outcome: "REJECTED" });
+      expect(second.externalEntry).toMatchObject({ outcome: "REJECTED" });
+      expect(stepNames(first.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(stepNames(second.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
+      expect(first.diagnostics.incomingItems).toEqual([]);
+      expect(second.diagnostics.incomingItems).toEqual([]);
+    });
   });
 });

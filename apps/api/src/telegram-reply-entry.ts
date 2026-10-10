@@ -1,7 +1,11 @@
 import type { ApplicationExecutionResult } from "@98plus/application";
 import type { AuthenticatedContext } from "@98plus/identity";
 import type { ProductSnapshot } from "@98plus/product-model";
-import { parseShareStartParam, type ExternalEntryExecution } from "./external-entry.ts";
+import {
+  parseShareStartParam,
+  type ExternalEntryExecution,
+  type ExternalEntryOrchestration,
+} from "./external-entry.ts";
 import { executeAuthenticatedEvent, type CreateBanContactRuntime } from "./runtime.ts";
 import { isPc02ProbeStartParam } from "./telegram-pc02-probe.ts";
 
@@ -20,6 +24,59 @@ const REPLY_BAN_TERMINAL_OR_IN_PROGRESS = new Set<ProductSnapshot["controlState"
   "REPLY_BAN.SUCCESS.FROM_INCOMING_BAN",
   "REPLY_BAN.SUCCESS.FROM_STATUS",
 ]);
+
+/** In-progress Reply Ban screens that Matrix E-45 Guard A would abort back to N-01. */
+const REPLY_BAN_IN_PROGRESS = new Set<ProductSnapshot["controlState"]>([
+  "REPLY_BAN.WHAT.FROM_INCOMING_BAN",
+  "REPLY_BAN.WHAT.FROM_STATUS",
+  "REPLY_BAN.CONFIRM.FROM_INCOMING_BAN",
+  "REPLY_BAN.CONFIRM.FROM_STATUS",
+]);
+
+/**
+ * When the Mini App re-opens the same share_<token> while already mid Reply Ban for
+ * that Ban, skip E-44/E-45. Re-resolving would hit Matrix Guard A (source Incoming
+ * still unprocessed), abort Reply → INCOMING, then auto E-14 would re-enter WHAT —
+ * duplicate Product Events and draft reset. Different Ban shares still resolve normally.
+ */
+export async function shortCircuitShareReentryWhileInReplyBan(
+  runtime: CreateBanContactRuntime,
+  context: AuthenticatedContext,
+  startParam: string | null,
+): Promise<ExternalEntryExecution | null> {
+  if (isPc02ProbeStartParam(startParam)) {
+    return null;
+  }
+  const parsed = parseShareStartParam(startParam);
+  if (parsed.kind !== "share") {
+    return null;
+  }
+  const lookup = await runtime.productStore.findShareByToken(parsed.token);
+  const banId = lookup?.share.createdBanId ?? null;
+  if (!lookup || banId === null) {
+    return null;
+  }
+  const loaded = await runtime.productStore.loadProductSnapshot(context.currentUserId);
+  const controlState = loaded.snapshot.controlState;
+  if (!REPLY_BAN_IN_PROGRESS.has(controlState)) {
+    return null;
+  }
+  const sourceBanId = loaded.snapshot.extended.replySource?.banId ?? null;
+  if (sourceBanId === null || sourceBanId !== banId) {
+    return null;
+  }
+  const orchestration: ExternalEntryOrchestration = {
+    startParam,
+    token: parsed.token,
+    shareAttemptId: lookup.share.attemptId,
+    shareTargetBanId: banId,
+    incomingBanItemId: null,
+    bindStatus: "ALREADY_BOUND",
+    outcome: "NOOP",
+    steps: [],
+  };
+  return { first: null, last: null, orchestration };
+}
 
 export function isTelegramShareReplyEntryEligible(snapshot: ProductSnapshot): boolean {
   const controlState = snapshot.controlState;

@@ -71,6 +71,7 @@ import {
 import {
   mergeTelegramShareReplyEntry,
   orchestrateTelegramShareReplyEntry,
+  shortCircuitShareReentryWhileInReplyBan,
 } from "./telegram-reply-entry.ts";
 
 const TEST_UI_HTML = testUiHtmlSource();
@@ -261,29 +262,39 @@ export async function handleCreateBanContactRequest(
       }
 
       if (startParam) {
-        const resolved = await resolveTelegramShareExternalEntry(
+        const shortCircuit = await shortCircuitShareReentryWhileInReplyBan(
           runtime,
           context,
           startParam,
-          claimedUserId,
         );
-        entryExecution = resolved;
-        externalEntry = resolved.orchestration;
-        if (resolved.last) {
-          lastExecution = resolved.last;
-          firstExecution = resolved.first ?? resolved.last;
-        }
-        const replyEntry = await orchestrateTelegramShareReplyEntry(
-          runtime,
-          context,
-          resolved,
-          startParam,
-          claimedUserId,
-        );
-        if (replyEntry.kind === "applied") {
-          entryExecution = mergeTelegramShareReplyEntry(resolved, replyEntry);
-          externalEntry = entryExecution.orchestration;
-          lastExecution = replyEntry.execution;
+        if (shortCircuit) {
+          entryExecution = shortCircuit;
+          externalEntry = shortCircuit.orchestration;
+        } else {
+          const resolved = await resolveTelegramShareExternalEntry(
+            runtime,
+            context,
+            startParam,
+            claimedUserId,
+          );
+          entryExecution = resolved;
+          externalEntry = resolved.orchestration;
+          if (resolved.last) {
+            lastExecution = resolved.last;
+            firstExecution = resolved.first ?? resolved.last;
+          }
+          const replyEntry = await orchestrateTelegramShareReplyEntry(
+            runtime,
+            context,
+            resolved,
+            startParam,
+            claimedUserId,
+          );
+          if (replyEntry.kind === "applied") {
+            entryExecution = mergeTelegramShareReplyEntry(resolved, replyEntry);
+            externalEntry = entryExecution.orchestration;
+            lastExecution = replyEntry.execution;
+          }
         }
       } else {
         const pending = await resolvePendingExternalEntryIfOnline(runtime, context, claimedUserId);
@@ -362,21 +373,25 @@ export async function handleCreateBanContactRequest(
           : (claimed ?? undefined);
       await applyElapsedDomainTimers(runtime, context);
       await applyPendingExternalEntryExpiry(runtime, context, claimedUserId);
-      let resolved = await resolveTelegramShareExternalEntry(
+      const shortCircuit = await shortCircuitShareReentryWhileInReplyBan(
         runtime,
         context,
         startParam,
-        claimedUserId,
       );
-      const replyEntry = await orchestrateTelegramShareReplyEntry(
-        runtime,
-        context,
-        resolved,
-        startParam,
-        claimedUserId,
-      );
-      if (replyEntry.kind === "applied") {
-        resolved = mergeTelegramShareReplyEntry(resolved, replyEntry);
+      let resolved =
+        shortCircuit ??
+        (await resolveTelegramShareExternalEntry(runtime, context, startParam, claimedUserId));
+      if (!shortCircuit) {
+        const replyEntry = await orchestrateTelegramShareReplyEntry(
+          runtime,
+          context,
+          resolved,
+          startParam,
+          claimedUserId,
+        );
+        if (replyEntry.kind === "applied") {
+          resolved = mergeTelegramShareReplyEntry(resolved, replyEntry);
+        }
       }
       if (
         resolved.orchestration.outcome === "NOOP" ||
