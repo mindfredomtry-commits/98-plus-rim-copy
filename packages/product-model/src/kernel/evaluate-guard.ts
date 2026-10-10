@@ -646,9 +646,9 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
       return active?.kind === "INCOMING_BAN" && active.lifecycle.status === "UNPROCESSED";
     case "E-14:active-status-unprocessed":
     case "E-18:active-status-unprocessed":
-      return active?.kind === "STATUS" && active.lifecycle.status === "UNPROCESSED";
     case "E-19:active-status-unprocessed":
-      return active?.kind === "STATUS" && active.lifecycle.status === "UNPROCESSED";
+      // Same PCS ↔ Status type/role applicability as E-63 (N-05…N-12).
+      return askRimEntryApplicable(input);
     case "E-19:active-timer-unprocessed":
       return active?.kind === "TIMER" && active.lifecycle.status === "UNPROCESSED";
     case "E-34:pending-send":

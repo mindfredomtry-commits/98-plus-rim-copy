@@ -1044,10 +1044,68 @@ function prepareBranchSnapshot(
         },
       };
       break;
+    case "E-27:source-status-context": {
+      const item = statusItem({
+        role: "SENDER",
+        status: "OVERBOARD",
+        ownerId: USER_ID,
+        lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+      });
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: USER_ID,
+            receiverId: CONTACT_A,
+            status: "OVERBOARD",
+            acceptance: "PENDING",
+          }),
+        },
+        notificationItems: { [item.id]: item },
+      });
+      next = {
+        ...next,
+        extended: {
+          ...next.extended,
+          activeNotificationItemId: item.id,
+          replySource: { kind: "STATUS", itemId: item.id, banId: BAN_ID },
+        },
+      };
+      break;
+    }
     case "E-18:active-status-unprocessed":
     case "E-14:active-status-unprocessed":
-      putItem(statusItem({ lifecycle: { status: "UNPROCESSED", display: "ACTIVE" } }), true);
+    case "E-19:active-status-unprocessed": {
+      const role = row.state.endsWith("SENDER") ? "SENDER" : "RECEIVER";
+      const status = row.state.includes("OVERBOARD")
+        ? "OVERBOARD"
+        : row.state.includes("BANTASTIC")
+          ? "BANTASTIC"
+          : row.state.includes("BANFLICT")
+            ? "BANFLICT"
+            : "FAIR_ENOUGH";
+      const item = statusItem({
+        role,
+        status,
+        ownerId: USER_ID,
+        lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+      });
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: role === "SENDER" ? USER_ID : CONTACT_A,
+            receiverId: role === "RECEIVER" ? USER_ID : CONTACT_A,
+            status,
+            acceptance: status === "OVERBOARD" ? "PENDING" : "ACCEPTED",
+          }),
+        },
+        notificationItems: { [item.id]: item },
+      });
+      next = {
+        ...next,
+        extended: { ...next.extended, activeNotificationItemId: item.id },
+      };
       break;
+    }
     case "E-10:matching-unapplied":
     case "E-11:matching-operation":
     case "E-11:matching-pending":
@@ -1291,7 +1349,38 @@ function prepareBranchSnapshot(
         true,
       );
     } else if (row.state.startsWith("NOTIFICATIONS.STATUS")) {
-      putItem(statusItem({ lifecycle: { status: "UNPROCESSED", display: "ACTIVE" } }), true);
+      const role = row.state.endsWith("SENDER") ? "SENDER" : "RECEIVER";
+      const status = row.state.includes("OVERBOARD")
+        ? "OVERBOARD"
+        : row.state.includes("BANTASTIC")
+          ? "BANTASTIC"
+          : row.state.includes("BANFLICT")
+            ? "BANFLICT"
+            : "FAIR_ENOUGH";
+      const item = statusItem({
+        role,
+        status,
+        ownerId: USER_ID,
+        lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+      });
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: role === "SENDER" ? USER_ID : CONTACT_A,
+            receiverId: role === "RECEIVER" ? USER_ID : CONTACT_A,
+            status,
+            acceptance: status === "OVERBOARD" ? "PENDING" : "ACCEPTED",
+          }),
+        },
+        notificationItems: {
+          ...next.extended.entities.notificationItems,
+          [item.id]: item,
+        },
+      });
+      next = {
+        ...next,
+        extended: { ...next.extended, activeNotificationItemId: item.id },
+      };
     }
   }
 

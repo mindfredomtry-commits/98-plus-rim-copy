@@ -15,9 +15,12 @@ import {
   CONTEXT_DATA,
   INCOMING_ITEM_ID,
   OP_ID,
+  OTHER_USER,
   PROPOSAL_ID,
   REQUEST_ID,
+  STATUS_ITEM_ID,
   TIMER_ITEM_ID,
+  USER_ID,
   defaultEvent,
   eventOf,
   failedAi,
@@ -561,14 +564,28 @@ describe("Stage 2 Product Kernel", () => {
 
   it("walks a representative Reply Ban FROM_STATUS flow", () => {
     let snapshot = withControlState(emptySnapshot(), "NOTIFICATIONS.STATUS.BANTASTIC.RECEIVER");
+    snapshot = withEntities(snapshot, {
+      bans: {
+        [BAN_ID]: makeBan({
+          senderId: OTHER_USER,
+          receiverId: USER_ID,
+          acceptance: "ACCEPTED",
+          status: "BANTASTIC",
+        }),
+      },
+    });
     snapshot = withItems(snapshot, [
-      statusItem({ lifecycle: { status: "UNPROCESSED", display: "ACTIVE" } }),
+      statusItem({
+        role: "RECEIVER",
+        status: "BANTASTIC",
+        lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+      }),
     ]);
     snapshot = {
       ...snapshot,
       extended: {
         ...snapshot.extended,
-        activeNotificationItemId: statusItem().id,
+        activeNotificationItemId: STATUS_ITEM_ID,
       },
     };
     const result = applied(snapshot, defaultEvent("NOTIFICATIONS.PRESS_REPLY_BAN"));

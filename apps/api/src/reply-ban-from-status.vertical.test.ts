@@ -1301,6 +1301,152 @@ describe("Stage 10 Reply Ban FROM_STATUS vertical", () => {
     expect(senderWhat.replySource?.banId).not.toBe(banA.id);
   });
 
+  it("Pass 9 T1: E-20→E-19→E-60/E-43→E-18→E-27 restores original SENDER Status, not stale PROCESSED Priority", async () => {
+    const app = await start();
+    const { ban: ban1 } = await createRealIncomingFromA(app, {
+      banText: "ban1 receiver priority",
+      durationMinutes: 9,
+    });
+    await session(app.url, USER_B_TG);
+    requireDiagnostics(await dispatch(app.url, USER_B_TG, "RIM.PRESS_NOTIFICATIONS"));
+    const receiverStatus = requireDiagnostics(
+      await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_OVERBOARD"),
+    );
+    expect(receiverStatus.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.RECEIVER");
+    const processedReceiverId = receiverStatus.activeNotificationItemId;
+    expect(processedReceiverId).toBeTruthy();
+    expect(receiverStatus.priorities.statusItemId).toBe(processedReceiverId);
+
+    const afterE19 = requireDiagnostics(
+      await dispatch(app.url, USER_B_TG, "NOTIFICATIONS.PRESS_TO_BANS"),
+    );
+    expect(afterE19.controlState).toBe("RIM.LOBBY");
+    expect(afterE19.priorities.statusItemId).toBe(processedReceiverId);
+    expect(
+      statusItemsOf(afterE19).find((item) => item.id === processedReceiverId)?.lifecycle.status,
+    ).toBe("PROCESSED");
+
+    await ensureLobby(app, USER_B_TG);
+    await grantContactBetweenTelegramUsers(app.runtime, USER_B_TG, USER_A_TG);
+    const who = requireDiagnostics(await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_START"));
+    const listed = who.contacts.find((contact) => contact.telegramUserId === USER_A_TG);
+    const aId = listed?.userId ?? (await userIdOf(app.runtime, USER_A_TG));
+    requireDiagnostics(
+      await dispatch(app.url, USER_B_TG, "CREATE_BAN.SELECT_CONTACT", { contactId: aId }),
+    );
+    await dispatch(app.url, USER_B_TG, "CREATE_BAN.CHANGE_BAN_TEXT", {
+      banText: "ban2 sender restore",
+    });
+    await dispatch(app.url, USER_B_TG, "CREATE_BAN.CHANGE_DURATION", { durationMinutes: 8 });
+    requireDiagnostics(await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_NEXT"));
+    const created = requireDiagnostics(
+      await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_FORBID"),
+    );
+    expect(created.controlState).toBe("CREATE_BAN.SUCCESS");
+    const ban2 = bansOf(created).find((ban) => ban.id !== ban1.id);
+    expect(ban2).toBeTruthy();
+    requireDiagnostics(await dispatch(app.url, USER_B_TG, "CREATE_BAN.PRESS_FORBID_MORE"));
+
+    await session(app.url, USER_A_TG);
+    let aOpened = await openNotifications(app, USER_A_TG);
+    aOpened = await drainLeadingOverboardStatuses(app, USER_A_TG, aOpened);
+    if (aOpened.controlState === "RIM.LOBBY") {
+      aOpened = requireDiagnostics(await dispatch(app.url, USER_A_TG, "RIM.PRESS_NOTIFICATIONS"));
+    }
+    expect(aOpened.controlState).toBe("NOTIFICATIONS.INCOMING_BAN");
+    expect(incomingOf(aOpened)[0]?.banId).toBe(ban2!.id);
+    requireDiagnostics(await dispatch(app.url, USER_A_TG, "NOTIFICATIONS.PRESS_OVERBOARD"));
+
+    await session(app.url, USER_B_TG);
+    let bOpened = await openNotifications(app, USER_B_TG);
+    if (bOpened.controlState === "RIM.LOBBY") {
+      bOpened = requireDiagnostics(await dispatch(app.url, USER_B_TG, "RIM.PRESS_NOTIFICATIONS"));
+    }
+    expect(bOpened.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.SENDER");
+    const senderItem = activeStatusItem(bOpened);
+    expect(senderItem.banId).toBe(ban2!.id);
+    expect(senderItem.role).toBe("SENDER");
+    expect(senderItem.lifecycle.status).toBe("UNPROCESSED");
+    expect(bOpened.priorities.statusItemId).toBe(processedReceiverId);
+
+    const what = await enterFromStatus(app, USER_B_TG, "SENDER");
+    expect(what.replySource).toEqual({
+      kind: "STATUS",
+      itemId: senderItem.id,
+      banId: ban2!.id,
+    });
+
+    const restored = requireDiagnostics(await dispatch(app.url, USER_B_TG, "REPLY_BAN.PRESS_BACK"));
+    expect(restored.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.SENDER");
+    expect(restored.activeNotificationItemId).toBe(senderItem.id);
+    expect(restored.replyBanDraft).toBeNull();
+    expect(
+      statusItemsOf(restored).find((item) => item.id === senderItem.id)?.lifecycle.status,
+    ).toBe("UNPROCESSED");
+    expect(restored.activeNotificationItemId).not.toBe(processedReceiverId);
+    expect(
+      statusItemsOf(restored).find((item) => item.id === processedReceiverId)?.lifecycle.status,
+    ).toBe("PROCESSED");
+    expect(restored.priorities.statusItemId).toBe(processedReceiverId);
+    expect(restored.replySource?.itemId).toBe(senderItem.id);
+
+    const reloaded = await snapshot(app.url, USER_B_TG);
+    expect(reloaded.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.SENDER");
+    expect(reloaded.activeNotificationItemId).toBe(senderItem.id);
+    expect(
+      statusItemsOf(reloaded).find((item) => item.id === senderItem.id)?.lifecycle.status,
+    ).toBe("UNPROCESSED");
+  });
+
+  it("Pass 9 T14: USER A malformed PCS/active mismatch refuses Status actions (no implicit recovery)", async () => {
+    let hung = withControlState(emptySnapshot(), "NOTIFICATIONS.STATUS.OVERBOARD.SENDER");
+    hung = withEntities(hung, {
+      bans: {
+        [BAN_ID]: makeBan({
+          senderId: OTHER_USER,
+          receiverId: USER_ID,
+          acceptance: "PENDING",
+          status: "OVERBOARD",
+        }),
+      },
+    });
+    hung = {
+      ...hung,
+      extended: {
+        ...hung.extended,
+        activeNotificationItemId: STATUS_ITEM_ID,
+        priorities: { statusItemId: STATUS_ITEM_ID, timerItemId: null },
+        replySource: { kind: "STATUS", itemId: STATUS_ITEM_ID, banId: BAN_ID },
+        entities: {
+          ...hung.extended.entities,
+          bans: hung.extended.entities.bans,
+          notificationItems: {
+            [STATUS_ITEM_ID]: statusItem({
+              role: "RECEIVER",
+              status: "OVERBOARD",
+              lifecycle: { status: "PROCESSED" },
+            }),
+          },
+        },
+      },
+    };
+    const before = structuredClone(hung);
+    for (const name of [
+      "NOTIFICATIONS.PRESS_BAN_MORE",
+      "NOTIFICATIONS.PRESS_REPLY_BAN",
+      "NOTIFICATIONS.PRESS_TO_BANS",
+    ] as const) {
+      const result = reduce(hung, { name, payload: {} } as CanonicalEvent, kernelContext());
+      expect(result.outcome).not.toBe("APPLIED");
+      expect(result.snapshot.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.SENDER");
+      expect(result.snapshot.extended.activeNotificationItemId).toBe(STATUS_ITEM_ID);
+      expect(
+        result.snapshot.extended.entities.notificationItems[STATUS_ITEM_ID]?.lifecycle.status,
+      ).toBe("PROCESSED");
+    }
+    expect(hung).toEqual(before);
+  });
+
   it("Stage 8/9 regression smoke: FROM_INCOMING E-30 still creates Timer; Stage 9 meta stays 9", async () => {
     expect(TIMER_CHECK_STATUS_STAGE).toBe(9);
     expect(STAGE_9_EXCLUDES).toContain("reply-ban-from-status");

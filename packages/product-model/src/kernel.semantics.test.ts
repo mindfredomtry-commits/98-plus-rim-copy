@@ -1457,6 +1457,259 @@ describe("Stage 2 semantic effect audit", () => {
     expect(Object.values(result.snapshot.extended.entities.checkPairs)).toEqual([]);
   });
 
+  it("E-27 FROM_STATUS restores replySource Status; stale PROCESSED Priority cannot override", () => {
+    const overboarded = applied(
+      incomingOverboardWorld(),
+      defaultEvent("NOTIFICATIONS.OVERBOARD_CONFIRMED"),
+    );
+    const receiver = statusItems(overboarded.snapshot).find((item) => item.role === "RECEIVER")!;
+    const afterLeave = applied(overboarded.snapshot, defaultEvent("NOTIFICATIONS.PRESS_TO_BANS"));
+    expect(
+      afterLeave.snapshot.extended.entities.notificationItems[receiver.id]?.lifecycle.status,
+    ).toBe("PROCESSED");
+    expect(afterLeave.snapshot.extended.priorities.statusItemId).toBe(receiver.id);
+
+    const senderStatusId = branded<NotificationItemId>("status-sender-unprocessed");
+    const senderBanId = branded<BanId>("ban-sender-2");
+    let replyWhat = withControlState(afterLeave.snapshot, "REPLY_BAN.WHAT.FROM_STATUS");
+    replyWhat = withEntities(replyWhat, {
+      bans: {
+        ...replyWhat.extended.entities.bans,
+        [senderBanId]: makeBan({
+          id: senderBanId,
+          senderId: USER_ID,
+          receiverId: OTHER_USER,
+          acceptance: "PENDING",
+          status: "OVERBOARD",
+        }),
+      },
+      notificationItems: {
+        ...replyWhat.extended.entities.notificationItems,
+        [senderStatusId]: statusItem({
+          id: senderStatusId,
+          banId: senderBanId,
+          role: "SENDER",
+          status: "OVERBOARD",
+          lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+        }),
+      },
+    });
+    replyWhat = {
+      ...replyWhat,
+      extended: {
+        ...replyWhat.extended,
+        activeNotificationItemId: senderStatusId,
+        replyBanDraft: { banText: "", durationMinutes: null },
+        replySource: { kind: "STATUS", itemId: senderStatusId, banId: senderBanId },
+        priorities: { statusItemId: receiver.id, timerItemId: null },
+      },
+      runtime: { ...replyWhat.runtime, pendingOperations: {} },
+    };
+
+    const restored = applied(replyWhat, defaultEvent("REPLY_BAN.PRESS_BACK"));
+    expect(restored.outcome).toBe("APPLIED");
+    expect(restored.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.SENDER");
+    expect(restored.snapshot.extended.activeNotificationItemId).toBe(senderStatusId);
+    expect(restored.snapshot.extended.replyBanDraft).toBeNull();
+    expect(
+      restored.snapshot.extended.entities.notificationItems[senderStatusId]?.lifecycle.status,
+    ).toBe("UNPROCESSED");
+    expect(restored.snapshot.extended.priorities.statusItemId).toBe(receiver.id);
+    expect(restored.snapshot.extended.activeNotificationItemId).not.toBe(receiver.id);
+  });
+
+  it("E-27 FROM_STATUS fail-closed when source Status is missing or PROCESSED", () => {
+    const sourceId = branded<NotificationItemId>("status-source");
+    const base = {
+      ...withControlState(emptySnapshot(), "REPLY_BAN.WHAT.FROM_STATUS"),
+      extended: {
+        ...emptySnapshot().extended,
+        replyBanDraft: { banText: "x", durationMinutes: 5 as DurationMinutes },
+        replySource: { kind: "STATUS" as const, itemId: sourceId, banId: BAN_ID },
+        priorities: { statusItemId: STATUS_ITEM_ID, timerItemId: null },
+        activeNotificationItemId: STATUS_ITEM_ID,
+        entities: {
+          ...emptySnapshot().extended.entities,
+          bans: {
+            [BAN_ID]: makeBan({
+              senderId: USER_ID,
+              receiverId: OTHER_USER,
+              acceptance: "PENDING",
+              status: "OVERBOARD",
+            }),
+          },
+          notificationItems: {
+            [STATUS_ITEM_ID]: statusItem({
+              role: "RECEIVER",
+              status: "OVERBOARD",
+              lifecycle: { status: "PROCESSED" },
+            }),
+          },
+        },
+      },
+    };
+
+    const missingSource = applied(base, defaultEvent("REPLY_BAN.PRESS_BACK"));
+    expect(missingSource.outcome).toBe("KERNEL_INVARIANT");
+    expect(missingSource.error?.code).toBe("MISSING_REQUIRED_DATA");
+    expect(missingSource.controlState).toBe("REPLY_BAN.WHAT.FROM_STATUS");
+    expect(missingSource.snapshot.extended.activeNotificationItemId).toBe(STATUS_ITEM_ID);
+
+    const processedSource = {
+      ...base,
+      extended: {
+        ...base.extended,
+        entities: {
+          ...base.extended.entities,
+          notificationItems: {
+            ...base.extended.entities.notificationItems,
+            [sourceId]: statusItem({
+              id: sourceId,
+              role: "SENDER",
+              status: "OVERBOARD",
+              lifecycle: { status: "PROCESSED" },
+            }),
+          },
+        },
+      },
+    };
+    const rejected = applied(processedSource, defaultEvent("REPLY_BAN.PRESS_BACK"));
+    expect(rejected.outcome).toBe("KERNEL_INVARIANT");
+    expect(rejected.error?.code).toBe("MISSING_REQUIRED_DATA");
+    expect(rejected.controlState).toBe("REPLY_BAN.WHAT.FROM_STATUS");
+    expect(rejected.snapshot.extended.activeNotificationItemId).toBe(STATUS_ITEM_ID);
+  });
+
+  it("E-14/E-18/E-19 refuse Status action when PCS role or lifecycle does not match active Status", () => {
+    let mismatched = withControlState(emptySnapshot(), "NOTIFICATIONS.STATUS.OVERBOARD.SENDER");
+    mismatched = withEntities(mismatched, {
+      bans: {
+        [BAN_ID]: makeBan({
+          senderId: OTHER_USER,
+          receiverId: USER_ID,
+          acceptance: "PENDING",
+          status: "OVERBOARD",
+        }),
+      },
+    });
+    mismatched = withItems(mismatched, [
+      statusItem({
+        role: "RECEIVER",
+        status: "OVERBOARD",
+        lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+      }),
+    ]);
+    mismatched = {
+      ...mismatched,
+      extended: { ...mismatched.extended, activeNotificationItemId: STATUS_ITEM_ID },
+    };
+    expect(applied(mismatched, defaultEvent("NOTIFICATIONS.PRESS_BAN_MORE")).outcome).not.toBe(
+      "APPLIED",
+    );
+    expect(applied(mismatched, defaultEvent("NOTIFICATIONS.PRESS_REPLY_BAN")).outcome).not.toBe(
+      "APPLIED",
+    );
+    expect(applied(mismatched, defaultEvent("NOTIFICATIONS.PRESS_TO_BANS")).outcome).not.toBe(
+      "APPLIED",
+    );
+
+    let processed = withControlState(emptySnapshot(), "NOTIFICATIONS.STATUS.OVERBOARD.RECEIVER");
+    processed = withEntities(processed, {
+      bans: {
+        [BAN_ID]: makeBan({
+          senderId: OTHER_USER,
+          receiverId: USER_ID,
+          acceptance: "PENDING",
+          status: "OVERBOARD",
+        }),
+      },
+    });
+    processed = withItems(processed, [
+      statusItem({
+        role: "RECEIVER",
+        status: "OVERBOARD",
+        lifecycle: { status: "PROCESSED" },
+      }),
+    ]);
+    processed = {
+      ...processed,
+      extended: { ...processed.extended, activeNotificationItemId: STATUS_ITEM_ID },
+    };
+    expect(applied(processed, defaultEvent("NOTIFICATIONS.PRESS_REPLY_BAN")).outcome).not.toBe(
+      "APPLIED",
+    );
+    expect(applied(processed, defaultEvent("NOTIFICATIONS.PRESS_TO_BANS")).outcome).not.toBe(
+      "APPLIED",
+    );
+  });
+
+  it("E-43 ignores PROCESSED Status Priority and preserves UNPROCESSED priority selection", () => {
+    const overboarded = applied(
+      incomingOverboardWorld(),
+      defaultEvent("NOTIFICATIONS.OVERBOARD_CONFIRMED"),
+    );
+    const receiver = statusItems(overboarded.snapshot).find((item) => item.role === "RECEIVER")!;
+    const afterLeave = applied(overboarded.snapshot, defaultEvent("NOTIFICATIONS.PRESS_TO_BANS"));
+    expect(afterLeave.snapshot.extended.priorities.statusItemId).toBe(receiver.id);
+
+    const extraId = branded<NotificationItemId>("status-extra");
+    const withExtra = withEntities(afterLeave.snapshot, {
+      notificationItems: {
+        ...afterLeave.snapshot.extended.entities.notificationItems,
+        [extraId]: statusItem({
+          id: extraId,
+          role: "SENDER",
+          status: "OVERBOARD",
+          banId: branded<BanId>("ban-extra"),
+          fifoSequence: 50,
+          lifecycle: { status: "UNPROCESSED", display: "WAITING" },
+        }),
+      },
+    });
+    const selected = applied(
+      withControlState(withExtra, "RIM.LOBBY"),
+      defaultEvent("RIM.PRESS_NOTIFICATIONS"),
+    );
+    expect(selected.outcome).toBe("APPLIED");
+    expect(
+      selected.traces.some(
+        (trace) => trace.eventId === "E-43" && trace.branch === "status-priority",
+      ),
+    ).toBe(false);
+    expect(
+      selected.traces.some((trace) => trace.eventId === "E-43" && trace.branch === "fifo-status"),
+    ).toBe(true);
+    expect(selected.snapshot.extended.activeNotificationItemId).toBe(extraId);
+
+    const livePriority = {
+      ...withExtra,
+      extended: {
+        ...withExtra.extended,
+        priorities: { statusItemId: extraId, timerItemId: null },
+        entities: {
+          ...withExtra.extended.entities,
+          notificationItems: {
+            ...withExtra.extended.entities.notificationItems,
+            [extraId]: {
+              ...withExtra.extended.entities.notificationItems[extraId]!,
+              lifecycle: { status: "UNPROCESSED" as const, display: "WAITING" as const },
+            },
+          },
+        },
+      },
+    };
+    const prioritized = applied(
+      withControlState(livePriority, "RIM.LOBBY"),
+      defaultEvent("RIM.PRESS_NOTIFICATIONS"),
+    );
+    expect(
+      prioritized.traces.some(
+        (trace) => trace.eventId === "E-43" && trace.branch === "status-priority",
+      ),
+    ).toBe(true);
+    expect(prioritized.snapshot.extended.activeNotificationItemId).toBe(extraId);
+  });
+
   it("E-19 processes the active Status Item even when leftover replySource points at Incoming", () => {
     const overboarded = applied(
       incomingOverboardWorld(),

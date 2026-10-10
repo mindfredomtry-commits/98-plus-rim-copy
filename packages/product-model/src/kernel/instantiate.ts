@@ -750,6 +750,21 @@ export function instantiateEffects(
           });
           break;
         }
+        if (row.eventId === "E-27" && row.nextState === "SOURCE_STATUS_ITEM") {
+          const source = replySourceOf(input);
+          const item =
+            source?.kind === "STATUS"
+              ? snapshot.extended.entities.notificationItems[source.itemId]
+              : undefined;
+          if (!item || item.kind !== "STATUS" || item.lifecycle.status !== "UNPROCESSED") {
+            return missing(
+              row,
+              "E-27 FROM_STATUS requires a concrete unprocessed source Status Item; refusing stale Priority or arbitrary active fallback",
+            );
+          }
+          effects.push({ type: "SET_ACTIVE_NOTIFICATION", itemId: item.id });
+          break;
+        }
         if (row.kind === "E43") {
           const id = snapshot.extended.priorities.statusItemId;
           const timerId = snapshot.extended.priorities.timerItemId;
@@ -783,7 +798,14 @@ export function instantiateEffects(
               (effect.item.kind === "INCOMING_BAN" || effect.item.kind === "TIMER"),
           );
         const fromEvent = eventField<NotificationItemId>(event, "incomingBanItemId");
-        const priority = snapshot.extended.priorities.statusItemId;
+        const priorityId = snapshot.extended.priorities.statusItemId;
+        const priorityItem = priorityId
+          ? snapshot.extended.entities.notificationItems[priorityId]
+          : undefined;
+        const usableStatusPriority =
+          priorityItem?.kind === "STATUS" && priorityItem.lifecycle.status === "UNPROCESSED"
+            ? priorityId
+            : null;
         const timerPriorityFromRow = effects.find((effect) => effect.type === "SET_TIMER_PRIORITY");
         const itemId =
           (createdMatchingStatus && createdMatchingStatus.type === "UPSERT_NOTIFICATION_ITEM"
@@ -796,7 +818,7 @@ export function instantiateEffects(
           (timerPriorityFromRow && timerPriorityFromRow.type === "SET_TIMER_PRIORITY"
             ? timerPriorityFromRow.itemId
             : null) ??
-          priority ??
+          usableStatusPriority ??
           snapshot.extended.activeNotificationItemId;
         effects.push({
           type: "SET_ACTIVE_NOTIFICATION",
