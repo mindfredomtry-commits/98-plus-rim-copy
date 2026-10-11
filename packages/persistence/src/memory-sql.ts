@@ -506,6 +506,21 @@ export class MemorySqlClient implements PersistenceSqlClient {
         const item = this.tables.getItem(String(params[0]));
         return rows(item ? [itemToRow(item)] : []);
       }
+      case SQL.selectStatusItemsForBans: {
+        const banIds = Array.isArray(params[0]) ? (params[0] as string[]) : [];
+        return rows(
+          this.tables
+            .listStatusItemsForBans(banIds)
+            .map(itemToRow)
+            .sort((a, b) => {
+              const banCmp = String(a.ban_id).localeCompare(String(b.ban_id));
+              if (banCmp !== 0) return banCmp;
+              const roleCmp = String(a.role ?? "").localeCompare(String(b.role ?? ""));
+              if (roleCmp !== 0) return roleCmp;
+              return String(a.item_id).localeCompare(String(b.item_id));
+            }),
+        );
+      }
       case SQL.upsertItem: {
         const item = decodeNotificationItem({
           item_id: String(params[0]),

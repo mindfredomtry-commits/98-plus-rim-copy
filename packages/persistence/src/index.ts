@@ -18,6 +18,7 @@ export {
   baselineFromLoadedSnapshot,
   deriveEntityWriteSet,
   emptyBaseline,
+  withMaterializerItemIds,
 } from "./hybrid-persist.ts";
 export type {
   BanMutationAuthority,
@@ -25,6 +26,17 @@ export type {
   PersistenceBaseline,
   ProductTransactionLockPlan,
 } from "./hybrid-persist.ts";
+export {
+  applyIdRemapToSnapshot,
+  clearProcessedStatusPriority,
+  materializeStatusPairs,
+  statusMaterializationAuthorized,
+} from "./status-materializer.ts";
+export type {
+  IdRemap,
+  StatusLogicalKey,
+  StatusMaterializationResult,
+} from "./status-materializer.ts";
 export { InMemoryProductStore } from "./in-memory-store.ts";
 export { MemorySqlClient } from "./memory-sql.ts";
 export {

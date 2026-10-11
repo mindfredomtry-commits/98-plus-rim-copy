@@ -30,9 +30,15 @@ import {
   baselineFromLoadedSnapshot,
   sharedWriteContextForTransition,
   snapshotEntitiesForWriteSet,
+  withMaterializerItemIds,
   type SharedWriteContext,
 } from "./hybrid-persist.ts";
 import { mergeNotificationItem } from "./item-write.ts";
+import {
+  isStatusNotificationItem,
+  materializeStatusPairs,
+  statusMaterializationAuthorized,
+} from "./status-materializer.ts";
 import { mergeDomainTimer } from "./timer-merge.ts";
 import {
   assertRimOwnershipAttemptId,
@@ -1087,7 +1093,8 @@ export class InMemoryProductStore implements ProductStore {
       );
     }
     const nextRevision = currentRevision + 1;
-    const entities = snapshot.extended.entities;
+    let effectiveSnapshot = snapshot;
+    const entities = effectiveSnapshot.extended.entities;
     if (seed) {
       for (const ban of Object.values(entities.bans)) {
         this.tables.upsertBan(ban);
@@ -1105,11 +1112,32 @@ export class InMemoryProductStore implements ProductStore {
       }
       this.tables.replaceOwnedItems(currentUserId, Object.values(entities.notificationItems));
       this.tables.replaceOwnedShares(currentUserId, Object.values(entities.shareOperations));
-      this.tables.replaceOperations(currentUserId, Object.values(snapshot.runtime.pendingOperations));
+      this.tables.replaceOperations(
+        currentUserId,
+        Object.values(effectiveSnapshot.runtime.pendingOperations),
+      );
     } else if (shared) {
       assertWriteSetCoveredByLockPlan(shared.writeSet, shared.lockPlan);
       assertNoHeldLockExpansion(shared.held, shared.lockPlan);
-      const toWrite = snapshotEntitiesForWriteSet(snapshot, shared.writeSet);
+      let workingWriteSet = shared.writeSet;
+      if (statusMaterializationAuthorized(shared.mutationAuthority, shared.effects)) {
+        const durableStatusItems = this.tables
+          .listStatusItemsForBans(shared.lockPlan.banIds)
+          .filter(isStatusNotificationItem);
+        const materialization = materializeStatusPairs({
+          snapshot: effectiveSnapshot,
+          effects: shared.effects,
+          mutationAuthority: shared.mutationAuthority,
+          durableStatusItems,
+        });
+        effectiveSnapshot = materialization.snapshot;
+        workingWriteSet = withMaterializerItemIds(
+          workingWriteSet,
+          materialization.materializerWrittenItemIds,
+        );
+        assertWriteSetCoveredByLockPlan(workingWriteSet, shared.lockPlan);
+      }
+      const toWrite = snapshotEntitiesForWriteSet(effectiveSnapshot, workingWriteSet);
       const mergedBans = new Map<string, Ban>();
       for (const nextBan of toWrite.bans) {
         const dbBan = this.tables.getBan(nextBan.id);
@@ -1146,7 +1174,7 @@ export class InMemoryProductStore implements ProductStore {
         const merged = mergeNotificationItem(this.tables.getItem(nextItem.id), nextItem);
         this.tables.upsertItem(merged);
       }
-      for (const opId of shared.writeSet.operationIdsToDelete) {
+      for (const opId of workingWriteSet.operationIdsToDelete) {
         this.tables.deleteOperationById(currentUserId, opId);
       }
       for (const operation of toWrite.operations) {
@@ -1160,7 +1188,7 @@ export class InMemoryProductStore implements ProductStore {
       this.tables.abandonOpenOwnership(currentUserId, Date.now());
     }
     this.tables.writeSession(
-      sessionFromSnapshot(currentUserId, snapshot, nextRevision, {
+      sessionFromSnapshot(currentUserId, effectiveSnapshot, nextRevision, {
         telegramPersistentReentryBootstrapSent:
           current?.telegramPersistentReentryBootstrapSent ?? false,
         telegramPersistentReentryBootstrapClaimedUntilMs:

@@ -340,6 +340,13 @@ export class ProductTables {
       .map((item) => decodeNotificationItem(notificationItemToRecord(item)));
   }
 
+  listStatusItemsForBans(banIds: readonly string[]): NotificationItem[] {
+    const ids = new Set(banIds);
+    return [...this.data.items.values()]
+      .filter((item) => item.kind === "STATUS" && ids.has(item.banId))
+      .map((item) => decodeNotificationItem(notificationItemToRecord(item)));
+  }
+
   countItems(): number {
     return this.data.items.size;
   }

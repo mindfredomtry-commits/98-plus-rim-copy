@@ -49,10 +49,16 @@ import {
   baselineFromLoadedSnapshot,
   sharedWriteContextForTransition,
   snapshotEntitiesForWriteSet,
+  withMaterializerItemIds,
   type HeldLockSet,
   type SharedWriteContext,
 } from "./hybrid-persist.ts";
 import { mergeNotificationItem } from "./item-write.ts";
+import {
+  isStatusNotificationItem,
+  materializeStatusPairs,
+  statusMaterializationAuthorized,
+} from "./status-materializer.ts";
 import { mergeDomainTimer } from "./timer-merge.ts";
 import {
   assertRimOwnershipAttemptId,
@@ -1407,7 +1413,9 @@ export class PostgresProductStore implements ProductStore {
       );
     }
     const nextRevision = currentRevision + 1;
-    const entities = snapshot.extended.entities;
+    /** Snapshot after Status materialization / ID remap (12D-2); equals input until then. */
+    let effectiveSnapshot = snapshot;
+    const entities = effectiveSnapshot.extended.entities;
     const priorBanIds = new Set<string>();
     if (!seed) {
       const priorBans = await tx.query<{ ban_id: string }>(SQL.selectBansForUser, [currentUserId]);
@@ -1449,7 +1457,47 @@ export class PostgresProductStore implements ProductStore {
           await tx.query(SQL.selectPairForUpdate, [pairId]);
         }
       }
-      const toWrite = snapshotEntitiesForWriteSet(snapshot, shared.writeSet);
+
+      // 12D-2: Status materialization under Ban locks (cross-owner durable read).
+      let workingWriteSet = shared.writeSet;
+      if (statusMaterializationAuthorized(shared.mutationAuthority, shared.effects)) {
+        const banIds = shared.lockPlan.banIds;
+        const durableRows =
+          banIds.length === 0
+            ? { rows: [] as ItemSqlRow[] }
+            : await tx.query<ItemSqlRow>(SQL.selectStatusItemsForBans, [banIds]);
+        const durableStatusItems = durableRows.rows
+          .map((row) =>
+            decodeNotificationItem({
+              item_id: row.item_id,
+              owner_id: row.owner_id,
+              ban_id: row.ban_id,
+              kind: row.kind,
+              fifo_sequence: row.fifo_sequence,
+              lifecycle_status: row.lifecycle_status,
+              lifecycle_display: row.lifecycle_display,
+              role: row.role,
+              check_pair_id: row.check_pair_id,
+              domain_timer_id: row.domain_timer_id,
+              status: row.status,
+            }),
+          )
+          .filter(isStatusNotificationItem);
+        const materialization = materializeStatusPairs({
+          snapshot: effectiveSnapshot,
+          effects: shared.effects,
+          mutationAuthority: shared.mutationAuthority,
+          durableStatusItems,
+        });
+        effectiveSnapshot = materialization.snapshot;
+        workingWriteSet = withMaterializerItemIds(
+          workingWriteSet,
+          materialization.materializerWrittenItemIds,
+        );
+        assertWriteSetCoveredByLockPlan(workingWriteSet, shared.lockPlan);
+      }
+
+      const toWrite = snapshotEntitiesForWriteSet(effectiveSnapshot, workingWriteSet);
       const mergedBans = new Map<string, Ban>();
       for (const nextBan of toWrite.bans) {
         const locked = await tx.query<BanSqlRow>(SQL.selectBanForUpdate, [nextBan.id]);
@@ -1560,8 +1608,8 @@ export class PostgresProductStore implements ProductStore {
 
     if (seed) {
       await rejectTerminatedRimChats(tx, [
-        snapshot.extended.rimChat,
-        snapshot.extended.savedFrozenRimChat,
+        effectiveSnapshot.extended.rimChat,
+        effectiveSnapshot.extended.savedFrozenRimChat,
       ]);
     }
     if (!seed) {
@@ -1569,8 +1617,8 @@ export class PostgresProductStore implements ProductStore {
       const previousFrozen = parseJson<RimChat>(
         sessionResult.rows[0]?.saved_frozen_rim_chat ?? null,
       );
-      const nextLive = snapshot.extended.rimChat;
-      const nextFrozen = snapshot.extended.savedFrozenRimChat;
+      const nextLive = effectiveSnapshot.extended.rimChat;
+      const nextFrozen = effectiveSnapshot.extended.savedFrozenRimChat;
       if (
         rimHistoryChanged(previousLive, previousFrozen, nextLive, nextFrozen) &&
         appliedRule === undefined
@@ -1673,7 +1721,7 @@ export class PostgresProductStore implements ProductStore {
         : Number(previousClaimedUntil);
     const previousClaimToken =
       sessionResult.rows[0]?.telegram_persistent_reentry_bootstrap_claim_token ?? null;
-    const session = sessionFromSnapshot(currentUserId, snapshot, nextRevision, {
+    const session = sessionFromSnapshot(currentUserId, effectiveSnapshot, nextRevision, {
       telegramPersistentReentryBootstrapSent: previousBootstrapSent,
       telegramPersistentReentryBootstrapClaimedUntilMs: Number.isFinite(previousClaimedUntilMs)
         ? previousClaimedUntilMs

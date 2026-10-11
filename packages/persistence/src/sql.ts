@@ -272,6 +272,14 @@ SELECT item_id, owner_id, ban_id, kind, fifo_sequence, lifecycle_status, lifecyc
        role, check_pair_id, domain_timer_id, status
 FROM notification_items WHERE item_id = $1
 `.trim(),
+  /** Cross-owner Status lookup under Ban lock (12D-2 materializer). */
+  selectStatusItemsForBans: `
+SELECT item_id, owner_id, ban_id, kind, fifo_sequence, lifecycle_status, lifecycle_display,
+       role, check_pair_id, domain_timer_id, status
+FROM notification_items
+WHERE ban_id = ANY($1::text[]) AND kind = 'STATUS'
+ORDER BY ban_id ASC, role ASC, item_id ASC
+`.trim(),
   bindBanReceiverIfUnbound: `
 UPDATE bans
 SET receiver_id = $2

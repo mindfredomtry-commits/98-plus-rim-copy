@@ -72,7 +72,9 @@ export type SharedWriteContext = Readonly<{
   lockPlan: ProductTransactionLockPlan;
   held?: HeldLockSet;
   mutationAuthority: BanMutationAuthority;
-  /** 12D-1: always empty; 12D-2 Status materializer fills this. */
+  /** Kernel effects for Status materialization (12D-2). */
+  effects: readonly Effect[];
+  /** 12D-2: Status materializer created/updated Item IDs (M1 write-set union). */
   materializerWrittenItemIds: readonly NotificationItemId[];
 }>;
 
@@ -417,18 +419,37 @@ export function sharedWriteContextForTransition(input: Readonly<{
     lockPlan: ProductTransactionLockPlan;
     held?: HeldLockSet;
     mutationAuthority: BanMutationAuthority;
+    effects: readonly Effect[];
     materializerWrittenItemIds: readonly NotificationItemId[];
   } = {
     baseline,
     writeSet,
     lockPlan: frozenPlan,
     mutationAuthority: mutationAuthorityFromTransition(input.appliedRule, input.result),
+    effects: input.result.effects ?? [],
     materializerWrittenItemIds,
   };
   if (input.held !== undefined) {
     context.held = input.held;
   }
   return context;
+}
+
+/** Union Item IDs into an existing write-set (M1 materializer expansion). */
+export function withMaterializerItemIds(
+  writeSet: EntityWriteSet,
+  materializerWrittenItemIds: readonly NotificationItemId[],
+): EntityWriteSet {
+  if (materializerWrittenItemIds.length === 0) {
+    return writeSet;
+  }
+  return {
+    ...writeSet,
+    itemIds: sortedUniqueStrings([
+      ...writeSet.itemIds,
+      ...materializerWrittenItemIds,
+    ]) as NotificationItemId[],
+  };
 }
 
 export type BanFieldKey = keyof Ban;
