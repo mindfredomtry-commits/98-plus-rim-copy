@@ -3,6 +3,10 @@
  * Logical Status identity: (ban_id, status_type, role).
  */
 import { randomUUID } from "node:crypto";
+import {
+  emitDiagnostic,
+  stageMaterializerOutcome,
+} from "@98plus/diagnostics";
 import type {
   Ban,
   BanId,
@@ -340,12 +344,33 @@ export function materializeStatusPairs(input: Readonly<{
     durableByKey.set(key, list);
   }
 
+  stageMaterializerOutcome({
+    eventName: "status.materializer.started",
+    meta: {
+      phase: "staged",
+      durableStatusCount: input.durableStatusItems.length,
+    },
+  });
+
   // Fail closed on historical duplicates before any write.
   for (const [key, list] of durableByKey) {
     if (list.length > 1) {
+      const logicalStatusKey = key.replaceAll("\0", "/");
+      emitDiagnostic({
+        eventName: "status.materializer.failed",
+        source: "materializer",
+        meta: {
+          phase: "staged",
+          classification: "STATUS_LOGICAL_DUPLICATE",
+          logicalStatusKey,
+          durableStatusCount: list.length,
+          errorCode: "INVARIANT",
+          errorMessage: "Duplicate durable Status rows for logical key",
+        },
+      });
       throw new PersistenceError(
         "INVARIANT",
-        `Duplicate durable Status rows for logical key ${key.replaceAll("\0", "/")}: ${list
+        `Duplicate durable Status rows for logical key ${logicalStatusKey}: ${list
           .map((item) => item.id)
           .join(",")}`,
       );
@@ -365,9 +390,22 @@ export function materializeStatusPairs(input: Readonly<{
     const key = logicalKeyOf(item);
     const prior = kernelByKey.get(key);
     if (prior && prior.id !== item.id) {
+      const logicalStatusKey = key.replaceAll("\0", "/");
+      emitDiagnostic({
+        eventName: "status.materializer.failed",
+        source: "materializer",
+        meta: {
+          phase: "staged",
+          classification: "STATUS_ID_REMAP_FAILED",
+          logicalStatusKey,
+          kernelItemId: `${prior.id},${item.id}`,
+          errorCode: "INVARIANT",
+          errorMessage: "Multiple Kernel Status Item IDs for logical key",
+        },
+      });
       throw new PersistenceError(
         "INVARIANT",
-        `Multiple Kernel Status Item IDs for logical key ${key.replaceAll("\0", "/")}: ${prior.id}, ${item.id}`,
+        `Multiple Kernel Status Item IDs for logical key ${logicalStatusKey}: ${prior.id}, ${item.id}`,
       );
     }
     kernelByKey.set(key, item);
@@ -382,6 +420,7 @@ export function materializeStatusPairs(input: Readonly<{
         role,
       };
       const keyStr = keyString(key);
+      const logicalStatusKey = keyStr.replaceAll("\0", "/");
       const durableList = durableByKey.get(keyStr) ?? [];
       const durable = durableList[0];
       const proposed = kernelByKey.get(keyStr);
@@ -394,6 +433,19 @@ export function materializeStatusPairs(input: Readonly<{
           durable.status !== proposed.status ||
           durable.ownerId !== proposed.ownerId
         ) {
+          emitDiagnostic({
+            eventName: "status.materializer.failed",
+            source: "materializer",
+            meta: {
+              phase: "staged",
+              classification: "STATUS_ID_REMAP_FAILED",
+              logicalStatusKey,
+              kernelItemId: proposed.id,
+              durableItemId: durable.id,
+              errorCode: "INVARIANT",
+              errorMessage: "Refusing Status ID remap across different logical entities",
+            },
+          });
           throw new PersistenceError(
             "INVARIANT",
             `Refusing Status ID remap across different logical entities (${proposed.id} → ${durable.id})`,
@@ -401,6 +453,26 @@ export function materializeStatusPairs(input: Readonly<{
         }
         if (proposed.id !== durable.id) {
           remap[proposed.id] = durable.id;
+          stageMaterializerOutcome({
+            eventName: "status.materializer.remapped",
+            meta: {
+              phase: "staged",
+              logicalStatusKey,
+              kernelItemId: proposed.id,
+              durableItemId: durable.id,
+              banId: target.banId,
+            },
+          });
+        } else {
+          stageMaterializerOutcome({
+            eventName: "status.materializer.reused",
+            meta: {
+              phase: "staged",
+              logicalStatusKey,
+              durableItemId: durable.id,
+              banId: target.banId,
+            },
+          });
         }
         // Preserve PROCESSED; never remint
         const merged = mergeNotificationItem(durable, {
@@ -416,6 +488,15 @@ export function materializeStatusPairs(input: Readonly<{
         replacements[durable.id] = durable;
         updated.push(durable);
         updatedIds.push(durable.id);
+        stageMaterializerOutcome({
+          eventName: "status.materializer.reused",
+          meta: {
+            phase: "staged",
+            logicalStatusKey,
+            durableItemId: durable.id,
+            banId: target.banId,
+          },
+        });
       } else if (!durable && proposed) {
         // Create with Kernel-proposed ID (becomes durable)
         const createdItem = { ...proposed };
@@ -423,11 +504,32 @@ export function materializeStatusPairs(input: Readonly<{
         created.push(createdItem);
         createdIds.push(createdItem.id);
         durableByKey.set(keyStr, [createdItem]);
+        stageMaterializerOutcome({
+          eventName: "status.materializer.created",
+          meta: {
+            phase: "staged",
+            logicalStatusKey,
+            durableItemId: createdItem.id,
+            kernelItemId: createdItem.id,
+            banId: target.banId,
+          },
+        });
       } else {
         // Missing counterpart — create independently (never suppress because the other role exists)
         const ownerId: UserId =
           role === "RECEIVER" ? (target.ban.receiverId as UserId) : target.ban.senderId;
         if (!ownerId) {
+          emitDiagnostic({
+            eventName: "status.materializer.failed",
+            source: "materializer",
+            meta: {
+              phase: "staged",
+              classification: "PERSISTENCE_INVARIANT",
+              logicalStatusKey,
+              errorCode: "INVARIANT",
+              errorMessage: "Cannot materialize Status without Ban participant",
+            },
+          });
           throw new PersistenceError(
             "INVARIANT",
             `Cannot materialize ${role} Status without Ban participant`,
@@ -451,6 +553,15 @@ export function materializeStatusPairs(input: Readonly<{
         created.push(item);
         createdIds.push(id);
         durableByKey.set(keyStr, [item]);
+        stageMaterializerOutcome({
+          eventName: "status.materializer.created",
+          meta: {
+            phase: "staged",
+            logicalStatusKey,
+            durableItemId: id,
+            banId: target.banId,
+          },
+        });
       }
     }
   }

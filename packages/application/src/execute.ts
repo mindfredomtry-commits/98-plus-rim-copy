@@ -39,6 +39,15 @@ import {
   parseRimProviderRuntime,
   runtimeWithAcceptedRetry,
 } from "./rim/rim-provider-runtime.ts";
+import {
+  beginProductActionDiagnostics,
+  emitProductApplied,
+  emitProductInfrastructureFailed,
+  emitProductNotApplied,
+  emitProductPersistFailed,
+  emitProductReceived,
+  emitProductStale,
+} from "./product-diagnostics.ts";
 
 export type ProductExecutorDependencies = Readonly<{
   store: ProductStore;
@@ -166,16 +175,46 @@ export async function executeProductEvent(
 ): Promise<ApplicationExecutionResult> {
   const event = toCanonicalEvent(input.event);
   const currentUserId = callerUserId(input.context, input.clientClaimedUserId);
+  const definition = CANONICAL_EVENT_DEFINITIONS.find((item) => item.name === event.name);
+  const eventId = definition?.id;
+  const actionId = beginProductActionDiagnostics({
+    event,
+    eventId,
+    actorId: currentUserId,
+  });
   try {
     const loaded = await deps.store.loadProductSnapshot(currentUserId);
+    const pcsBefore = loaded.snapshot.controlState;
+    emitProductReceived({
+      actionId,
+      eventId,
+      eventName: event.name,
+      actorId: currentUserId,
+      pcsBefore,
+      sessionRevisionBefore: loaded.revision,
+    });
     const transition = reduce(loaded.snapshot, event, {
       now: asInstant(deps.clock.nowMs()),
       currentUserId,
       allocateId: deps.allocateId,
     });
     if (transition.outcome !== "APPLIED") {
+      const status =
+        transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED";
+      emitProductNotApplied({
+        actionId,
+        eventId,
+        eventName: event.name,
+        actorId: currentUserId,
+        pcsBefore,
+        pcsAfter: loaded.snapshot.controlState,
+        status,
+        kernelOutcome: transition.outcome,
+        sessionRevisionBefore: loaded.revision,
+        errorMessage: transition.error?.message,
+      });
       return executionResult({
-        status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+        status,
         currentUserId,
         event,
         transition,
@@ -192,6 +231,8 @@ export async function executeProductEvent(
             : null,
       });
     }
+    const appliedRule = appliedRuleFor(event, transition);
+    const effectTypes = (transition.effects ?? []).map((effect) => effect.type);
     try {
       if (event.name === "RIM.PRESS_RETRY_AI") {
         const accepted = runtimeWithAcceptedRetry(
@@ -206,6 +247,14 @@ export async function executeProductEvent(
             rimProviderRuntime: accepted.runtime,
           });
           if (owned.status === "ATTEMPT_SUPERSEDED") {
+            emitProductStale({
+              actionId,
+              eventId: appliedRule.eventId,
+              eventName: event.name,
+              actorId: currentUserId,
+              pcsBefore,
+              sessionRevisionBefore: loaded.revision,
+            });
             return executionResult({
               status: "NOT_APPLIED",
               currentUserId,
@@ -217,6 +266,18 @@ export async function executeProductEvent(
               error: null,
             });
           }
+          emitProductApplied({
+            actionId,
+            eventId: appliedRule.eventId,
+            eventName: event.name,
+            actorId: currentUserId,
+            pcsBefore,
+            transition,
+            matrixBranch: appliedRule.branch,
+            effectTypes,
+            sessionRevisionBefore: loaded.revision,
+            sessionRevisionAfter: owned.loaded.revision,
+          });
           return executionResult({
             status: "APPLIED",
             currentUserId,
@@ -232,6 +293,18 @@ export async function executeProductEvent(
       const saved = await deps.store.persistTransition(
         persistenceInput(currentUserId, loaded, event, transition),
       );
+      emitProductApplied({
+        actionId,
+        eventId: appliedRule.eventId,
+        eventName: event.name,
+        actorId: currentUserId,
+        pcsBefore,
+        transition,
+        matrixBranch: appliedRule.branch,
+        effectTypes,
+        sessionRevisionBefore: loaded.revision,
+        sessionRevisionAfter: saved.revision,
+      });
       return executionResult({
         status: "APPLIED",
         currentUserId,
@@ -246,6 +319,19 @@ export async function executeProductEvent(
       if (error instanceof PersistenceError) {
         const durable = await deps.store.loadProductSnapshot(currentUserId);
         const applicationError = persistenceApplicationError(error);
+        emitProductPersistFailed({
+          actionId,
+          eventId: appliedRule.eventId,
+          eventName: event.name,
+          actorId: currentUserId,
+          pcsBefore,
+          transition,
+          effectTypes,
+          sessionRevisionBefore: loaded.revision,
+          sessionRevisionAfter: durable.revision,
+          persistenceCode: error.code,
+          persistenceMessage: error.message,
+        });
         return executionResult({
           status: error.code === "REVISION_CONFLICT" ? "REVISION_CONFLICT" : "PERSISTENCE_ERROR",
           currentUserId,
@@ -266,6 +352,13 @@ export async function executeProductEvent(
     if (error instanceof PersistenceError) {
       throw persistenceApplicationError(error);
     }
+    emitProductInfrastructureFailed({
+      actionId,
+      eventId,
+      eventName: event.name,
+      actorId: currentUserId,
+      message: error instanceof Error ? error.message : "application infrastructure failure",
+    });
     throw new ApplicationError(
       "INFRASTRUCTURE_FAILURE",
       error instanceof Error ? error.message : "application infrastructure failure",

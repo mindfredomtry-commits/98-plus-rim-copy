@@ -1,5 +1,12 @@
 import { Pool, type PoolClient, type PoolConfig, type QueryResult } from "pg";
 import type { SqlQueryResult } from "@98plus/identity";
+import {
+  classifyDriverError,
+  emitDiagnostic,
+  runWithTransactionDiagnosticsLocalAsync,
+  takeStagedMaterializerOutcomes,
+  transactionLocalStartedAt,
+} from "@98plus/diagnostics";
 import { allMigrationSql, canonicalMigrationScripts } from "./migrations.ts";
 import {
   runProductionMigrations,
@@ -165,20 +172,94 @@ function createPoolSqlClient(pool: Pool, connectionString: string): PersistenceS
       const connection = await pool.connect();
       const bound = new BoundPostgresSqlClient(connection, connectionString);
       try {
-        await connection.query("BEGIN");
-        try {
-          const result = await fn(bound);
-          await connection.query("COMMIT");
-          return result;
-        } catch (error) {
-          await connection.query("ROLLBACK").catch(() => undefined);
-          throw redactConnectionString(error, connectionString);
-        }
+        return await runWithTransactionDiagnosticsLocalAsync(async () => {
+          await connection.query("BEGIN");
+          emitDiagnostic({
+            eventName: "persistence.transaction.started",
+            source: "persistence",
+            meta: { storeKind: "postgres", phase: "observed" },
+          });
+          try {
+            const result = await fn(bound);
+            try {
+              await connection.query("COMMIT");
+            } catch (commitError) {
+              const durationMs = durationSince(transactionLocalStartedAt());
+              emitDiagnostic({
+                eventName: "persistence.transaction.commit_uncertain",
+                source: "persistence",
+                meta: {
+                  storeKind: "postgres",
+                  classification: classifyDriverError(commitError),
+                  errorMessage:
+                    commitError instanceof Error ? commitError.message : "commit failed",
+                  ...(durationMs === undefined ? {} : { durationMs }),
+                },
+              });
+              throw redactConnectionString(commitError, connectionString);
+            }
+            const staged = takeStagedMaterializerOutcomes();
+            const commitDurationMs = durationSince(transactionLocalStartedAt());
+            emitDiagnostic({
+              eventName: "persistence.transaction.committed",
+              source: "persistence",
+              meta: {
+                storeKind: "postgres",
+                phase: "committed",
+                ...(commitDurationMs === undefined ? {} : { durationMs: commitDurationMs }),
+                materializerCreatedCount: staged.filter((s) => s.eventName.endsWith(".created"))
+                  .length,
+                materializerUpdatedCount: staged.filter((s) => s.eventName.endsWith(".reused"))
+                  .length,
+                materializerRemapCount: staged.filter((s) => s.eventName.endsWith(".remapped"))
+                  .length,
+              },
+            });
+            for (const outcome of staged) {
+              emitDiagnostic({
+                eventName: outcome.eventName,
+                source: "materializer",
+                meta: { ...outcome.meta, phase: "committed", storeKind: "postgres" },
+              });
+            }
+            return result;
+          } catch (error) {
+            await connection.query("ROLLBACK").catch(() => undefined);
+            const staged = takeStagedMaterializerOutcomes();
+            for (const outcome of staged) {
+              emitDiagnostic({
+                eventName: outcome.eventName,
+                source: "materializer",
+                meta: { ...outcome.meta, phase: "rolled_back", storeKind: "postgres" },
+              });
+            }
+            const rollbackDurationMs = durationSince(transactionLocalStartedAt());
+            emitDiagnostic({
+              eventName: "persistence.transaction.rolled_back",
+              source: "persistence",
+              meta: {
+                storeKind: "postgres",
+                phase: "rolled_back",
+                classification: classifyDriverError(error),
+                errorMessage: error instanceof Error ? error.message : "transaction rolled back",
+                ...(rollbackDurationMs === undefined ? {} : { durationMs: rollbackDurationMs }),
+              },
+            });
+            throw redactConnectionString(error, connectionString);
+          }
+        });
       } finally {
         connection.release();
       }
     },
   };
+}
+
+function durationSince(startedAt: number | undefined): number | undefined {
+  if (startedAt === undefined) {
+    return undefined;
+  }
+  return Math.max(0, Date.now() - startedAt);
 }
 
 export function openPostgresPersistence(config: PostgresPoolConfig): PostgresPersistence {

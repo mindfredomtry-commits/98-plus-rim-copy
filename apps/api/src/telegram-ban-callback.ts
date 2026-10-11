@@ -7,6 +7,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import {
+  bindDiagnosticContext,
+  createCorrelationId,
+  createDiagnosticContext,
+  emitDiagnostic,
+  runWithDiagnosticContextAsync,
+} from "@98plus/diagnostics";
 import { asTelegramUserId, type AuthenticatedContext } from "@98plus/identity";
 import {
   buildTelegramBanMessageText,
@@ -23,6 +30,7 @@ import {
   isPc02ProbeCallbackData,
   processPc02ProbeCallback,
 } from "./telegram-pc02-probe.ts";
+import { CORRELATION_HEADER } from "./http-diagnostics.ts";
 
 export const TELEGRAM_BAN_WEBHOOK_PATH = "/api/telegram/webhook";
 export const TELEGRAM_WEBHOOK_SECRET_HEADER = "x-telegram-bot-api-secret-token";
@@ -101,7 +109,24 @@ export async function handleTelegramBanWebhookRequest(
     });
     return;
   }
-  const result = await processTelegramBanUpdate(runtime, body as TelegramUpdate, deps);
+  const correlationId = createCorrelationId();
+  try {
+    res.setHeader(CORRELATION_HEADER, correlationId);
+  } catch {
+    // ignore
+  }
+  const updateBody = body as TelegramUpdate;
+  const callbackQueryId =
+    typeof updateBody.callback_query?.id === "string" ? updateBody.callback_query.id : undefined;
+  const diag = createDiagnosticContext({
+    source: "telegram",
+    correlationId,
+    ...(typeof updateBody.update_id === "number" ? { telegramUpdateId: updateBody.update_id } : {}),
+    ...(callbackQueryId === undefined ? {} : { telegramCallbackQueryId: callbackQueryId }),
+  });
+  const result = await runWithDiagnosticContextAsync(diag, () =>
+    processTelegramBanUpdate(runtime, body as TelegramUpdate, deps),
+  );
   // Always acknowledge validly authenticated updates so Telegram does not retry forever.
   writeJson(res, 200, result);
 }
@@ -112,7 +137,29 @@ export async function processTelegramBanUpdate(
   deps: CallbackDeps = {},
 ): Promise<TelegramBanCallbackResult> {
   const query = update.callback_query;
+  if (typeof update.update_id === "number") {
+    bindDiagnosticContext({ telegramUpdateId: update.update_id, source: "telegram" });
+  }
+  if (typeof query?.id === "string") {
+    bindDiagnosticContext({ telegramCallbackQueryId: query.id, source: "telegram" });
+  }
+  emitDiagnostic({
+    eventName: "telegram.callback.received",
+    source: "telegram",
+    meta: {
+      ...(typeof update.update_id === "number" ? { telegramUpdateId: update.update_id } : {}),
+      ...(typeof query?.id === "string" ? { telegramCallbackQueryId: query.id } : {}),
+    },
+  });
   if (!query) {
+    emitDiagnostic({
+      eventName: "telegram.callback.failed",
+      source: "telegram",
+      meta: {
+        classification: "TELEGRAM_CALLBACK_FAILURE",
+        callbackResultCode: "IGNORED_UPDATE",
+      },
+    });
     return result({
       code: "IGNORED_UPDATE",
       message: "Update has no callback_query",
@@ -155,6 +202,16 @@ export async function processTelegramBanUpdate(
 
   const prior = await runtime.telegramBanMessageStore.findCallbackReceipt(callbackQueryId);
   if (prior) {
+    emitDiagnostic({
+      eventName: "telegram.callback.duplicate",
+      source: "telegram",
+      meta: {
+        telegramCallbackQueryId: callbackQueryId,
+        ...(typeof update.update_id === "number" ? { telegramUpdateId: update.update_id } : {}),
+        attemptId: prior.attemptId,
+        callbackResultCode: "DUPLICATE_CALLBACK",
+      },
+    });
     await answerCallbackQuery(deps, callbackQueryId);
     return result({
       code: "DUPLICATE_CALLBACK",
@@ -259,6 +316,17 @@ export async function processTelegramBanUpdate(
       overboard.last.event.name === "NOTIFICATIONS.OVERBOARD_CONFIRMED" &&
       overboard.last.status === "APPLIED";
     if (!applied) {
+      emitDiagnostic({
+        eventName: "telegram.callback.failed",
+        source: "telegram",
+        meta: {
+          telegramCallbackQueryId: callbackQueryId,
+          banId: delivery.banId,
+          attemptId: delivery.attemptId,
+          callbackResultCode: "OVERBOARD_NOT_APPLIED",
+          classification: "TELEGRAM_CALLBACK_FAILURE",
+        },
+      });
       await record(
         runtime,
         callbackQueryId,
@@ -275,6 +343,18 @@ export async function processTelegramBanUpdate(
         controlState: overboard.last.controlState,
       });
     }
+    emitDiagnostic({
+      eventName: "telegram.callback.applied",
+      source: "telegram",
+      meta: {
+        telegramCallbackQueryId: callbackQueryId,
+        banId: delivery.banId,
+        attemptId: delivery.attemptId,
+        eventId: "E-20",
+        callbackResultCode: "OVERBOARD_APPLIED",
+        actorId: context.currentUserId,
+      },
+    });
 
     const editTarget =
       inlineMessageId ??

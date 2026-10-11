@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@98plus/diagnostics": "0.1.0",
     "@98plus/identity": "0.1.0",
     "@98plus/product-model": "0.1.0",
     "pg": "^8.23.1"

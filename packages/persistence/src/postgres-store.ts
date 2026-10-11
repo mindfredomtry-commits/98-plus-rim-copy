@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { emitDiagnostic } from "@98plus/diagnostics";
 import type {
   Ban,
   BanAcceptance,
@@ -1407,6 +1408,18 @@ export class PostgresProductStore implements ProductStore {
     ]);
     const currentRevision = Number(sessionResult.rows[0]?.revision ?? 0);
     if (!seed && currentRevision !== expectedRevision) {
+      emitDiagnostic({
+        eventName: "persistence.cas.conflict",
+        source: "persistence",
+        meta: {
+          storeKind: "postgres",
+          classification: "SESSION_CAS_CONFLICT",
+          expectedRevision,
+          actualRevision: currentRevision,
+          actorId: currentUserId,
+          errorCode: "REVISION_CONFLICT",
+        },
+      });
       throw new PersistenceError(
         "REVISION_CONFLICT",
         "Conflicting writes to the same user's durable ProductSnapshot",

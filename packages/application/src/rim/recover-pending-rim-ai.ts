@@ -1,3 +1,4 @@
+import { emitDiagnostic } from "@98plus/diagnostics";
 import type { AuthenticatedContext } from "@98plus/identity";
 import { PersistenceError, type LoadedSnapshot } from "@98plus/persistence";
 import {
@@ -119,6 +120,11 @@ export async function continuePendingRimAi(
       origin: AskRimOrigin | null;
     }>,
 ): Promise<ApplicationExecutionResult | null> {
+  emitDiagnostic({
+    eventName: "rim.request.started",
+    source: "rim",
+    meta: { actorId: tools.context.currentUserId },
+  });
   const initialized = await ensureInitialization(tools);
   if (initialized) {
     return initialized;
@@ -974,7 +980,7 @@ async function dispatchIfCurrent(
   event: ProductEventInput,
   authority: ProducingAttempt,
 ): Promise<ApplicationExecutionResult | null> {
-  return commitProductEventIfAttemptCurrent(
+  const result = await commitProductEventIfAttemptCurrent(
     {
       context: tools.context,
       event,
@@ -985,6 +991,49 @@ async function dispatchIfCurrent(
     },
     tools.deps,
   );
+  if (result === null) {
+    emitDiagnostic({
+      eventName: "rim.request.stale",
+      source: "rim",
+      meta: {
+        classification: "STALE_AI_RESULT",
+        requestId: authority.requestId,
+        attemptId: authority.attemptId,
+        actorId: tools.context.currentUserId,
+      },
+    });
+    return null;
+  }
+  if (event.name === "RIM.AI_REQUEST_FAILED") {
+    const failureCode =
+      event.payload && typeof event.payload === "object" && "failure" in event.payload
+        ? String((event.payload as { failure?: { code?: string } }).failure?.code ?? "")
+        : "";
+    const isTimeout = failureCode.toLowerCase().includes("timeout");
+    emitDiagnostic({
+      eventName: isTimeout ? "rim.request.timeout" : "rim.request.failed",
+      source: "rim",
+      meta: {
+        classification: isTimeout ? "AI_TIMEOUT" : "INFRASTRUCTURE_FAILURE",
+        requestId: authority.requestId,
+        attemptId: authority.attemptId,
+        actorId: tools.context.currentUserId,
+        ...(failureCode.length > 0 ? { errorCode: failureCode.slice(0, 64) } : {}),
+      },
+    });
+  } else if (event.name === "RIM.AI_RESULT_RECEIVED" && result.status === "APPLIED") {
+    emitDiagnostic({
+      eventName: "rim.request.completed",
+      source: "rim",
+      meta: {
+        classification: "OK",
+        requestId: authority.requestId,
+        attemptId: authority.attemptId,
+        actorId: tools.context.currentUserId,
+      },
+    });
+  }
+  return result;
 }
 
 function completionEvent(snapshot: RimRequestSnapshot, output: unknown): ProductEventInput {

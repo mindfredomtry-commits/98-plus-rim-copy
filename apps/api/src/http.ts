@@ -73,6 +73,7 @@ import {
   orchestrateTelegramShareReplyEntry,
   shortCircuitShareReentryWhileInReplyBan,
 } from "./telegram-reply-entry.ts";
+import { jsonWithDiagnostics, withHttpDiagnostics } from "./http-diagnostics.ts";
 
 const TEST_UI_HTML = testUiHtmlSource();
 
@@ -143,8 +144,16 @@ export async function handleCreateBanContactRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  try {
+  await withHttpDiagnostics(req, res, async (_diagCtx, startedAtMs) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const respond = (status: number, body: unknown): void => {
+      jsonWithDiagnostics(res, status, body, {
+        httpMethod: req.method ?? "GET",
+        httpPath: url.pathname,
+        startedAtMs,
+      });
+    };
+  try {
     if (req.method === "OPTIONS") {
       writeCors(res, 204);
       res.end();
@@ -170,7 +179,7 @@ export async function handleCreateBanContactRequest(
       }
     }
     if (req.method === "GET" && url.pathname === "/api/meta") {
-      json(res, 200, {
+      respond(200, {
         CREATE_BAN_CONTACT_STAGE,
         INCOMING_OVERBOARD_STAGE,
         REPLY_BAN_FROM_INCOMING_STAGE,
@@ -213,7 +222,7 @@ export async function handleCreateBanContactRequest(
     }
     const attempt = parseAuthAttempt(req);
     if (!attempt) {
-      json(res, 401, { error: { code: "UNAUTHENTICATED", message: "Authentication required" } });
+      respond(401, { error: { code: "UNAUTHENTICATED", message: "Authentication required" } });
       return;
     }
     const context = await authenticateRuntime(runtime, attempt);
@@ -222,12 +231,12 @@ export async function handleCreateBanContactRequest(
       await applyElapsedDomainTimers(runtime, context);
       await applyPendingExternalEntryExpiry(runtime, context, claimed ?? undefined);
       const { diagnostics } = await loadDiagnostics(runtime, context);
-      json(res, 200, { diagnostics });
+      respond(200, { diagnostics });
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/contacts") {
       const { diagnostics } = await loadDiagnostics(runtime, context);
-      json(res, 200, { diagnostics, contacts: diagnostics.contacts });
+      respond(200, { diagnostics, contacts: diagnostics.contacts });
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/session") {
@@ -358,7 +367,7 @@ export async function handleCreateBanContactRequest(
       const diagnostics = bootstrapDelivery.error
         ? { ...baseDiagnostics, error: bootstrapDelivery.error }
         : baseDiagnostics;
-      json(res, 200, {
+      respond(200, {
         diagnostics,
         ...(externalEntry === null ? {} : { externalEntry }),
       });
@@ -416,7 +425,7 @@ export async function handleCreateBanContactRequest(
         resolved.orchestration,
         startParamIntake,
       );
-      json(res, 200, {
+      respond(200, {
         diagnostics,
         externalEntry: resolved.orchestration,
         executionStatus: resolved.last?.status ?? "LOADED",
@@ -425,7 +434,7 @@ export async function handleCreateBanContactRequest(
     }
     if (req.method === "POST" && url.pathname === "/api/telegram-persistent-reentry/begin") {
       const began = await beginTelegramPersistentReentryRequest(runtime, context);
-      json(res, 200, {
+      respond(200, {
         requestId: began.requestId,
         diagnostics: began.diagnostics,
         telegramPersistentReentryEligible: began.eligible,
@@ -437,7 +446,7 @@ export async function handleCreateBanContactRequest(
     if (req.method === "POST" && url.pathname === "/api/events") {
       const body = await readJson(req);
       if (typeof body.name !== "string") {
-        json(res, 400, {
+        respond(400, {
           error: { code: "INVALID_EVENT", message: "Product Event name is required" },
         });
         return;
@@ -504,7 +513,7 @@ export async function handleCreateBanContactRequest(
       const diagnostics = bootstrapDeliveryError
         ? { ...baseDiagnostics, error: bootstrapDeliveryError }
         : baseDiagnostics;
-      json(res, 200, {
+      respond(200, {
         diagnostics,
         executionStatus: last.status,
         ...(executed.orchestration === null ? {} : { orchestration: executed.orchestration }),
@@ -512,37 +521,38 @@ export async function handleCreateBanContactRequest(
       });
       return;
     }
-    json(res, 404, { error: { code: "NOT_FOUND", message: "Unknown TEST UI route" } });
+    respond(404, { error: { code: "NOT_FOUND", message: "Unknown TEST UI route" } });
   } catch (error) {
     if (error instanceof TelegramPersistentReentryError) {
-      json(res, 400, {
+      respond(400, {
         error: { code: error.code, message: error.message },
       });
       return;
     }
     if (error instanceof CreateBanContactTransportError) {
-      json(res, 400, {
+      respond(400, {
         error: { code: error.code, reason: error.reason, message: error.message },
       });
       return;
     }
     if (error instanceof AuthenticationError) {
-      json(res, 401, { error: { code: error.code, message: error.message } });
+      respond(401, { error: { code: error.code, message: error.message } });
       return;
     }
     if (error instanceof ApplicationError) {
-      json(res, error.code === "INVALID_EVENT" ? 400 : 500, {
+      respond(error.code === "INVALID_EVENT" ? 400 : 500, {
         error: { code: error.code, message: error.message },
       });
       return;
     }
-    json(res, 500, {
+    respond(500, {
       error: {
         code: "INFRASTRUCTURE_FAILURE",
         message: error instanceof Error ? error.message : "Create Ban CONTACT HTTP failure",
       },
     });
   }
+  });
 }
 
 function writeCors(res: ServerResponse, status: number): void {
@@ -552,16 +562,6 @@ function writeCors(res: ServerResponse, status: number): void {
       "content-type, x-98-auth-method, x-98-dev-secret, x-98-dev-telegram-user-id, x-98-init-data, x-98-claimed-user-id",
     "access-control-allow-methods": "GET,POST,OPTIONS",
   });
-}
-
-function json(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*",
-    "cache-control": "no-store",
-  });
-  res.end(payload);
 }
 
 function headerValue(req: IncomingMessage, name: string): string | null {

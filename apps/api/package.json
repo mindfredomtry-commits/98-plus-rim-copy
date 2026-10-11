@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@98plus/application": "0.1.0",
+    "@98plus/diagnostics": "0.1.0",
     "@98plus/identity": "0.1.0",
     "@98plus/persistence": "0.1.0",
     "@98plus/product-model": "0.1.0",

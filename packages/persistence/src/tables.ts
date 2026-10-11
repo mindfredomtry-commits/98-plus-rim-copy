@@ -1,3 +1,9 @@
+import {
+  emitDiagnostic,
+  runWithTransactionDiagnosticsLocal,
+  takeStagedMaterializerOutcomes,
+  transactionLocalStartedAt,
+} from "@98plus/diagnostics";
 import type {
   Ban,
   CheckPair,
@@ -184,13 +190,59 @@ export class ProductTables {
   }
 
   transaction<T>(fn: () => T): T {
-    const before = this.snapshot();
-    try {
-      return fn();
-    } catch (error) {
-      this.restore(before);
-      throw error;
-    }
+    return runWithTransactionDiagnosticsLocal(() => {
+      const before = this.snapshot();
+      emitDiagnostic({
+        eventName: "persistence.transaction.started",
+        source: "persistence",
+        meta: { storeKind: "memory", phase: "observed" },
+      });
+      try {
+        const result = fn();
+        const staged = takeStagedMaterializerOutcomes();
+        const startedAt = transactionLocalStartedAt();
+        emitDiagnostic({
+          eventName: "persistence.transaction.committed",
+          source: "persistence",
+          meta: {
+            storeKind: "memory",
+            phase: "committed",
+            ...(startedAt === undefined
+              ? {}
+              : { durationMs: Math.max(0, Date.now() - startedAt) }),
+          },
+        });
+        for (const outcome of staged) {
+          emitDiagnostic({
+            eventName: outcome.eventName,
+            source: "materializer",
+            meta: { ...outcome.meta, phase: "committed", storeKind: "memory" },
+          });
+        }
+        return result;
+      } catch (error) {
+        this.restore(before);
+        const staged = takeStagedMaterializerOutcomes();
+        for (const outcome of staged) {
+          emitDiagnostic({
+            eventName: outcome.eventName,
+            source: "materializer",
+            meta: { ...outcome.meta, phase: "rolled_back", storeKind: "memory" },
+          });
+        }
+        emitDiagnostic({
+          eventName: "persistence.transaction.rolled_back",
+          source: "persistence",
+          meta: {
+            storeKind: "memory",
+            phase: "rolled_back",
+            classification: "PG_TRANSACTION_ROLLBACK",
+            errorMessage: error instanceof Error ? error.message : "transaction rolled back",
+          },
+        });
+        throw error;
+      }
+    });
   }
 
   hasUser(userId: string): boolean {
