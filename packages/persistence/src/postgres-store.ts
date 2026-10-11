@@ -44,6 +44,7 @@ import {
 } from "./check-pair-write.ts";
 import { PersistenceError } from "./errors.ts";
 import {
+  assertNoHeldLockExpansion,
   assertWriteSetCoveredByLockPlan,
   baselineFromLoadedSnapshot,
   sharedWriteContextForTransition,
@@ -1431,6 +1432,7 @@ export class PostgresProductStore implements ProductStore {
       }
     } else if (shared) {
       assertWriteSetCoveredByLockPlan(shared.writeSet, shared.lockPlan);
+      assertNoHeldLockExpansion(shared.held, shared.lockPlan);
       const held = shared.held;
       for (const banId of shared.lockPlan.banIds) {
         if (!held?.banIds.has(banId)) {

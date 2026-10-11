@@ -23,6 +23,7 @@ import { mergeCheckPair } from "./check-pair-write.ts";
 import { PersistenceError } from "./errors.ts";
 import {
   allowedBanFields,
+  assertNoHeldLockExpansion,
   assertWriteSetCoveredByLockPlan,
   baselineFromLoadedSnapshot,
   buildLockPlan,
@@ -81,6 +82,56 @@ describe("12D-1 hybrid write-set derivation", () => {
     });
     const frozen = { ...plan, banIds: [branded("ban-other")] as typeof plan.banIds };
     expect(() => assertWriteSetCoveredByLockPlan(writeSet, frozen)).toThrow(PersistenceError);
+  });
+
+  it("P2-LOCK-EXPAND rejects nested Ban lock expansion beyond held set", () => {
+    const plan = buildLockPlan({
+      sessionUserIds: [USER_ID],
+      writeSet: deriveEntityWriteSet([
+        { type: "UPSERT_BAN", ban: makeBan({ id: branded("ban-a") }) },
+        { type: "UPSERT_BAN", ban: makeBan({ id: branded("ban-z") }) },
+      ]),
+    });
+    expect(() =>
+      assertNoHeldLockExpansion(
+        {
+          sessionUserIds: new Set([USER_ID]),
+          banIds: new Set(["ban-z"]),
+          timerIds: new Set(),
+          checkPairIds: new Set(),
+        },
+        plan,
+      ),
+    ).toThrow(/expands held Ban locks/);
+  });
+
+  it("P2-LOCK-EXPAND allows first Ban acquisition when held ban set is empty", () => {
+    const plan = buildLockPlan({
+      sessionUserIds: [USER_ID],
+      writeSet: deriveEntityWriteSet([
+        { type: "UPSERT_BAN", ban: makeBan({ id: branded("ban-a") }) },
+        { type: "UPSERT_BAN", ban: makeBan({ id: branded("ban-z") }) },
+      ]),
+    });
+    expect(() =>
+      assertNoHeldLockExpansion(
+        {
+          sessionUserIds: new Set([USER_ID]),
+          banIds: new Set(),
+          timerIds: new Set(),
+          checkPairIds: new Set(),
+        },
+        plan,
+      ),
+    ).not.toThrow();
+  });
+
+  it("materializerWrittenItemIds accepts future Item IDs under frozen write-set contract (PG-17)", () => {
+    const futureId = branded<NotificationItem["id"]>("item-materializer-future");
+    const writeSet = deriveEntityWriteSet([], {
+      materializerWrittenItemIds: [futureId],
+    });
+    expect(writeSet.itemIds).toEqual([futureId]);
   });
 });
 

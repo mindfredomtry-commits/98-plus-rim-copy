@@ -12,7 +12,6 @@ import {
   reduce,
   type CanonicalEvent,
   type ExecutionProbability,
-  type TransitionResult,
   type Failure,
   type ProductSnapshot,
   type UserId,
@@ -24,19 +23,22 @@ import {
   withControlState,
   CONTEXT_DATA,
 } from "../../product-model/src/kernel.fixtures.ts";
+import { baselineFromLoadedSnapshot } from "./hybrid-persist.ts";
 import { openPostgresPersistence, type PostgresPersistence } from "./postgres-client.ts";
 import { PostgresProductStore } from "./postgres-store.ts";
 import { projectRimHistory } from "./rim-history.ts";
 import { SQL } from "./sql.ts";
+import {
+  assertConnectedTestDatabase,
+  assertMvp17TestSchemaName,
+  assertSafeMvp17TestDatabaseUrl,
+} from "./test-database-guard.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
 import type { LoadedSnapshot } from "./types.ts";
 
-const databaseUrl = process.env.MVP17_TEST_DATABASE_URL;
-
-function assertSchemaName(schema: string): void {
-  if (!/^mvp17_[0-9a-f]+$/.test(schema)) {
-    throw new Error("refusing to interpolate an unexpected schema name");
-  }
+const rawDatabaseUrl = process.env.MVP17_TEST_DATABASE_URL;
+if (rawDatabaseUrl !== undefined && rawDatabaseUrl.trim().length > 0) {
+  assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
 }
 
 type HistoryMessage = {
@@ -56,7 +58,7 @@ type HistoryChat = {
   terminated: boolean;
 };
 
-describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
+describe.skipIf(!rawDatabaseUrl)("disposable PostgreSQL RIM history", () => {
   const schema = `mvp17_${randomUUID().replaceAll("-", "")}`;
   let db: PostgresPersistence;
   let nextAllocation = 1_000;
@@ -68,16 +70,15 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
   }
 
   beforeAll(async () => {
-    if (!databaseUrl) {
-      throw new Error("MVP17_TEST_DATABASE_URL is required");
-    }
-    assertSchemaName(schema);
+    const safe = assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
+    assertMvp17TestSchemaName(schema);
     db = openPostgresPersistence({
-      connectionString: databaseUrl,
+      connectionString: safe.connectionString,
       max: 4,
       connectionTimeoutMillis: 5_000,
       options: `-c search_path=${schema}`,
     });
+    await assertConnectedTestDatabase((sql, params) => db.sql.query(sql, params ?? []), safe);
     await db.sql.query(`CREATE SCHEMA ${schema}`, []);
     await db.sql.query(`SET search_path TO ${schema}`, []);
     const report = await db.migrate();
@@ -91,7 +92,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
     if (!db) {
       return;
     }
-    assertSchemaName(schema);
+    assertMvp17TestSchemaName(schema);
     await db.sql.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`, []);
     await db.close();
   });
@@ -146,6 +147,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
           expectedRevision: loaded.revision,
           result: transition,
           appliedRule: { eventId: definition.id, branch: trace.branch },
+          baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
         });
       },
     };
@@ -179,7 +181,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
       "SELECT version FROM schema_migrations ORDER BY applied_at, version",
       [],
     );
-    expect(versions.rows.map((row) => row.version)).toHaveLength(11);
+    expect(versions.rows.map((row) => row.version)).toHaveLength(12);
     const tables = await db.sql.query<{ name: string }>(
       `SELECT table_name AS name FROM information_schema.tables
        WHERE table_schema = current_schema() AND table_name IN ('rim_chats', 'rim_messages')
@@ -346,6 +348,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
       expectedRevision: retried.revision,
       result: stale,
       appliedRule: { eventId: "E-58", branch: staleTrace.branch },
+      baseline: baselineFromLoadedSnapshot(retried.snapshot, retried.revision),
     });
     expect(await messages(chat.id)).toHaveLength(afterRetry.length);
     expect((await messages(chat.id)).some((row) => row.payload.text === "stale")).toBe(false);
@@ -598,6 +601,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
       expectedRevision: loaded.revision,
       result: transition,
       appliedRule: { eventId: "E-58", branch: trace.branch },
+      baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
     });
     const rows = await messages(opened.chat.id);
     expect(rows.map((row) => row.payload.text ?? row.payload.message)).toEqual([
@@ -665,6 +669,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
         expectedRevision: drafted.revision,
         result: transition,
         appliedRule: { eventId: "E-52", branch: trace.branch },
+        baseline: baselineFromLoadedSnapshot(drafted.snapshot, drafted.revision),
       }),
     ).rejects.toMatchObject({ code: "INVARIANT" });
     const kept = await opened.store.loadProductSnapshot(owner);
@@ -761,12 +766,14 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
         expectedRevision: drafted.revision,
         result: send,
         appliedRule: { eventId: "E-52", branch: sendTrace.branch },
+        baseline: baselineFromLoadedSnapshot(drafted.snapshot, drafted.revision),
       }),
       second.persistTransition({
         currentUserId: owner,
         expectedRevision: drafted.revision,
         result: other,
         appliedRule: { eventId: "E-51", branch: otherTrace.branch },
+        baseline: baselineFromLoadedSnapshot(drafted.snapshot, drafted.revision),
       }),
     ]);
     expect(raced.filter((item) => item.status === "fulfilled")).toHaveLength(1);
@@ -813,12 +820,11 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM history", () => {
         },
       },
     };
-    const moved = await opened.store.persistTransition({
-      currentUserId: owner,
-      expectedRevision: opened.loaded.revision,
-      result: { outcome: "APPLIED", snapshot: positioned } as TransitionResult,
-      appliedRule: { eventId: "E-47", branch: "default" },
-    });
+    // Seed Status context via fixture install (create authority); do not invent Ban via E-47.
+    const moved = await PersistenceTestKit.postgres(db.sql).installFixtureSnapshot(
+      owner,
+      positioned,
+    );
     const asked = await opened.apply(owner, moved, eventOf("NOTIFICATIONS.PRESS_ASK_RIM", {}));
     const archived = await chats(owner);
     expect(archived).toHaveLength(2);

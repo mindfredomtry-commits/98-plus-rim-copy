@@ -25,6 +25,7 @@ import {
 import { cloneJson, sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
 import {
+  assertNoHeldLockExpansion,
   assertWriteSetCoveredByLockPlan,
   baselineFromLoadedSnapshot,
   sharedWriteContextForTransition,
@@ -1107,6 +1108,7 @@ export class InMemoryProductStore implements ProductStore {
       this.tables.replaceOperations(currentUserId, Object.values(snapshot.runtime.pendingOperations));
     } else if (shared) {
       assertWriteSetCoveredByLockPlan(shared.writeSet, shared.lockPlan);
+      assertNoHeldLockExpansion(shared.held, shared.lockPlan);
       const toWrite = snapshotEntitiesForWriteSet(snapshot, shared.writeSet);
       const mergedBans = new Map<string, Ban>();
       for (const nextBan of toWrite.bans) {

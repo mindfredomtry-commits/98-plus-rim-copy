@@ -265,6 +265,52 @@ export function assertWriteSetCoveredByLockPlan(
   }
 }
 
+/**
+ * P2-LOCK-EXPAND: once an outer transaction already holds Ban/Timer/Pair locks,
+ * nested writeOn must not acquire additional rows of that resource class
+ * (would invert ascending lock order and risk deadlock).
+ * Empty held sets mean that resource class has not been locked yet and writeOn
+ * may acquire the full sorted plan.
+ */
+export function assertNoHeldLockExpansion(
+  held: HeldLockSet | undefined,
+  plan: ProductTransactionLockPlan,
+): void {
+  if (held === undefined) {
+    return;
+  }
+  if (held.banIds.size > 0) {
+    for (const id of plan.banIds) {
+      if (!held.banIds.has(id)) {
+        throw new PersistenceError(
+          "INVARIANT",
+          `Lock plan expands held Ban locks with ${id}; nested acquisition is forbidden`,
+        );
+      }
+    }
+  }
+  if (held.timerIds.size > 0) {
+    for (const id of plan.timerIds) {
+      if (!held.timerIds.has(id)) {
+        throw new PersistenceError(
+          "INVARIANT",
+          `Lock plan expands held DomainTimer locks with ${id}; nested acquisition is forbidden`,
+        );
+      }
+    }
+  }
+  if (held.checkPairIds.size > 0) {
+    for (const id of plan.checkPairIds) {
+      if (!held.checkPairIds.has(id)) {
+        throw new PersistenceError(
+          "INVARIANT",
+          `Lock plan expands held CheckPair locks with ${id}; nested acquisition is forbidden`,
+        );
+      }
+    }
+  }
+}
+
 export function mutationAuthorityFromRule(
   rule: AppliedProductRule | undefined,
 ): BanMutationAuthority {

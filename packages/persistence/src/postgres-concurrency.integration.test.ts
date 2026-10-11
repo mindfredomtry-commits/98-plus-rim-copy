@@ -35,10 +35,19 @@ import type { DurationMinutes } from "@98plus/product-model";
 import { PostgresProductStore } from "./postgres-store.ts";
 import { openPostgresPersistence, type PostgresPersistence } from "./postgres-client.ts";
 import { SQL } from "./sql.ts";
+import {
+  assertConnectedTestDatabase,
+  assertMvp17TestSchemaName,
+  assertSafeMvp17TestDatabaseUrl,
+} from "./test-database-guard.ts";
+import { baselineFromLoadedSnapshot } from "./hybrid-persist.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
 import type { RuntimeAttemptAuthority } from "./runtime-attempt-authority.ts";
 
-const databaseUrl = process.env.MVP17_TEST_DATABASE_URL;
+const rawDatabaseUrl = process.env.MVP17_TEST_DATABASE_URL;
+if (rawDatabaseUrl !== undefined && rawDatabaseUrl.trim().length > 0) {
+  assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
+}
 
 function deferred() {
   let resolve: () => void = () => undefined;
@@ -52,27 +61,21 @@ function appliedShape(snapshot: ProductSnapshot): TransitionResult {
   return { outcome: "APPLIED", snapshot } as TransitionResult;
 }
 
-function assertSchemaName(schema: string): void {
-  if (!/^mvp17_[0-9a-f]+$/.test(schema)) {
-    throw new Error("refusing to interpolate an unexpected schema name");
-  }
-}
-
-describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
+describe.skipIf(!rawDatabaseUrl)("real PostgreSQL concurrency invariants", () => {
+  // Contended lock waits + dual transactions need headroom beyond the default 5s.
   const schema = `mvp17_${randomUUID().replaceAll("-", "")}`;
   let db: PostgresPersistence;
 
   beforeAll(async () => {
-    if (!databaseUrl) {
-      throw new Error("MVP17_TEST_DATABASE_URL is required");
-    }
-    assertSchemaName(schema);
+    const safe = assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
+    assertMvp17TestSchemaName(schema);
     db = openPostgresPersistence({
-      connectionString: databaseUrl,
+      connectionString: safe.connectionString,
       max: 6,
       connectionTimeoutMillis: 5_000,
       options: `-c search_path=${schema} -c application_name=mvp17_pass3`,
     });
+    await assertConnectedTestDatabase((sql, params) => db.sql.query(sql, params ?? []), safe);
     await db.sql.query(`CREATE SCHEMA ${schema}`, []);
     await db.sql.query(`SET search_path TO ${schema}`, []);
     await db.applyMigrations();
@@ -87,7 +90,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
     if (!db) {
       return;
     }
-    assertSchemaName(schema);
+    assertMvp17TestSchemaName(schema);
     await db.sql.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`, []);
     await db.close();
   });
@@ -210,11 +213,13 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
           currentUserId: senderId,
           expectedRevision: seeded.revision,
           result: expired,
+          baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         }),
         storeB.persistTransition({
           currentUserId: senderId,
           expectedRevision: seeded.revision,
           result: closed,
+          baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         }),
       ]),
     );
@@ -257,6 +262,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
       currentUserId: senderId,
       expectedRevision: loaded.revision,
       result: continued,
+      baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
     });
     expect(saved.revision).toBe(loaded.revision + 1);
     await expectNoIdleTransaction();
@@ -298,6 +304,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
         currentUserId: senderId,
         expectedRevision: seeded.revision,
         result: appliedShape(changed),
+        baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       }),
     ).rejects.toMatchObject({ code: "TRANSACTION_FAILED" });
     const loaded = await store.loadProductSnapshot(senderId);
@@ -572,11 +579,13 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
           currentUserId: receiverId,
           expectedRevision: seeded.revision,
           result: fulfilled,
+          baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         }),
         storeB.persistTransition({
           currentUserId: receiverId,
           expectedRevision: seeded.revision,
           result: fulfilled,
+          baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         }),
       ]),
     );
@@ -590,6 +599,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
         currentUserId: receiverId,
         expectedRevision: current.revision,
         result: declined,
+        baseline: baselineFromLoadedSnapshot(current.snapshot, current.revision),
       }),
     ).rejects.toMatchObject({ code: "INVARIANT" });
     const loaded = await storeA.loadProductSnapshot(receiverId);
@@ -638,6 +648,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
             currentUserId: receiverId,
             expectedRevision: loaded.revision,
             result,
+            baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
           });
           return event.name;
         }),
@@ -668,6 +679,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
             currentUserId: senderId,
             expectedRevision: loaded.revision,
             result,
+            baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
           });
           return event.name;
         }),
@@ -728,6 +740,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
             currentUserId: receiverId,
             expectedRevision: receiverSeed.revision,
             result: receiverFirst,
+            baseline: baselineFromLoadedSnapshot(receiverSeed.snapshot, receiverSeed.revision),
           }),
         ),
         storeB.withCheckPairLock(pairId, banId, senderId, (ctx) =>
@@ -735,14 +748,17 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
             currentUserId: senderId,
             expectedRevision: senderSeed.revision,
             result: senderFirst,
+            baseline: baselineFromLoadedSnapshot(senderSeed.snapshot, senderSeed.revision),
           }),
         ),
       ]),
     );
     const rejected = settled.filter((item) => item.status === "rejected");
     expect(rejected).toHaveLength(1);
+    // Hybrid merge rejects stale FIRST that would nullify the counterpart's confirmed answer
+    // (INVARIANT) or conflicting replacement (CHECK_PAIR_CONFLICT).
     expect(rejected[0]?.status === "rejected" && rejected[0].reason).toMatchObject({
-      code: "CHECK_PAIR_CONFLICT",
+      code: expect.stringMatching(/^(INVARIANT|CHECK_PAIR_CONFLICT)$/),
     });
     const loaded = await storeA.loadProductSnapshot(receiverId);
     const pair = loaded.snapshot.extended.entities.checkPairs[pairId];
@@ -868,11 +884,13 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
           expectedRevision: saved.revision,
           result: committed,
           requireAttempt: authority,
+          baseline: baselineFromLoadedSnapshot(saved.snapshot, saved.revision),
         }),
         other.persistTransition({
           currentUserId: userId,
           expectedRevision: saved.revision,
           result: closed,
+          baseline: baselineFromLoadedSnapshot(saved.snapshot, saved.revision),
         }),
       ]),
     );
@@ -892,6 +910,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
       expectedRevision: owned.revision,
       result: committed,
       requireAttempt: authority,
+      baseline: baselineFromLoadedSnapshot(owned.snapshot, owned.revision),
     });
     expect(stale.status).toBe("ATTEMPT_SUPERSEDED");
     const afterStale = await store.loadProductSnapshot(userId);
@@ -910,6 +929,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
       expectedRevision: retired.revision,
       result: committed,
       requireAttempt: attemptAuthority("attempt-2"),
+      baseline: baselineFromLoadedSnapshot(retired.snapshot, retired.revision),
     });
     expect(retry.status).toBe("ATTEMPT_SUPERSEDED");
     const afterRetry = await store.loadProductSnapshot(userId);
@@ -976,11 +996,13 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
           currentUserId: senderId,
           expectedRevision: seeded.revision,
           result: first,
+          baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         }),
         storeB.persistTransition({
           currentUserId: senderId,
           expectedRevision: seeded.revision,
           result: second,
+          baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         }),
       ]),
     );
@@ -1039,6 +1061,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
       currentUserId: userId,
       expectedRevision: seeded.revision,
       result,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
     });
     const replay = reduce(
       saved.snapshot,
@@ -1053,6 +1076,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
         currentUserId: userId,
         expectedRevision: seeded.revision,
         result,
+        baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       }),
     ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
     expect(
@@ -1113,12 +1137,14 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
             currentUserId: receiverId,
             expectedRevision: seeded.revision,
             result: answer,
+            baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
           }),
         ),
         storeB.persistTransition({
           currentUserId: receiverId,
           expectedRevision: seeded.revision,
           result: closed,
+          baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         }),
       ]),
     );

@@ -19,35 +19,36 @@ import {
 import { PostgresProductStore } from "./postgres-store.ts";
 import { openPostgresPersistence, type PostgresPersistence } from "./postgres-client.ts";
 import { SQL } from "./sql.ts";
+import {
+  assertConnectedTestDatabase,
+  assertMvp17TestSchemaName,
+  assertSafeMvp17TestDatabaseUrl,
+} from "./test-database-guard.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
 
-const databaseUrl = process.env.MVP17_TEST_DATABASE_URL;
+const rawDatabaseUrl = process.env.MVP17_TEST_DATABASE_URL;
+if (rawDatabaseUrl !== undefined && rawDatabaseUrl.trim().length > 0) {
+  assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
+}
 
 function applied(snapshot: TransitionResult["snapshot"]): TransitionResult {
   return { outcome: "APPLIED", snapshot } as TransitionResult;
 }
 
-function assertSchemaName(schema: string): void {
-  if (!/^mvp17_[0-9a-f]+$/.test(schema)) {
-    throw new Error("refusing to interpolate an unexpected schema name");
-  }
-}
-
-describe.skipIf(!databaseUrl)("real PostgreSQL persistence client", () => {
+describe.skipIf(!rawDatabaseUrl)("real PostgreSQL persistence client", () => {
   const schema = `mvp17_${randomUUID().replaceAll("-", "")}`;
   let db: PostgresPersistence;
 
   beforeAll(async () => {
-    if (!databaseUrl) {
-      throw new Error("MVP17_TEST_DATABASE_URL is required");
-    }
-    assertSchemaName(schema);
+    const safe = assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
+    assertMvp17TestSchemaName(schema);
     db = openPostgresPersistence({
-      connectionString: databaseUrl,
+      connectionString: safe.connectionString,
       max: 1,
       connectionTimeoutMillis: 2_000,
       options: `-c search_path=${schema}`,
     });
+    await assertConnectedTestDatabase((sql, params) => db.sql.query(sql, params ?? []), safe);
     await db.sql.query(`CREATE SCHEMA ${schema}`, []);
     await db.sql.query(`SET search_path TO ${schema}`, []);
     await db.applyMigrations();
@@ -66,7 +67,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL persistence client", () => {
     if (!db) {
       return;
     }
-    assertSchemaName(schema);
+    assertMvp17TestSchemaName(schema);
     await db.sql.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`, []);
     await db.close();
   });
@@ -365,7 +366,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL persistence client", () => {
 
   it("fails loudly on invalid SQL and does not keep the rolled-back statement", async () => {
     await expect(db.sql.query("NOT VALID SQL", [])).rejects.toThrow(/syntax error/i);
-    const secret = new URL(databaseUrl ?? "postgres://localhost/none").password;
+    const secret = new URL(rawDatabaseUrl ?? "postgres://localhost/none").password;
     await expect(
       db.sql.transaction(async (tx) => {
         await tx.query("CREATE TABLE migration_probe (id int)", []);
@@ -381,7 +382,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL persistence client", () => {
       await db.sql.query("NOT VALID SQL", []).catch((error: unknown) => {
         const message = error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : "";
         expect(message).not.toContain(secret);
-        expect(message).not.toContain(databaseUrl);
+        expect(message).not.toContain(rawDatabaseUrl);
       });
     }
     const tables = await db.sql.query<{ tablename: string }>(

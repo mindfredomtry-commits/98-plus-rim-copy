@@ -5,15 +5,17 @@ import { emptySnapshot, type TransitionResult, type UserId } from "@98plus/produ
 import { PersistenceError } from "./errors.ts";
 import { openPostgresPersistence, type PostgresPersistence } from "./postgres-client.ts";
 import { PostgresProductStore } from "./postgres-store.ts";
+import {
+  assertConnectedTestDatabase,
+  assertMvp17TestSchemaName,
+  assertSafeMvp17TestDatabaseUrl,
+} from "./test-database-guard.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
 import type { PersistenceSqlClient } from "./types.ts";
 
-const databaseUrl = process.env.MVP17_TEST_DATABASE_URL;
-
-function assertSchemaName(schema: string): void {
-  if (!/^mvp17_[0-9a-f]+$/.test(schema)) {
-    throw new Error("refusing to interpolate an unexpected schema name");
-  }
+const rawDatabaseUrl = process.env.MVP17_TEST_DATABASE_URL;
+if (rawDatabaseUrl !== undefined && rawDatabaseUrl.trim().length > 0) {
+  assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
 }
 
 function explodeAfterOwnershipInsert(inner: PersistenceSqlClient): PersistenceSqlClient {
@@ -30,21 +32,20 @@ function explodeAfterOwnershipInsert(inner: PersistenceSqlClient): PersistenceSq
   return wrap(inner);
 }
 
-describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM provider ownership", () => {
+describe.skipIf(!rawDatabaseUrl)("disposable PostgreSQL RIM provider ownership", () => {
   const schema = `mvp17_${randomUUID().replaceAll("-", "")}`;
   let db: PostgresPersistence;
 
   beforeAll(async () => {
-    if (!databaseUrl) {
-      throw new Error("MVP17_TEST_DATABASE_URL is required");
-    }
-    assertSchemaName(schema);
+    const safe = assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
+    assertMvp17TestSchemaName(schema);
     db = openPostgresPersistence({
-      connectionString: databaseUrl,
+      connectionString: safe.connectionString,
       max: 4,
       connectionTimeoutMillis: 5_000,
       options: `-c search_path=${schema}`,
     });
+    await assertConnectedTestDatabase((sql, params) => db.sql.query(sql, params ?? []), safe);
     await db.sql.query(`CREATE SCHEMA ${schema}`, []);
     await db.sql.query(`SET search_path TO ${schema}`, []);
     const report = await db.migrate();
@@ -57,7 +58,7 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM provider ownership", ()
     if (!db) {
       return;
     }
-    assertSchemaName(schema);
+    assertMvp17TestSchemaName(schema);
     await db.sql.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`, []);
     await db.close();
   }, 30_000);
@@ -168,9 +169,9 @@ describe.skipIf(!databaseUrl)("disposable PostgreSQL RIM provider ownership", ()
     if (won?.status !== "fulfilled" || won.value.status !== "ACQUIRED") {
       throw new Error("expected one acquire");
     }
-    assertSchemaName(schema);
+    assertMvp17TestSchemaName(schema);
     const other = openPostgresPersistence({
-      connectionString: databaseUrl ?? "",
+      connectionString: assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl).connectionString,
       max: 1,
       connectionTimeoutMillis: 5_000,
       options: `-c search_path=${schema}`,

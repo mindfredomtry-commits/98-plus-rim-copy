@@ -6,37 +6,39 @@ import { canonicalMigrationScripts, rimHistorySql } from "./migrations.ts";
 import { declaredMigrationObjects, type DeclaredMigrationObject } from "./production-migrations.ts";
 import { openPostgresPersistence, type PostgresPersistence } from "./postgres-client.ts";
 import { PostgresProductStore } from "./postgres-store.ts";
+import {
+  assertConnectedTestDatabase,
+  assertMvp17TestSchemaName,
+  assertSafeMvp17TestDatabaseUrl,
+} from "./test-database-guard.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
 
-const databaseUrl = process.env.MVP17_TEST_DATABASE_URL;
-
-function assertSchemaName(schema: string): void {
-  if (!/^mvp17_[0-9a-f]+$/.test(schema)) {
-    throw new Error("refusing to interpolate an unexpected schema name");
-  }
+const rawDatabaseUrl = process.env.MVP17_TEST_DATABASE_URL;
+if (rawDatabaseUrl !== undefined && rawDatabaseUrl.trim().length > 0) {
+  assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
 }
 
 function open(schema?: string, max = 2): PostgresPersistence {
-  if (!databaseUrl) {
-    throw new Error("MVP17_TEST_DATABASE_URL is required");
-  }
+  const safe = assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
   return openPostgresPersistence({
-    connectionString: databaseUrl,
+    connectionString: safe.connectionString,
     max,
     connectionTimeoutMillis: 5_000,
     ...(schema === undefined
       ? {}
       : (() => {
-          assertSchemaName(schema);
+          assertMvp17TestSchemaName(schema);
           return { options: `-c search_path=${schema}` };
         })()),
   });
 }
 
 async function createSchema(schema: string): Promise<void> {
-  assertSchemaName(schema);
+  assertMvp17TestSchemaName(schema);
   const admin = open();
   try {
+    const safe = assertSafeMvp17TestDatabaseUrl(rawDatabaseUrl);
+    await assertConnectedTestDatabase((sql, params) => admin.sql.query(sql, params ?? []), safe);
     await admin.sql.query(`CREATE SCHEMA ${schema}`, []);
   } finally {
     await admin.close();
@@ -44,7 +46,7 @@ async function createSchema(schema: string): Promise<void> {
 }
 
 async function dropSchema(schema: string): Promise<void> {
-  assertSchemaName(schema);
+  assertMvp17TestSchemaName(schema);
   const admin = open();
   try {
     await admin.sql.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`, []);
@@ -84,7 +86,7 @@ async function objectPresent(
   return result.rows[0]?.present != null;
 }
 
-describe.skipIf(!databaseUrl)("production migration runner", () => {
+describe.skipIf(!rawDatabaseUrl)("production migration runner", () => {
   const schemas: string[] = [];
 
   afterAll(async () => {
@@ -127,7 +129,7 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
         "SELECT version FROM schema_migrations",
         [],
       );
-      expect(again.rows).toHaveLength(11);
+      expect(again.rows).toHaveLength(12);
 
       const identity = new PostgresIdentityStore(db.sql);
       const user = await identity.resolveByTelegramUserId(asTelegramUserId("4242"));
@@ -161,7 +163,7 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
       expect(partial.newlyApplied).toHaveLength(4);
       const rest = await db.migrate();
       expect(rest.newlyApplied).toEqual(scripts.slice(4).map((script) => script.id));
-      expect(rest.applied).toHaveLength(11);
+      expect(rest.applied).toHaveLength(12);
     } finally {
       await db.close();
     }
@@ -328,10 +330,10 @@ describe.skipIf(!databaseUrl)("production migration runner", () => {
     const currentDb = open(current);
     try {
       const first = await currentDb.migrate();
-      expect(first.applied).toHaveLength(11);
+      expect(first.applied).toHaveLength(12);
       const second = await currentDb.migrate();
       expect(second.newlyApplied).toEqual([]);
-      expect(second.applied).toHaveLength(11);
+      expect(second.applied).toHaveLength(12);
     } finally {
       await currentDb.close();
     }
