@@ -1,6 +1,7 @@
 import { callerUserId, type AuthenticatedContext } from "@98plus/identity";
 import {
   PersistenceError,
+  baselineFromLoadedSnapshot,
   type AppliedProductRule,
   type LoadedSnapshot,
   type PersistTransitionInput,
@@ -122,6 +123,24 @@ function appliedRuleFor(event: CanonicalEvent, transition: TransitionResult): Ap
   return { eventId: definition.id, branch: match.branch };
 }
 
+function persistenceInput(
+  currentUserId: UserId,
+  loaded: LoadedSnapshot,
+  event: CanonicalEvent,
+  transition: TransitionResult,
+): Pick<
+  PersistTransitionInput,
+  "currentUserId" | "expectedRevision" | "result" | "appliedRule" | "baseline"
+> {
+  return {
+    currentUserId,
+    expectedRevision: loaded.revision,
+    result: transition,
+    appliedRule: appliedRuleFor(event, transition),
+    baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
+  };
+}
+
 function persistenceApplicationError(error: PersistenceError): ApplicationError {
   if (error.code === "REVISION_CONFLICT" || error.code === "CHECK_PAIR_CONFLICT") {
     return new ApplicationError("REVISION_CONFLICT", error.message, error);
@@ -182,12 +201,9 @@ export async function executeProductEvent(
         );
         if (accepted) {
           const owned = await deps.store.commitOwnedTransition({
-            currentUserId,
-            expectedRevision: loaded.revision,
-            result: transition,
+            ...persistenceInput(currentUserId, loaded, event, transition),
             requireAttempt: accepted.authority,
             rimProviderRuntime: accepted.runtime,
-            appliedRule: appliedRuleFor(event, transition),
           });
           if (owned.status === "ATTEMPT_SUPERSEDED") {
             return executionResult({
@@ -213,12 +229,9 @@ export async function executeProductEvent(
           });
         }
       }
-      const saved = await deps.store.persistTransition({
-        currentUserId,
-        expectedRevision: loaded.revision,
-        result: transition,
-        appliedRule: appliedRuleFor(event, transition),
-      });
+      const saved = await deps.store.persistTransition(
+        persistenceInput(currentUserId, loaded, event, transition),
+      );
       return executionResult({
         status: "APPLIED",
         currentUserId,
@@ -301,12 +314,7 @@ export async function persistAppliedOnSnapshot(
   if (beforePersist) {
     await beforePersist();
   }
-  const saved = await persist({
-    currentUserId,
-    expectedRevision: loaded.revision,
-    result: transition,
-    appliedRule: appliedRuleFor(event, transition),
-  });
+  const saved = await persist(persistenceInput(currentUserId, loaded, event, transition));
   return executionResult({
     status: "APPLIED",
     currentUserId,
@@ -361,11 +369,8 @@ export async function commitProductEventIfAttemptCurrent(
   }
   try {
     const owned = await deps.store.commitOwnedTransition({
-      currentUserId,
-      expectedRevision: loaded.revision,
-      result: transition,
+      ...persistenceInput(currentUserId, loaded, event, transition),
       requireAttempt: input.authority,
-      appliedRule: appliedRuleFor(event, transition),
     });
     if (owned.status !== "COMMITTED") {
       return null;
@@ -494,12 +499,9 @@ export async function executeShareLinkResolved(
     }
     try {
       const persisted = await deps.store.persistShareLinkResolved({
-        currentUserId,
-        expectedRevision: loaded.revision,
-        result: transition,
+        ...persistenceInput(currentUserId, loaded, event, transition),
         banId: input.targetBanId,
         receiverId: input.receiverId,
-        appliedRule: appliedRuleFor(event, transition),
       });
       if (persisted.status === "BIND_REJECTED") {
         const durable = await deps.store.loadProductSnapshot(currentUserId);

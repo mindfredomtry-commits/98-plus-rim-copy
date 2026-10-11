@@ -605,14 +605,14 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
   it("serializes sender and receiver answers into one derived Status", async () => {
     const receiverId = await identity("check-both-receiver");
     const senderId = await identity("check-both-sender");
-    const { pairId, receiverWorld, senderWorld } = checkWorld(receiverId, senderId);
+    const { pairId, banId, receiverWorld, senderWorld } = checkWorld(receiverId, senderId);
     await seed(receiverId, receiverWorld);
     await seed(senderId, senderWorld);
     const storeA = new PostgresProductStore(db.sql);
     const storeB = new PostgresProductStore(db.sql);
     const names = await contend(SQL.selectPairForUpdate, [pairId], 2, () =>
       Promise.all([
-        storeA.withCheckPairLock(pairId, receiverId, async (ctx) => {
+        storeA.withCheckPairLock(pairId, banId, receiverId, async (ctx) => {
           const loaded = await ctx.loadProductSnapshot(receiverId);
           const pair = ctx.pair ?? loaded.snapshot.extended.entities.checkPairs[pairId]!;
           const event =
@@ -641,7 +641,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
           });
           return event.name;
         }),
-        storeB.withCheckPairLock(pairId, senderId, async (ctx) => {
+        storeB.withCheckPairLock(pairId, banId, senderId, async (ctx) => {
           const loaded = await ctx.loadProductSnapshot(senderId);
           const pair = ctx.pair ?? loaded.snapshot.extended.entities.checkPairs[pairId]!;
           const event =
@@ -696,7 +696,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
   it("rejects a second FIRST after the other participant already answered", async () => {
     const receiverId = await identity("check-boundary-receiver");
     const senderId = await identity("check-boundary-sender");
-    const { pairId, receiverWorld, senderWorld } = checkWorld(receiverId, senderId);
+    const { pairId, banId, receiverWorld, senderWorld } = checkWorld(receiverId, senderId);
     const receiverSeed = await seed(receiverId, receiverWorld);
     const senderSeed = await seed(senderId, senderWorld);
     const storeA = new PostgresProductStore(db.sql);
@@ -723,14 +723,14 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
     expect(senderFirst.outcome).toBe("APPLIED");
     const settled = await contend(SQL.selectPairForUpdate, [pairId], 2, () =>
       Promise.allSettled([
-        storeA.withCheckPairLock(pairId, receiverId, (ctx) =>
+        storeA.withCheckPairLock(pairId, banId, receiverId, (ctx) =>
           ctx.persistTransition({
             currentUserId: receiverId,
             expectedRevision: receiverSeed.revision,
             result: receiverFirst,
           }),
         ),
-        storeB.withCheckPairLock(pairId, senderId, (ctx) =>
+        storeB.withCheckPairLock(pairId, banId, senderId, (ctx) =>
           ctx.persistTransition({
             currentUserId: senderId,
             expectedRevision: senderSeed.revision,
@@ -1064,7 +1064,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
   it("deadlocks opposite session and pair order, and the store order completes", async () => {
     const receiverId = await identity("deadlock-receiver");
     const senderId = await identity("deadlock-sender");
-    const { pairId, receiverWorld, senderWorld } = checkWorld(receiverId, senderId);
+    const { pairId, banId, receiverWorld, senderWorld } = checkWorld(receiverId, senderId);
     const seeded = await seed(receiverId, receiverWorld);
     await seed(senderId, senderWorld);
     const sessionHeld = deferred();
@@ -1108,7 +1108,7 @@ describe.skipIf(!databaseUrl)("real PostgreSQL concurrency invariants", () => {
     expect(closed.outcome).toBe("APPLIED");
     const ordered = await contend(SQL.selectSessionForUpdate, [receiverId], 2, () =>
       Promise.allSettled([
-        storeA.withCheckPairLock(pairId, receiverId, (ctx) =>
+        storeA.withCheckPairLock(pairId, banId, receiverId, (ctx) =>
           ctx.persistTransition({
             currentUserId: receiverId,
             expectedRevision: seeded.revision,

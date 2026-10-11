@@ -14,6 +14,17 @@ export { SNAPSHOT_FIELD_CLASSIFICATION } from "./classification.ts";
 export type { SnapshotFieldClass } from "./classification.ts";
 export { PersistenceError } from "./errors.ts";
 export type { PersistenceErrorCode } from "./errors.ts";
+export {
+  baselineFromLoadedSnapshot,
+  deriveEntityWriteSet,
+  emptyBaseline,
+} from "./hybrid-persist.ts";
+export type {
+  BanMutationAuthority,
+  EntityWriteSet,
+  PersistenceBaseline,
+  ProductTransactionLockPlan,
+} from "./hybrid-persist.ts";
 export { InMemoryProductStore } from "./in-memory-store.ts";
 export { MemorySqlClient } from "./memory-sql.ts";
 export {

@@ -502,6 +502,10 @@ export class MemorySqlClient implements PersistenceSqlClient {
       case SQL.selectItemsForUser: {
         return rows(this.tables.listItemsForUser(String(params[0])).map(itemToRow));
       }
+      case SQL.selectItemById: {
+        const item = this.tables.getItem(String(params[0]));
+        return rows(item ? [itemToRow(item)] : []);
+      }
       case SQL.upsertItem: {
         const item = decodeNotificationItem({
           item_id: String(params[0]),
@@ -636,7 +640,8 @@ export class MemorySqlClient implements PersistenceSqlClient {
         });
         return rows([{ attempt_id: current.attemptId }]);
       }
-      case SQL.selectBanById: {
+      case SQL.selectBanById:
+      case SQL.selectBanForUpdate: {
         const ban = this.tables.getBan(String(params[0]));
         if (!ban) {
           return rows([]);
@@ -655,6 +660,26 @@ export class MemorySqlClient implements PersistenceSqlClient {
             created_seq: ban.createdSeq,
           },
         ]);
+      }
+      case SQL.selectTimerForUpdate: {
+        const timer = this.tables.getTimer(String(params[0]));
+        if (!timer) {
+          return rows([]);
+        }
+        return rows([
+          {
+            timer_id: timer.id,
+            ban_id: timer.banId,
+            started_at: timer.startedAt,
+            duration_minutes: timer.durationMinutes,
+            state: timer.state,
+            check_pair_created: timer.checkPairCreated,
+          },
+        ]);
+      }
+      case SQL.deleteOperationById: {
+        this.tables.deleteOperationById(params[0] as UserId, String(params[1]));
+        return rows([]);
       }
       case SQL.bindBanReceiverIfUnbound: {
         const result = this.tables.bindBanReceiver(String(params[0]), params[1] as UserId);

@@ -5,8 +5,10 @@ import {
   type ProductEventInput,
 } from "@98plus/application";
 import type { AuthenticatedContext } from "@98plus/identity";
+import { baselineFromLoadedSnapshot } from "@98plus/persistence";
 import {
   asInstant,
+  CANONICAL_EVENT_DEFINITIONS,
   reduce,
   type CheckAnswer,
   type CheckDerivedStatus,
@@ -141,6 +143,7 @@ export async function completeCheckAnswer(
   const answer = answerOfPress(press.event.name);
   return runtime.productStore.withCheckPairLock(
     item.checkPairId,
+    item.banId,
     context.currentUserId,
     async (locked) => {
       const loaded = await locked.loadProductSnapshot(context.currentUserId);
@@ -186,10 +189,19 @@ export async function completeCheckAnswer(
           error: null,
         };
       }
+      const definition = CANONICAL_EVENT_DEFINITIONS.find((item) => item.name === canonical.name);
+      const match = definition
+        ? [...transition.traces].reverse().find((trace) => trace.eventId === definition.id)
+        : undefined;
       const saved = await locked.persistTransition({
         currentUserId: context.currentUserId,
         expectedRevision: loaded.revision,
         result: transition,
+        baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
+        appliedRule:
+          definition && match
+            ? { eventId: definition.id, branch: match.branch }
+            : undefined,
       });
       return {
         status: "APPLIED",

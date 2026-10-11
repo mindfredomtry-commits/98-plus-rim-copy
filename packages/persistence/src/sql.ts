@@ -250,6 +250,28 @@ SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, s
 FROM bans
 WHERE ban_id = $1
 `.trim(),
+  selectBanForUpdate: `
+SELECT ban_id, sender_id, receiver_id, ban_text, duration_minutes, acceptance, status,
+       bound_via_telegram_share_link, source_proposal_id, created_seq
+FROM bans
+WHERE ban_id = $1
+FOR UPDATE
+`.trim(),
+  selectTimerForUpdate: `
+SELECT timer_id, ban_id, started_at, duration_minutes, state, check_pair_created
+FROM domain_timers
+WHERE timer_id = $1
+FOR UPDATE
+`.trim(),
+  deleteOperationById: `
+DELETE FROM pending_operations
+WHERE owner_id = $1 AND operation_id = $2
+`.trim(),
+  selectItemById: `
+SELECT item_id, owner_id, ban_id, kind, fifo_sequence, lifecycle_status, lifecycle_display,
+       role, check_pair_id, domain_timer_id, status
+FROM notification_items WHERE item_id = $1
+`.trim(),
   bindBanReceiverIfUnbound: `
 UPDATE bans
 SET receiver_id = $2

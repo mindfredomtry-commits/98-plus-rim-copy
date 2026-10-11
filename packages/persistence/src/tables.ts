@@ -131,6 +131,7 @@ export function emptyTables(): ProductTablesSnapshot {
 export class ProductTables {
   private data = emptyTables();
   private pairLockTail = new Map<string, Promise<unknown>>();
+  private banLockTail = new Map<string, Promise<unknown>>();
 
   snapshot(): ProductTablesSnapshot {
     return cloneTables(this.data);
@@ -140,9 +141,9 @@ export class ProductTables {
     this.data = cloneTables(snapshot);
   }
 
-  async withPairLock<T>(pairId: string, run: () => Promise<T>): Promise<T> {
+  async withPairLock<T>(pairId: string, run: () => Promise<T> | T): Promise<T> {
     const previous = this.pairLockTail.get(pairId) ?? Promise.resolve();
-    const current = previous.then(run, run);
+    const current = previous.then(() => run(), () => run());
     this.pairLockTail.set(
       pairId,
       current.then(
@@ -151,6 +152,30 @@ export class ProductTables {
       ),
     );
     return current;
+  }
+
+  async withBanLock<T>(banId: string, run: () => Promise<T> | T): Promise<T> {
+    const previous = this.banLockTail.get(banId) ?? Promise.resolve();
+    const current = previous.then(() => run(), () => run());
+    this.banLockTail.set(
+      banId,
+      current.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return current;
+  }
+
+  async withOrderedBanLocks<T>(banIds: readonly string[], run: () => Promise<T> | T): Promise<T> {
+    const ordered = [...new Set(banIds)].sort((a, b) => a.localeCompare(b));
+    const acquire = async (index: number): Promise<T> => {
+      if (index >= ordered.length) {
+        return run();
+      }
+      return this.withBanLock(ordered[index]!, () => acquire(index + 1));
+    };
+    return acquire(0);
   }
 
   getPair(pairId: string): CheckPair | undefined {
@@ -334,6 +359,23 @@ export class ProductTables {
   upsertOperation(ownerId: UserId, operation: PendingOperation): void {
     this.requireUser(ownerId, "pending_operations.owner_id");
     this.data.operations.set(operation.operationId, { ...cloneJson(operation), ownerId });
+  }
+
+  deleteOperationById(ownerId: UserId, operationId: string): void {
+    const existing = this.data.operations.get(operationId);
+    if (existing && existing.ownerId === ownerId) {
+      this.data.operations.delete(operationId);
+    }
+  }
+
+  getItem(itemId: string): NotificationItem | undefined {
+    const item = this.data.items.get(itemId);
+    return item ? cloneJson(item) : undefined;
+  }
+
+  getTimer(timerId: string): DomainTimer | undefined {
+    const timer = this.data.timers.get(timerId);
+    return timer ? cloneJson(timer) : undefined;
   }
 
   replaceOperations(ownerId: UserId, operations: readonly PendingOperation[]): void {

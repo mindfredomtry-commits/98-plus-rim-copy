@@ -86,7 +86,7 @@ function expectInvariant(error: unknown, field: string): void {
 }
 
 describe("Defect A — snapshot to database synchronization", () => {
-  it("A1. a durable fact removed from the authoritative snapshot does not reappear after persist + reload", async () => {
+  it("A1. 12D-1 product writes do not wipe owner-absent items/ops (effect-scoped only)", async () => {
     const { kit, store, memory } = await registeredKit();
     if (!memory) {
       throw new Error("expected in-memory harness");
@@ -105,12 +105,13 @@ describe("Defect A — snapshot to database synchronization", () => {
       result,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
-    expect(loaded.snapshot.extended.entities.notificationItems[STALE_ITEM_ID]).toBeUndefined();
-    expect(loaded.snapshot.runtime.pendingOperations[STALE_OP_ID]).toBeUndefined();
+    // Hybrid persistence: absence from the actor snapshot is not a delete authorization.
+    expect(loaded.snapshot.extended.entities.notificationItems[STALE_ITEM_ID]).toBeDefined();
+    expect(loaded.snapshot.runtime.pendingOperations[STALE_OP_ID]).toBeDefined();
     expect(Object.values(loaded.snapshot.extended.entities.checkPairs)).toHaveLength(1);
   });
 
-  it("A1. postgres SQL path also deletes owner-absent items and operations atomically with the transition", async () => {
+  it("A1. postgres SQL path retains owner-absent items/ops; wipe SQL remains seed-only", async () => {
     const { kit, store, sql } = await registeredKit("postgres");
     if (!sql) {
       throw new Error("expected memory SQL client");
@@ -126,11 +127,12 @@ describe("Defect A — snapshot to database synchronization", () => {
       result,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
-    expect(loaded.snapshot.extended.entities.notificationItems[STALE_ITEM_ID]).toBeUndefined();
-    expect(loaded.snapshot.runtime.pendingOperations[STALE_OP_ID]).toBeUndefined();
+    expect(loaded.snapshot.extended.entities.notificationItems[STALE_ITEM_ID]).toBeDefined();
+    expect(loaded.snapshot.runtime.pendingOperations[STALE_OP_ID]).toBeDefined();
     expect(SQL.deleteItemsNotIn).toContain("DELETE FROM notification_items");
     expect(SQL.deleteSharesNotIn).toContain("DELETE FROM share_operations");
     expect(SQL.deleteOpsNotIn).toContain("DELETE FROM pending_operations");
+    expect(SQL.deleteOperationById).toContain("DELETE FROM pending_operations");
   });
 
   it("A2. historical facts absent from a user-scoped snapshot are retained, not deleted", async () => {

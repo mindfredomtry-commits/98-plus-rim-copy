@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { Ban, ProductSnapshot, TransitionResult, UserId } from "@98plus/product-model";
+import type {
+  Ban,
+  CheckPair,
+  ProductSnapshot,
+  TransitionResult,
+  UserId,
+} from "@98plus/product-model";
 import type { BanId } from "@98plus/product-model";
 import {
   boundExistingClaimBan,
@@ -10,9 +16,23 @@ import {
   type ClaimTemplateShareInput,
   type ClaimTemplateShareResult,
 } from "./claim-template-share.ts";
-import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
+import { mergeBan } from "./ban-merge.ts";
+import {
+  assertBanPairStatusConsistency,
+  assertCheckPairWriteAllowed,
+  mergeCheckPair,
+} from "./check-pair-write.ts";
 import { cloneJson, sessionFromSnapshot, snapshotFromRecords } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
+import {
+  assertWriteSetCoveredByLockPlan,
+  baselineFromLoadedSnapshot,
+  sharedWriteContextForTransition,
+  snapshotEntitiesForWriteSet,
+  type SharedWriteContext,
+} from "./hybrid-persist.ts";
+import { mergeNotificationItem } from "./item-write.ts";
+import { mergeDomainTimer } from "./timer-merge.ts";
 import {
   assertRimOwnershipAttemptId,
   assertRimOwnershipInvalidationReason,
@@ -88,12 +108,20 @@ export class InMemoryProductStore implements ProductStore {
 
   async persistTransition(input: PersistTransitionInput): Promise<LoadedSnapshot> {
     const snapshot = requireApplied(input.result);
+    const shared = sharedWriteContextForTransition({
+      currentUserId: input.currentUserId,
+      expectedRevision: input.expectedRevision,
+      result: input.result,
+      baseline: input.baseline,
+      appliedRule: input.appliedRule,
+    });
     return this.write(
       input.currentUserId,
       input.expectedRevision,
       snapshot,
       false,
       input.appliedRule,
+      shared,
     );
   }
 
@@ -101,8 +129,21 @@ export class InMemoryProductStore implements ProductStore {
     input: CommitOwnedTransitionInput,
   ): Promise<CommitOwnedTransitionResult> {
     const snapshot = requireApplied(input.result);
-    return this.withUserLock(input.currentUserId, () =>
-      this.tables.transaction(() => {
+    const shared = sharedWriteContextForTransition({
+      currentUserId: input.currentUserId,
+      expectedRevision: input.expectedRevision,
+      result: input.result,
+      baseline: input.baseline,
+      appliedRule: input.appliedRule,
+      held: {
+        sessionUserIds: new Set([input.currentUserId]),
+        banIds: new Set(),
+        timerIds: new Set(),
+        checkPairIds: new Set(),
+      },
+    });
+    return this.withUserLock(input.currentUserId, async () => {
+      const run = (): CommitOwnedTransitionResult => {
         const current = this.tables.lockSession(input.currentUserId);
         if (!current || current.revision !== input.expectedRevision) {
           throw new PersistenceError(
@@ -123,10 +164,17 @@ export class InMemoryProductStore implements ProductStore {
           false,
           "rimProviderRuntime" in input ? input.rimProviderRuntime : undefined,
           input.appliedRule,
+          shared,
         );
         return { status: "COMMITTED" as const, loaded };
-      }),
-    );
+      };
+      if (shared.lockPlan.banIds.length === 0) {
+        return this.tables.transaction(run);
+      }
+      return this.tables.withOrderedBanLocks([...shared.lockPlan.banIds], () =>
+        this.tables.transaction(run),
+      );
+    });
   }
 
   async saveRimProviderRuntime(
@@ -408,6 +456,19 @@ export class InMemoryProductStore implements ProductStore {
                 "Only an APPLIED Product Kernel TransitionResult may be persisted",
               );
             }
+            const shared = sharedWriteContextForTransition({
+              currentUserId: input.currentUserId,
+              expectedRevision: input.expectedRevision,
+              result: input.result,
+              baseline: input.baseline,
+              appliedRule: input.appliedRule,
+              held: {
+                sessionUserIds: new Set([input.currentUserId]),
+                banIds: new Set(),
+                timerIds: new Set(),
+                checkPairIds: new Set(),
+              },
+            });
             return this.writeUnlocked(
               input.currentUserId,
               input.expectedRevision,
@@ -415,6 +476,7 @@ export class InMemoryProductStore implements ProductStore {
               false,
               undefined,
               input.appliedRule,
+              shared,
             );
           },
         };
@@ -505,16 +567,56 @@ export class InMemoryProductStore implements ProductStore {
 
   async withCheckPairLock<T>(
     pairId: string,
+    banId: BanId,
     currentUserId: UserId,
     run: (context: CheckPairLockContext) => Promise<T>,
   ): Promise<T> {
-    this.tables.lockSession(currentUserId);
-    return this.tables.withPairLock(pairId, async () =>
-      run({
-        pair: this.tables.getPair(pairId) ?? null,
-        loadProductSnapshot: async (currentUserId) => this.read(currentUserId),
-        persistTransition: (input) => this.persistTransition(input),
-      }),
+    return this.withUserLock(currentUserId, () =>
+      this.tables.withBanLock(banId, () =>
+        this.tables.withPairLock(pairId, async () => {
+          const pair = this.tables.getPair(pairId) ?? null;
+          if (pair && pair.banId !== banId) {
+            throw new PersistenceError(
+              "INVARIANT",
+              "withCheckPairLock banId does not match CheckPair.banId under lock",
+            );
+          }
+          return run({
+            pair,
+            loadProductSnapshot: async (userId) => this.read(userId),
+            persistTransition: async (input) => {
+              const snapshot = requireApplied(input.result);
+              const shared = sharedWriteContextForTransition({
+                currentUserId: input.currentUserId,
+                expectedRevision: input.expectedRevision,
+                result: input.result,
+                baseline: input.baseline,
+                appliedRule: input.appliedRule,
+                held: {
+                  sessionUserIds: new Set([currentUserId]),
+                  banIds: new Set([banId]),
+                  timerIds: new Set(),
+                  checkPairIds: new Set([pairId]),
+                },
+                applicationAuthorizedBanIds: [banId],
+                extraBanIds: [banId],
+                extraCheckPairIds: [pairId as CheckPair["id"]],
+              });
+              return this.tables.transaction(() =>
+                this.writeUnlocked(
+                  input.currentUserId,
+                  input.expectedRevision,
+                  snapshot,
+                  false,
+                  undefined,
+                  input.appliedRule,
+                  shared,
+                ),
+              );
+            },
+          });
+        }),
+      ),
     );
   }
 
@@ -550,8 +652,13 @@ export class InMemoryProductStore implements ProductStore {
       if (!stored) {
         return { status: "REJECTED" as const, reason: "UNKNOWN_TOKEN" as const };
       }
+      const banId = stored.createdBanId;
+      const runClaim = () =>
+        this.tables.transaction(() => this.claimTemplateShareUnlocked(input));
       return this.withOrderedUserLocks([stored.ownerId, input.receiverId], () =>
-        this.tables.transaction(() => this.claimTemplateShareUnlocked(input)),
+        banId
+          ? this.tables.withBanLock(banId, runClaim)
+          : runClaim(),
       );
     });
   }
@@ -573,24 +680,50 @@ export class InMemoryProductStore implements ProductStore {
     input: PersistShareLinkResolvedInput,
   ): Promise<PersistShareLinkResolvedResult> {
     const snapshot = requireApplied(input.result);
+    const shared = sharedWriteContextForTransition({
+      currentUserId: input.currentUserId,
+      expectedRevision: input.expectedRevision,
+      result: input.result,
+      baseline: input.baseline,
+      appliedRule: input.appliedRule,
+      applicationAuthorizedBanIds: [input.banId],
+      extraBanIds: [input.banId],
+      held: {
+        sessionUserIds: new Set([input.currentUserId]),
+        banIds: new Set([input.banId]),
+        timerIds: new Set(),
+        checkPairIds: new Set(),
+      },
+    });
     return this.withUserLock(input.currentUserId, () =>
-      this.tables.transaction(() => {
-        const bind = this.tables.bindBanReceiver(input.banId, input.receiverId);
-        if (bind.status === "MISSING" || bind.status === "CONFLICT") {
-          return { status: "BIND_REJECTED" as const, bindStatus: bind.status };
-        }
-        const loaded = this.writeUnlocked(
-          input.currentUserId,
-          input.expectedRevision,
-          snapshot,
-          false,
-        );
-        return {
-          status: "PERSISTED" as const,
-          loaded,
-          bindStatus: bind.status,
-        };
-      }),
+      this.tables.withBanLock(input.banId, () =>
+        this.tables.transaction(() => {
+          const bind = this.tables.bindBanReceiver(input.banId, input.receiverId);
+          if (bind.status === "MISSING" || bind.status === "CONFLICT") {
+            return { status: "BIND_REJECTED" as const, bindStatus: bind.status };
+          }
+          const loaded = this.writeUnlocked(
+            input.currentUserId,
+            input.expectedRevision,
+            snapshot,
+            false,
+            undefined,
+            input.appliedRule,
+            {
+              ...shared,
+              mutationAuthority:
+                shared.mutationAuthority.kind === "PRESERVE_ONLY"
+                  ? { kind: "BIND_RECEIVER" }
+                  : shared.mutationAuthority,
+            },
+          );
+          return {
+            status: "PERSISTED" as const,
+            loaded,
+            bindStatus: bind.status,
+          };
+        }),
+      ),
     );
   }
 
@@ -612,6 +745,8 @@ export class InMemoryProductStore implements ProductStore {
     if (classification.action === "REJECTED") {
       return { status: "REJECTED", reason: classification.reason };
     }
+    // Ban lock is acquired by claimTemplateShare before this unlocked body when async;
+    // synchronous path serializes via withOrderedUserLocks + shared Ban id freeze.
     const cas = this.tables.bindBanReceiver(classification.banId, input.receiverId);
     if (cas.status === "ALREADY_BOUND") {
       return { status: "ALREADY_BOUND", banId: classification.banId };
@@ -661,7 +796,40 @@ export class InMemoryProductStore implements ProductStore {
       transition.snapshot,
       share.attemptId,
     );
-    const written = this.writeUnlocked(input.receiverId, loaded.revision, persisted, false);
+    const receiverTrace = [...transition.traces]
+      .reverse()
+      .find((item) => item.eventId !== "LATE_RESULT");
+    const receiverRule =
+      receiverTrace && receiverTrace.eventId !== "LATE_RESULT"
+        ? { eventId: receiverTrace.eventId, branch: receiverTrace.branch }
+        : undefined;
+    const receiverShared = sharedWriteContextForTransition({
+      currentUserId: input.receiverId,
+      expectedRevision: loaded.revision,
+      result: { ...transition, snapshot: persisted },
+      baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
+      appliedRule: receiverRule,
+      shareToken: input.token,
+      extraSessionUserIds: [ownerId],
+      freezeBanIds: [classification.banId],
+      applicationAuthorizedBanIds: [classification.banId],
+      held: {
+        sessionUserIds: new Set([ownerId, input.receiverId]),
+        banIds: new Set([classification.banId]),
+        timerIds: new Set(),
+        checkPairIds: new Set(),
+      },
+    });
+    assertWriteSetCoveredByLockPlan(receiverShared.writeSet, receiverShared.lockPlan);
+    const written = this.writeUnlocked(
+      input.receiverId,
+      loaded.revision,
+      persisted,
+      false,
+      undefined,
+      receiverRule,
+      receiverShared,
+    );
     const confirmedShare = {
       ...share,
       status: "CONFIRMED" as const,
@@ -682,7 +850,39 @@ export class InMemoryProductStore implements ProductStore {
           "CREATE_BAN.CLAIM_OBSERVED did not apply for the pending sender",
         );
       }
-      this.writeUnlocked(ownerId, sender.revision, observation.snapshot, false);
+      const senderTrace = [...observation.traces]
+        .reverse()
+        .find((item) => item.eventId !== "LATE_RESULT");
+      const senderRule =
+        senderTrace && senderTrace.eventId !== "LATE_RESULT"
+          ? { eventId: senderTrace.eventId, branch: senderTrace.branch }
+          : { eventId: "E-65" as const, branch: "claim-observed" };
+      const senderShared = sharedWriteContextForTransition({
+        currentUserId: ownerId,
+        expectedRevision: sender.revision,
+        result: observation,
+        baseline: baselineFromLoadedSnapshot(sender.snapshot, sender.revision),
+        appliedRule: senderRule,
+        shareToken: input.token,
+        extraSessionUserIds: [input.receiverId],
+        freezeBanIds: [classification.banId],
+        held: {
+          sessionUserIds: new Set([ownerId, input.receiverId]),
+          banIds: new Set([classification.banId]),
+          timerIds: new Set(),
+          checkPairIds: new Set(),
+        },
+      });
+      assertWriteSetCoveredByLockPlan(senderShared.writeSet, senderShared.lockPlan);
+      this.writeUnlocked(
+        ownerId,
+        sender.revision,
+        observation.snapshot,
+        false,
+        undefined,
+        senderRule,
+        senderShared,
+      );
     }
     return {
       status: "CLAIMED",
@@ -714,7 +914,10 @@ export class InMemoryProductStore implements ProductStore {
     }
   }
 
-  private async withOrderedUserLocks<T>(userIds: readonly UserId[], fn: () => T): Promise<T> {
+  private async withOrderedUserLocks<T>(
+    userIds: readonly UserId[],
+    fn: () => Promise<T> | T,
+  ): Promise<T> {
     const ordered = [...new Set(userIds)].sort();
     const acquired: Array<{ userId: UserId; release: () => void; gate: Promise<void> }> = [];
     try {
@@ -729,7 +932,7 @@ export class InMemoryProductStore implements ProductStore {
         await previous;
         acquired.push({ userId, release, gate });
       }
-      return fn();
+      return await fn();
     } finally {
       for (const lock of acquired.reverse()) {
         lock.release();
@@ -781,7 +984,7 @@ export class InMemoryProductStore implements ProductStore {
     return { status: "INVALIDATED", ownership: ownershipFromMemory(next) };
   }
 
-  private async withUserLock<T>(userId: UserId, fn: () => T): Promise<T> {
+  private async withUserLock<T>(userId: UserId, fn: () => Promise<T> | T): Promise<T> {
     const previous = this.userLocks.get(userId) ?? Promise.resolve();
     let release: () => void = () => undefined;
     const current = new Promise<void>((resolve) => {
@@ -833,12 +1036,24 @@ export class InMemoryProductStore implements ProductStore {
     snapshot: ProductSnapshot,
     seed: boolean,
     appliedRule?: PersistTransitionInput["appliedRule"],
+    shared?: SharedWriteContext,
   ): Promise<LoadedSnapshot> {
-    return this.withUserLock(currentUserId, () =>
-      this.tables.transaction(() =>
-        this.writeUnlocked(currentUserId, expectedRevision, snapshot, seed, undefined, appliedRule),
-      ),
-    );
+    return this.withUserLock(currentUserId, () => {
+      const banIds = seed ? [] : [...(shared?.lockPlan.banIds ?? [])];
+      const run = () =>
+        this.tables.transaction(() =>
+          this.writeUnlocked(
+            currentUserId,
+            expectedRevision,
+            snapshot,
+            seed,
+            undefined,
+            appliedRule,
+            shared,
+          ),
+        );
+      return banIds.length > 0 ? this.tables.withOrderedBanLocks(banIds, run) : run();
+    });
   }
 
   private writeUnlocked(
@@ -848,11 +1063,18 @@ export class InMemoryProductStore implements ProductStore {
     seed: boolean,
     runtimeReplacement?: unknown,
     appliedRule?: PersistTransitionInput["appliedRule"],
+    shared?: SharedWriteContext,
   ): LoadedSnapshot {
     if (!this.tables.hasUser(currentUserId)) {
       throw new PersistenceError(
         "IDENTITY_REQUIRED",
         "Persistence operations require an authenticated identity_users.user_id",
+      );
+    }
+    if (!seed && !shared) {
+      throw new PersistenceError(
+        "INVARIANT",
+        "Product writes require a SharedWriteContext (hybrid persistence)",
       );
     }
     const current = this.tables.lockSession(currentUserId);
@@ -865,23 +1087,73 @@ export class InMemoryProductStore implements ProductStore {
     }
     const nextRevision = currentRevision + 1;
     const entities = snapshot.extended.entities;
-    for (const ban of Object.values(entities.bans)) {
-      this.tables.upsertBan(ban);
+    if (seed) {
+      for (const ban of Object.values(entities.bans)) {
+        this.tables.upsertBan(ban);
+      }
+      if (this.failAfterBans) {
+        this.failAfterBans = false;
+        throw new PersistenceError("TRANSACTION_FAILED", "injected failure after Ban write");
+      }
+      for (const timer of Object.values(entities.domainTimers)) {
+        this.tables.upsertTimer(timer);
+      }
+      for (const pair of Object.values(entities.checkPairs)) {
+        assertCheckPairWriteAllowed(this.tables.getPair(pair.id), pair);
+        this.tables.upsertPair(pair);
+      }
+      this.tables.replaceOwnedItems(currentUserId, Object.values(entities.notificationItems));
+      this.tables.replaceOwnedShares(currentUserId, Object.values(entities.shareOperations));
+      this.tables.replaceOperations(currentUserId, Object.values(snapshot.runtime.pendingOperations));
+    } else if (shared) {
+      assertWriteSetCoveredByLockPlan(shared.writeSet, shared.lockPlan);
+      const toWrite = snapshotEntitiesForWriteSet(snapshot, shared.writeSet);
+      const mergedBans = new Map<string, Ban>();
+      for (const nextBan of toWrite.bans) {
+        const dbBan = this.tables.getBan(nextBan.id);
+        const durable = dbBan
+          ? (({ createdSeq: _s, createdAtMs: _c, ...rest }) => rest as Ban)(dbBan)
+          : undefined;
+        const baselineBan = shared.baseline.bans[nextBan.id];
+        const merged = mergeBan(durable, baselineBan, nextBan, shared.mutationAuthority);
+        mergedBans.set(merged.id, merged);
+        this.tables.upsertBan(merged);
+      }
+      if (this.failAfterBans) {
+        this.failAfterBans = false;
+        throw new PersistenceError("TRANSACTION_FAILED", "injected failure after Ban write");
+      }
+      for (const nextTimer of toWrite.timers) {
+        const merged = mergeDomainTimer(this.tables.getTimer(nextTimer.id), nextTimer);
+        this.tables.upsertTimer(merged);
+      }
+      for (const nextPair of [...toWrite.pairs].sort((a, b) => a.id.localeCompare(b.id))) {
+        const merged = mergeCheckPair(this.tables.getPair(nextPair.id), nextPair);
+        const banRow =
+          mergedBans.get(merged.banId) ??
+          (() => {
+            const row = this.tables.getBan(merged.banId);
+            return row
+              ? (({ createdSeq: _s, createdAtMs: _c, ...rest }) => rest as Ban)(row)
+              : undefined;
+          })();
+        assertBanPairStatusConsistency(banRow, merged);
+        this.tables.upsertPair(merged);
+      }
+      for (const nextItem of toWrite.items) {
+        const merged = mergeNotificationItem(this.tables.getItem(nextItem.id), nextItem);
+        this.tables.upsertItem(merged);
+      }
+      for (const opId of shared.writeSet.operationIdsToDelete) {
+        this.tables.deleteOperationById(currentUserId, opId);
+      }
+      for (const operation of toWrite.operations) {
+        this.tables.upsertOperation(currentUserId, operation);
+      }
+      for (const share of toWrite.shares) {
+        this.tables.upsertShare(currentUserId, share);
+      }
     }
-    if (this.failAfterBans) {
-      this.failAfterBans = false;
-      throw new PersistenceError("TRANSACTION_FAILED", "injected failure after Ban write");
-    }
-    for (const timer of Object.values(entities.domainTimers)) {
-      this.tables.upsertTimer(timer);
-    }
-    for (const pair of Object.values(entities.checkPairs)) {
-      assertCheckPairWriteAllowed(this.tables.getPair(pair.id), pair);
-      this.tables.upsertPair(pair);
-    }
-    this.tables.replaceOwnedItems(currentUserId, Object.values(entities.notificationItems));
-    this.tables.replaceOwnedShares(currentUserId, Object.values(entities.shareOperations));
-    this.tables.replaceOperations(currentUserId, Object.values(snapshot.runtime.pendingOperations));
     if (appliedRule && rimChatTerminationReason(appliedRule)) {
       this.tables.abandonOpenOwnership(currentUserId, Date.now());
     }

@@ -666,6 +666,7 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
       Promise.all([
         runtimeA.store.withCheckPairLock(
           both.pairId,
+          both.banId,
           both.receiverWorld.extended.entities.bans[both.banId]!.receiverId!,
           async (ctx) => {
             const currentUserId =
@@ -699,7 +700,7 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
             return event.name;
           },
         ),
-        runtimeB.store.withCheckPairLock(both.pairId, bothSender, async (ctx) => {
+        runtimeB.store.withCheckPairLock(both.pairId, both.banId, bothSender, async (ctx) => {
           const loaded = await ctx.loadProductSnapshot(bothSender);
           const seen = ctx.pair ?? loaded.snapshot.extended.entities.checkPairs[both.pairId]!;
           const event =
@@ -783,19 +784,27 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     );
     const raced = await contend(SQL.selectPairForUpdate, [boundary.pairId], () =>
       Promise.allSettled([
-        runtimeA.store.withCheckPairLock(boundary.pairId, boundaryReceiver.userId, (ctx) =>
-          ctx.persistTransition({
-            currentUserId: boundaryReceiver.userId,
-            expectedRevision: boundaryReceiverSeed.revision,
-            result: receiverFirst,
-          }),
+        runtimeA.store.withCheckPairLock(
+          boundary.pairId,
+          boundary.banId,
+          boundaryReceiver.userId,
+          (ctx) =>
+            ctx.persistTransition({
+              currentUserId: boundaryReceiver.userId,
+              expectedRevision: boundaryReceiverSeed.revision,
+              result: receiverFirst,
+            }),
         ),
-        runtimeB.store.withCheckPairLock(boundary.pairId, boundarySender.userId, (ctx) =>
-          ctx.persistTransition({
-            currentUserId: boundarySender.userId,
-            expectedRevision: boundarySenderSeed.revision,
-            result: senderFirst,
-          }),
+        runtimeB.store.withCheckPairLock(
+          boundary.pairId,
+          boundary.banId,
+          boundarySender.userId,
+          (ctx) =>
+            ctx.persistTransition({
+              currentUserId: boundarySender.userId,
+              expectedRevision: boundarySenderSeed.revision,
+              result: senderFirst,
+            }),
         ),
       ]),
     );

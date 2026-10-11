@@ -17,6 +17,7 @@ import type {
   RimChat,
   SessionStatus,
   ShareOperation,
+  TransitionResult,
   UserId,
 } from "@98plus/product-model";
 import { asInstant } from "@98plus/product-model";
@@ -35,8 +36,23 @@ import {
   sessionFromSnapshot,
   snapshotFromRecords,
 } from "./codec.ts";
-import { assertCheckPairWriteAllowed } from "./check-pair-write.ts";
+import { mergeBan } from "./ban-merge.ts";
+import {
+  assertBanPairStatusConsistency,
+  assertCheckPairWriteAllowed,
+  mergeCheckPair,
+} from "./check-pair-write.ts";
 import { PersistenceError } from "./errors.ts";
+import {
+  assertWriteSetCoveredByLockPlan,
+  baselineFromLoadedSnapshot,
+  sharedWriteContextForTransition,
+  snapshotEntitiesForWriteSet,
+  type HeldLockSet,
+  type SharedWriteContext,
+} from "./hybrid-persist.ts";
+import { mergeNotificationItem } from "./item-write.ts";
+import { mergeDomainTimer } from "./timer-merge.ts";
 import {
   assertRimOwnershipAttemptId,
   assertRimOwnershipInvalidationReason,
@@ -59,6 +75,7 @@ import {
 } from "./rim-history.ts";
 import { SQL } from "./sql.ts";
 import type {
+  AppliedProductRule,
   BanReceiverBindResult,
   CheckPairLockContext,
   CommitOwnedTransitionInput,
@@ -84,6 +101,16 @@ import type {
   RelationshipContextSource,
   StoredShareLookup,
 } from "./types.ts";
+
+function appliedRuleFromTraces(result: TransitionResult): AppliedProductRule | undefined {
+  const trace = [...result.traces]
+    .reverse()
+    .find((item) => item.eventId !== "LATE_RESULT");
+  if (!trace || trace.eventId === "LATE_RESULT") {
+    return undefined;
+  }
+  return { eventId: trace.eventId, branch: trace.branch };
+}
 
 type SessionRow = {
   user_id: string;
@@ -296,6 +323,13 @@ export class PostgresProductStore implements ProductStore {
         "Only an APPLIED Product Kernel TransitionResult may be persisted",
       );
     }
+    const shared = sharedWriteContextForTransition({
+      currentUserId: input.currentUserId,
+      expectedRevision: input.expectedRevision,
+      result: input.result,
+      baseline: input.baseline,
+      appliedRule: input.appliedRule,
+    });
     return this.write(
       input.currentUserId,
       input.expectedRevision,
@@ -303,6 +337,7 @@ export class PostgresProductStore implements ProductStore {
       false,
       undefined,
       input.appliedRule,
+      shared,
     );
   }
 
@@ -334,6 +369,19 @@ export class PostgresProductStore implements ProductStore {
             loaded: await this.read(tx, input.currentUserId),
           };
         }
+        const shared = sharedWriteContextForTransition({
+          currentUserId: input.currentUserId,
+          expectedRevision: input.expectedRevision,
+          result: input.result,
+          baseline: input.baseline,
+          appliedRule: input.appliedRule,
+          held: {
+            sessionUserIds: new Set([input.currentUserId]),
+            banIds: new Set(),
+            timerIds: new Set(),
+            checkPairIds: new Set(),
+          },
+        });
         const loaded = await this.writeOn(
           tx,
           input.currentUserId,
@@ -342,6 +390,7 @@ export class PostgresProductStore implements ProductStore {
           false,
           "rimProviderRuntime" in input ? input.rimProviderRuntime : undefined,
           input.appliedRule,
+          shared,
         );
         return { status: "COMMITTED" as const, loaded };
       });
@@ -683,6 +732,19 @@ export class PostgresProductStore implements ProductStore {
                 "Only an APPLIED Product Kernel TransitionResult may be persisted",
               );
             }
+            const shared = sharedWriteContextForTransition({
+              currentUserId: input.currentUserId,
+              expectedRevision: input.expectedRevision,
+              result: input.result,
+              baseline: input.baseline,
+              appliedRule: input.appliedRule,
+              held: {
+                sessionUserIds: new Set([input.currentUserId]),
+                banIds: new Set(),
+                timerIds: new Set(),
+                checkPairIds: new Set(),
+              },
+            });
             return this.writeOn(
               tx,
               input.currentUserId,
@@ -691,6 +753,7 @@ export class PostgresProductStore implements ProductStore {
               false,
               undefined,
               input.appliedRule,
+              shared,
             );
           },
         };
@@ -728,17 +791,31 @@ export class PostgresProductStore implements ProductStore {
 
   async withCheckPairLock<T>(
     pairId: string,
+    banId: BanId,
     currentUserId: UserId,
     run: (context: CheckPairLockContext) => Promise<T>,
   ): Promise<T> {
     return this.client.transaction(async (tx) => {
-      // Session row, then CheckPair row. Snapshot writes use the same order.
+      // Session → Ban → CheckPair (canonical order). Nested writes reuse held locks.
       await tx.query(SQL.selectSessionForUpdate, [currentUserId]);
+      await tx.query(SQL.selectBanForUpdate, [banId]);
       const locked = await tx.query<PairSqlRow>(SQL.selectPairForUpdate, [pairId]);
       const pair = locked.rows[0] ? pairFromRow(locked.rows[0]) : null;
+      if (pair && pair.banId !== banId) {
+        throw new PersistenceError(
+          "INVARIANT",
+          "withCheckPairLock banId does not match CheckPair.banId under lock",
+        );
+      }
+      const held: HeldLockSet = {
+        sessionUserIds: new Set([currentUserId]),
+        banIds: new Set([banId]),
+        timerIds: new Set(),
+        checkPairIds: new Set([pairId]),
+      };
       return run({
         pair,
-        loadProductSnapshot: (currentUserId) => this.read(tx, currentUserId),
+        loadProductSnapshot: (userId) => this.read(tx, userId),
         persistTransition: async (input) => {
           if (input.result.outcome !== "APPLIED") {
             throw new PersistenceError(
@@ -746,12 +823,26 @@ export class PostgresProductStore implements ProductStore {
               "Only an APPLIED Product Kernel TransitionResult may be persisted",
             );
           }
+          const shared = sharedWriteContextForTransition({
+            currentUserId: input.currentUserId,
+            expectedRevision: input.expectedRevision,
+            result: input.result,
+            baseline: input.baseline,
+            appliedRule: input.appliedRule,
+            held,
+            applicationAuthorizedBanIds: [banId],
+            extraBanIds: [banId],
+            extraCheckPairIds: [pairId as CheckPair["id"]],
+          });
           return this.writeOn(
             tx,
             input.currentUserId,
             input.expectedRevision,
             input.result.snapshot,
             false,
+            undefined,
+            input.appliedRule,
+            shared,
           );
         },
       });
@@ -844,11 +935,19 @@ export class PostgresProductStore implements ProductStore {
         if (classification.action === "REJECTED") {
           return { status: "REJECTED" as const, reason: classification.reason };
         }
-        // Share row is already locked. Sessions are locked in user-id order
-        // before later CheckPair locks inside writeOn.
-        for (const userId of [lookup.ownerId, input.receiverId].sort()) {
+        // Share → Sessions ASC → predeclared Ban → bind → receiver write → sender observe.
+        for (const userId of [lookup.ownerId, input.receiverId].sort((a, b) =>
+          a.localeCompare(b),
+        )) {
           await tx.query(SQL.selectSessionForUpdate, [userId]);
         }
+        await tx.query(SQL.selectBanForUpdate, [classification.banId]);
+        const held: HeldLockSet = {
+          sessionUserIds: new Set([lookup.ownerId, input.receiverId]),
+          banIds: new Set([classification.banId]),
+          timerIds: new Set(),
+          checkPairIds: new Set(),
+        };
         const bound = await this.bindBanReceiverOn(tx, classification.banId, input.receiverId);
         if (bound.status === "ALREADY_BOUND") {
           return { status: "ALREADY_BOUND" as const, banId: classification.banId };
@@ -898,7 +997,30 @@ export class PostgresProductStore implements ProductStore {
           transition.snapshot,
           lookup.share.attemptId,
         );
-        const written = await this.writeOn(tx, input.receiverId, loaded.revision, persisted, false);
+        const receiverRule = appliedRuleFromTraces(transition);
+        const receiverShared = sharedWriteContextForTransition({
+          currentUserId: input.receiverId,
+          expectedRevision: loaded.revision,
+          result: { ...transition, snapshot: persisted },
+          baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
+          appliedRule: receiverRule,
+          held,
+          shareToken: input.token,
+          extraSessionUserIds: [lookup.ownerId],
+          freezeBanIds: [classification.banId],
+          applicationAuthorizedBanIds: [classification.banId],
+        });
+        assertWriteSetCoveredByLockPlan(receiverShared.writeSet, receiverShared.lockPlan);
+        const written = await this.writeOn(
+          tx,
+          input.receiverId,
+          loaded.revision,
+          persisted,
+          false,
+          undefined,
+          receiverRule,
+          receiverShared,
+        );
         const confirmed = await tx.query<{ attempt_id: string }>(SQL.confirmShareIfActive, [
           lookup.share.attemptId,
           created.id,
@@ -929,12 +1051,31 @@ export class PostgresProductStore implements ProductStore {
               "CREATE_BAN.CLAIM_OBSERVED did not apply for the pending sender",
             );
           }
+          const senderRule = appliedRuleFromTraces(observation) ?? {
+            eventId: "E-65" as const,
+            branch: "claim-observed",
+          };
+          const senderShared = sharedWriteContextForTransition({
+            currentUserId: lookup.ownerId,
+            expectedRevision: senderLoaded.revision,
+            result: observation,
+            baseline: baselineFromLoadedSnapshot(senderLoaded.snapshot, senderLoaded.revision),
+            appliedRule: senderRule,
+            held,
+            shareToken: input.token,
+            extraSessionUserIds: [input.receiverId],
+            freezeBanIds: [classification.banId],
+          });
+          assertWriteSetCoveredByLockPlan(senderShared.writeSet, senderShared.lockPlan);
           await this.writeOn(
             tx,
             lookup.ownerId,
             senderLoaded.revision,
             observation.snapshot,
             false,
+            undefined,
+            senderRule,
+            senderShared,
           );
         }
         return {
@@ -1104,10 +1245,27 @@ export class PostgresProductStore implements ProductStore {
     }
     try {
       return await this.client.transaction(async (tx) => {
+        await tx.query(SQL.selectSessionForUpdate, [input.currentUserId]);
+        await tx.query(SQL.selectBanForUpdate, [input.banId]);
         const bind = await this.bindBanReceiverOn(tx, input.banId, input.receiverId);
         if (bind.status === "MISSING" || bind.status === "CONFLICT") {
           return { status: "BIND_REJECTED" as const, bindStatus: bind.status };
         }
+        const shared = sharedWriteContextForTransition({
+          currentUserId: input.currentUserId,
+          expectedRevision: input.expectedRevision,
+          result: input.result,
+          baseline: input.baseline,
+          appliedRule: input.appliedRule,
+          applicationAuthorizedBanIds: [input.banId],
+          extraBanIds: [input.banId],
+          held: {
+            sessionUserIds: new Set([input.currentUserId]),
+            banIds: new Set([input.banId]),
+            timerIds: new Set(),
+            checkPairIds: new Set(),
+          },
+        });
         const loaded = await this.writeOn(
           tx,
           input.currentUserId,
@@ -1116,6 +1274,13 @@ export class PostgresProductStore implements ProductStore {
           false,
           undefined,
           input.appliedRule,
+          {
+            ...shared,
+            mutationAuthority:
+              shared.mutationAuthority.kind === "PRESERVE_ONLY"
+                ? { kind: "BIND_RECEIVER" }
+                : shared.mutationAuthority,
+          },
         );
         return {
           status: "PERSISTED" as const,
@@ -1180,6 +1345,7 @@ export class PostgresProductStore implements ProductStore {
     seed: boolean,
     runtimeReplacement?: unknown,
     appliedRule?: PersistTransitionInput["appliedRule"],
+    shared?: SharedWriteContext,
   ): Promise<LoadedSnapshot> {
     try {
       return await this.client.transaction(async (tx) =>
@@ -1191,6 +1357,7 @@ export class PostgresProductStore implements ProductStore {
           seed,
           runtimeReplacement,
           appliedRule,
+          shared,
         ),
       );
     } catch (error) {
@@ -1212,6 +1379,7 @@ export class PostgresProductStore implements ProductStore {
     seed: boolean,
     runtimeReplacement?: unknown,
     appliedRule?: PersistTransitionInput["appliedRule"],
+    shared?: SharedWriteContext,
   ): Promise<LoadedSnapshot> {
     const identity = await tx.query<{ user_id: string }>(SQL.selectIdentity, [currentUserId]);
     if (!identity.rows[0]) {
@@ -1220,7 +1388,16 @@ export class PostgresProductStore implements ProductStore {
         "Persistence operations require an authenticated identity_users.user_id",
       );
     }
-    const sessionResult = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [currentUserId]);
+    if (!seed && !shared) {
+      throw new PersistenceError(
+        "INVARIANT",
+        "Product writes require a SharedWriteContext (hybrid persistence)",
+      );
+    }
+    // Always SELECT … FOR UPDATE (re-entrant in the same transaction if already held).
+    const sessionResult = await tx.query<SessionRow>(SQL.selectSessionForUpdate, [
+      currentUserId,
+    ]);
     const currentRevision = Number(sessionResult.rows[0]?.revision ?? 0);
     if (!seed && currentRevision !== expectedRevision) {
       throw new PersistenceError(
@@ -1237,19 +1414,148 @@ export class PostgresProductStore implements ProductStore {
         priorBanIds.add(row.ban_id);
       }
     }
-    for (const ban of Object.values(entities.bans)) {
-      await tx.query(SQL.upsertBan, [
-        ban.id,
-        ban.senderId,
-        ban.receiverId,
-        ban.banText,
-        ban.durationMinutes,
-        ban.acceptance,
-        ban.status,
-        ban.boundViaTelegramShareLink,
-        ban.sourceProposalId,
-      ]);
+
+    if (seed) {
+      for (const ban of Object.values(entities.bans)) {
+        await tx.query(SQL.upsertBan, [
+          ban.id,
+          ban.senderId,
+          ban.receiverId,
+          ban.banText,
+          ban.durationMinutes,
+          ban.acceptance,
+          ban.status,
+          ban.boundViaTelegramShareLink,
+          ban.sourceProposalId,
+        ]);
+      }
+    } else if (shared) {
+      assertWriteSetCoveredByLockPlan(shared.writeSet, shared.lockPlan);
+      const held = shared.held;
+      for (const banId of shared.lockPlan.banIds) {
+        if (!held?.banIds.has(banId)) {
+          await tx.query(SQL.selectBanForUpdate, [banId]);
+        }
+      }
+      for (const timerId of shared.lockPlan.timerIds) {
+        if (!held?.timerIds.has(timerId)) {
+          await tx.query(SQL.selectTimerForUpdate, [timerId]);
+        }
+      }
+      for (const pairId of shared.lockPlan.checkPairIds) {
+        if (!held?.checkPairIds.has(pairId)) {
+          await tx.query(SQL.selectPairForUpdate, [pairId]);
+        }
+      }
+      const toWrite = snapshotEntitiesForWriteSet(snapshot, shared.writeSet);
+      const mergedBans = new Map<string, Ban>();
+      for (const nextBan of toWrite.bans) {
+        const locked = await tx.query<BanSqlRow>(SQL.selectBanForUpdate, [nextBan.id]);
+        const dbBan = locked.rows[0] ? banFromRow(locked.rows[0]) : undefined;
+        const baselineBan = shared.baseline.bans[nextBan.id];
+        const merged = mergeBan(dbBan, baselineBan, nextBan, shared.mutationAuthority);
+        mergedBans.set(merged.id, merged);
+        await tx.query(SQL.upsertBan, [
+          merged.id,
+          merged.senderId,
+          merged.receiverId,
+          merged.banText,
+          merged.durationMinutes,
+          merged.acceptance,
+          merged.status,
+          merged.boundViaTelegramShareLink,
+          merged.sourceProposalId,
+        ]);
+      }
+      for (const nextTimer of toWrite.timers) {
+        const locked = await tx.query<TimerSqlRow>(SQL.selectTimerForUpdate, [nextTimer.id]);
+        const dbTimer = locked.rows[0]
+          ? {
+              id: locked.rows[0].timer_id as DomainTimer["id"],
+              banId: locked.rows[0].ban_id as BanId,
+              startedAt: asInstant(Number(locked.rows[0].started_at)),
+              durationMinutes: locked.rows[0].duration_minutes as DurationMinutes,
+              state: locked.rows[0].state as DomainTimer["state"],
+              checkPairCreated: Boolean(locked.rows[0].check_pair_created),
+            }
+          : undefined;
+        const merged = mergeDomainTimer(dbTimer, nextTimer);
+        await tx.query(SQL.upsertTimer, [
+          merged.id,
+          merged.banId,
+          merged.startedAt,
+          merged.durationMinutes,
+          merged.state,
+          merged.checkPairCreated,
+        ]);
+      }
+      for (const nextPair of [...toWrite.pairs].sort((a, b) => a.id.localeCompare(b.id))) {
+        const locked = await tx.query<PairSqlRow>(SQL.selectPairForUpdate, [nextPair.id]);
+        const dbPair = locked.rows[0] ? pairFromRow(locked.rows[0]) : undefined;
+        const merged = mergeCheckPair(dbPair, nextPair);
+        let banRow = mergedBans.get(merged.banId);
+        if (!banRow) {
+          const banQ = await tx.query<BanSqlRow>(SQL.selectBanById, [merged.banId]);
+          banRow = banQ.rows[0] ? banFromRow(banQ.rows[0]) : undefined;
+        }
+        assertBanPairStatusConsistency(banRow, merged);
+        await tx.query(SQL.upsertPair, [
+          merged.id,
+          merged.banId,
+          merged.receiverItemId,
+          merged.senderItemId,
+          merged.receiverAnswer,
+          merged.senderAnswer,
+          merged.resultingStatus,
+        ]);
+      }
+      for (const nextItem of toWrite.items) {
+        const existingRows = await tx.query<ItemSqlRow>(SQL.selectItemById, [nextItem.id]);
+        const dbItem = existingRows.rows[0]
+          ? decodeNotificationItem({
+              item_id: existingRows.rows[0].item_id,
+              owner_id: existingRows.rows[0].owner_id,
+              ban_id: existingRows.rows[0].ban_id,
+              kind: existingRows.rows[0].kind,
+              fifo_sequence: existingRows.rows[0].fifo_sequence,
+              lifecycle_status: existingRows.rows[0].lifecycle_status,
+              lifecycle_display: existingRows.rows[0].lifecycle_display,
+              role: existingRows.rows[0].role,
+              check_pair_id: existingRows.rows[0].check_pair_id,
+              domain_timer_id: existingRows.rows[0].domain_timer_id,
+              status: existingRows.rows[0].status,
+            })
+          : undefined;
+        const merged = mergeNotificationItem(dbItem, nextItem);
+        await tx.query(SQL.upsertItem, itemParams(merged));
+      }
+      for (const opId of shared.writeSet.operationIdsToDelete) {
+        await tx.query(SQL.deleteOperationById, [currentUserId, opId]);
+      }
+      for (const operation of toWrite.operations) {
+        await tx.query(SQL.upsertOperation, [
+          operation.operationId,
+          currentUserId,
+          operation.kind,
+          operation.originatingState,
+          operation.originatingItemId,
+          operation.resultApplied,
+          operation.supersededByExternalEntry,
+          jsonParam(operation.sendDraft),
+        ]);
+      }
+      for (const share of toWrite.shares) {
+        await tx.query(SQL.upsertShare, [
+          share.attemptId,
+          currentUserId,
+          jsonParam(share.draft),
+          share.token,
+          share.status,
+          share.createdBanId,
+        ]);
+      }
     }
+
     if (seed) {
       await rejectTerminatedRimChats(tx, [
         snapshot.extended.rimChat,
@@ -1291,66 +1597,68 @@ export class PostgresProductStore implements ProductStore {
       this.failAfterBans = false;
       throw new PersistenceError("TRANSACTION_FAILED", "injected failure after Ban write");
     }
-    for (const timer of Object.values(entities.domainTimers)) {
-      await tx.query(SQL.upsertTimer, [
-        timer.id,
-        timer.banId,
-        timer.startedAt,
-        timer.durationMinutes,
-        timer.state,
-        timer.checkPairCreated,
-      ]);
-    }
-    const pairs = Object.values(entities.checkPairs).sort((left, right) =>
-      left.id.localeCompare(right.id),
-    );
-    for (const pair of pairs) {
-      const locked = await tx.query<PairSqlRow>(SQL.selectPairForUpdate, [pair.id]);
-      assertCheckPairWriteAllowed(locked.rows[0] ? pairFromRow(locked.rows[0]) : undefined, pair);
-      await tx.query(SQL.upsertPair, [
-        pair.id,
-        pair.banId,
-        pair.receiverItemId,
-        pair.senderItemId,
-        pair.receiverAnswer,
-        pair.senderAnswer,
-        pair.resultingStatus,
-      ]);
-    }
-    for (const item of Object.values(entities.notificationItems)) {
-      await tx.query(SQL.upsertItem, itemParams(item));
-    }
-    await tx.query(SQL.deleteItemsNotIn, [
-      currentUserId,
-      Object.values(entities.notificationItems).map((item) => item.id),
-    ]);
-    for (const share of Object.values(entities.shareOperations)) {
-      await tx.query(SQL.upsertShare, [
-        share.attemptId,
+    if (seed) {
+      for (const timer of Object.values(entities.domainTimers)) {
+        await tx.query(SQL.upsertTimer, [
+          timer.id,
+          timer.banId,
+          timer.startedAt,
+          timer.durationMinutes,
+          timer.state,
+          timer.checkPairCreated,
+        ]);
+      }
+      const pairs = Object.values(entities.checkPairs).sort((left, right) =>
+        left.id.localeCompare(right.id),
+      );
+      for (const pair of pairs) {
+        const locked = await tx.query<PairSqlRow>(SQL.selectPairForUpdate, [pair.id]);
+        assertCheckPairWriteAllowed(locked.rows[0] ? pairFromRow(locked.rows[0]) : undefined, pair);
+        await tx.query(SQL.upsertPair, [
+          pair.id,
+          pair.banId,
+          pair.receiverItemId,
+          pair.senderItemId,
+          pair.receiverAnswer,
+          pair.senderAnswer,
+          pair.resultingStatus,
+        ]);
+      }
+      for (const item of Object.values(entities.notificationItems)) {
+        await tx.query(SQL.upsertItem, itemParams(item));
+      }
+      await tx.query(SQL.deleteItemsNotIn, [
         currentUserId,
-        jsonParam(share.draft),
-        share.token,
-        share.status,
-        share.createdBanId,
+        Object.values(entities.notificationItems).map((item) => item.id),
       ]);
-    }
-    await tx.query(SQL.deleteSharesNotIn, [
-      currentUserId,
-      Object.values(entities.shareOperations).map((share) => share.attemptId),
-    ]);
-    const operationIds = Object.keys(snapshot.runtime.pendingOperations);
-    await tx.query(SQL.deleteOpsNotIn, [currentUserId, operationIds]);
-    for (const operation of Object.values(snapshot.runtime.pendingOperations)) {
-      await tx.query(SQL.upsertOperation, [
-        operation.operationId,
+      for (const share of Object.values(entities.shareOperations)) {
+        await tx.query(SQL.upsertShare, [
+          share.attemptId,
+          currentUserId,
+          jsonParam(share.draft),
+          share.token,
+          share.status,
+          share.createdBanId,
+        ]);
+      }
+      await tx.query(SQL.deleteSharesNotIn, [
         currentUserId,
-        operation.kind,
-        operation.originatingState,
-        operation.originatingItemId,
-        operation.resultApplied,
-        operation.supersededByExternalEntry,
-        jsonParam(operation.sendDraft),
+        Object.values(entities.shareOperations).map((share) => share.attemptId),
       ]);
+      const operationIds = Object.keys(snapshot.runtime.pendingOperations);
+      await tx.query(SQL.deleteOpsNotIn, [currentUserId, operationIds]);
+      for (const operation of Object.values(snapshot.runtime.pendingOperations)) {
+        await tx.query(SQL.upsertOperation, [
+          operation.operationId,
+          currentUserId,
+          operation.kind,
+          operation.originatingState,
+          operation.originatingItemId,
+          operation.resultApplied,
+          operation.supersededByExternalEntry,
+          jsonParam(operation.sendDraft),
+        ]);
+      }
     }
     const previousBootstrapSent = Boolean(
       sessionResult.rows[0]?.telegram_persistent_reentry_bootstrap_sent,

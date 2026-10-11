@@ -14,9 +14,11 @@ import type {
 } from "@98plus/product-model";
 import type { BanId, UserId } from "@98plus/product-model";
 import type { ClaimTemplateShareInput, ClaimTemplateShareResult } from "./claim-template-share.ts";
+import type { PersistenceBaseline } from "./hybrid-persist.ts";
 import type { RuntimeAttemptAuthority } from "./runtime-attempt-authority.ts";
 
 export type { RuntimeAttemptAuthority };
+export type { PersistenceBaseline };
 
 export type PersistenceSqlClient = {
   query<T>(sql: string, params: readonly unknown[]): Promise<SqlQueryResult<T>>;
@@ -49,7 +51,9 @@ export type PersistTransitionInput = Readonly<{
   currentUserId: UserId;
   expectedRevision: number;
   result: TransitionResult;
-  appliedRule?: AppliedProductRule;
+  appliedRule?: AppliedProductRule | undefined;
+  /** Actor snapshot entities at expectedRevision (12D-1 hybrid baseline). */
+  baseline?: PersistenceBaseline | undefined;
 }>;
 
 /**
@@ -305,6 +309,7 @@ export type ProductStore = {
   ): Promise<ReleaseTelegramPersistentReentryBootstrapClaimResult>;
   withCheckPairLock<T>(
     pairId: string,
+    banId: BanId,
     currentUserId: UserId,
     run: (context: CheckPairLockContext) => Promise<T>,
   ): Promise<T>;
