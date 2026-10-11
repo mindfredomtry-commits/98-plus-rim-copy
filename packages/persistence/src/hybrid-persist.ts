@@ -308,10 +308,6 @@ export function sharedWriteContextForTransition(input: Readonly<{
   freezeBanIds?: readonly BanId[] | undefined;
 }>): SharedWriteContext {
   const materializerWrittenItemIds = input.materializerWrittenItemIds ?? [];
-  const baseline =
-    input.baseline === undefined
-      ? emptyBaseline(input.expectedRevision)
-      : input.baseline;
   const writeSetOptions: {
     materializerWrittenItemIds: readonly NotificationItemId[];
     applicationAuthorizedBanIds?: readonly BanId[];
@@ -324,6 +320,17 @@ export function sharedWriteContextForTransition(input: Readonly<{
     writeSetOptions.applicationAuthorizedItemIds = input.applicationAuthorizedItemIds;
   }
   const writeSet = deriveEntityWriteSet(input.result.effects, writeSetOptions);
+  // P1-BASELINE-01: never invent an empty baseline as Ban mutation evidence.
+  if (input.baseline === undefined && writeSet.banIds.length > 0) {
+    throw new PersistenceError(
+      "INVARIANT",
+      "Product Ban writes require a PersistenceBaseline from the pre-transition actor snapshot",
+    );
+  }
+  const baseline =
+    input.baseline === undefined
+      ? emptyBaseline(input.expectedRevision)
+      : input.baseline;
   const lockPlanInput: {
     shareToken?: string;
     sessionUserIds: readonly UserId[];
@@ -381,6 +388,11 @@ export function sharedWriteContextForTransition(input: Readonly<{
 export type BanFieldKey = keyof Ban;
 
 export function fieldDiffBan(baseline: Ban | undefined, next: Ban): ReadonlySet<BanFieldKey> {
+  // Absent baseline cannot authorize field changes (P1-BASELINE-01). Callers must fail closed
+  // before merge, or mergeBan must preserve durable state when baselineBan is undefined.
+  if (baseline === undefined) {
+    return new Set();
+  }
   const keys: BanFieldKey[] = [
     "id",
     "senderId",
@@ -394,7 +406,7 @@ export function fieldDiffBan(baseline: Ban | undefined, next: Ban): ReadonlySet<
   ];
   const changed = new Set<BanFieldKey>();
   for (const key of keys) {
-    if (!baseline || baseline[key] !== next[key]) {
+    if (baseline[key] !== next[key]) {
       changed.add(key);
     }
   }

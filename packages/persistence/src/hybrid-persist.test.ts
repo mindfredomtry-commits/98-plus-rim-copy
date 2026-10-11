@@ -27,7 +27,9 @@ import {
   baselineFromLoadedSnapshot,
   buildLockPlan,
   deriveEntityWriteSet,
+  emptyBaseline,
   fieldDiffBan,
+  sharedWriteContextForTransition,
 } from "./hybrid-persist.ts";
 import { mergeNotificationItem } from "./item-write.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
@@ -392,5 +394,433 @@ describe("12D-1 InMemory hybrid persistence", () => {
     expect(receiverAfter.snapshot.extended.entities.notificationItems[receiverItem.id]).toEqual(
       receiverItem,
     );
+  });
+});
+
+describe("12D-1B P1-AUTH-CREATE-UPDATE E-08/E-10 create-only", () => {
+  const e10 = { kind: "APPLIED_RULE" as const, eventId: "E-10" as const, branch: "create" };
+  const e08 = {
+    kind: "APPLIED_RULE" as const,
+    eventId: "E-08" as const,
+    branch: "valid-template-draft",
+  };
+
+  it("A1. E-10 + absent durable Ban → valid creation", () => {
+    const created = makeBan({ id: BAN_ID, senderId: USER_ID, receiverId: OTHER_USER });
+    expect(mergeBan(undefined, undefined, created, e10)).toEqual(created);
+  });
+
+  it("A2. E-08 + absent durable Ban → valid template creation", () => {
+    const created = makeBan({ id: BAN_ID, senderId: USER_ID, receiverId: null });
+    expect(mergeBan(undefined, undefined, created, e08)).toEqual(created);
+  });
+
+  it("A3. E-10 + existing Ban + altered status → durable status unchanged", () => {
+    const durable = makeBan({ id: BAN_ID, status: null, acceptance: "PENDING" });
+    const next = { ...durable, status: "OVERBOARD" as const };
+    expect(mergeBan(durable, durable, next, e10).status).toBeNull();
+  });
+
+  it("A4. E-10 + existing Ban + altered acceptance → durable acceptance unchanged", () => {
+    const durable = makeBan({ id: BAN_ID, acceptance: "PENDING" });
+    const next = { ...durable, acceptance: "ACCEPTED" as const };
+    expect(mergeBan(durable, durable, next, e10).acceptance).toBe("PENDING");
+  });
+
+  it("A5. E-08 + existing Ban + altered receiverId → durable receiver unchanged", () => {
+    const durable = makeBan({ id: BAN_ID, senderId: USER_ID, receiverId: null });
+    const next = { ...durable, receiverId: OTHER_USER };
+    expect(mergeBan(durable, durable, next, e08).receiverId).toBeNull();
+  });
+
+  it("A6. E-08/E-10 + existing Ban + altered sourceProposalId → unchanged", () => {
+    const durable = makeBan({ id: BAN_ID, sourceProposalId: null });
+    const next = {
+      ...durable,
+      sourceProposalId: branded("proposal-x") as Ban["sourceProposalId"],
+    };
+    expect(mergeBan(durable, durable, next, e10).sourceProposalId).toBeNull();
+    expect(mergeBan(durable, durable, next, e08).sourceProposalId).toBeNull();
+  });
+
+  it("A7. E-08/E-10 + existing Ban + conflicting senderId → reject", () => {
+    const durable = makeBan({ id: BAN_ID, senderId: USER_ID });
+    const next = { ...durable, senderId: OTHER_USER };
+    expect(() => mergeBan(durable, durable, next, e10)).toThrow(/senderId is immutable/);
+    expect(() => mergeBan(durable, durable, next, e08)).toThrow(/senderId is immutable/);
+  });
+});
+
+describe("12D-1B P1-BASELINE-01 missing baseline fail-closed", () => {
+  it("B1. existing Ban + E-10 + missing baselineBan + actor acceptance differs → preserve", () => {
+    const durable = makeBan({ id: BAN_ID, acceptance: "PENDING" });
+    const next = { ...durable, acceptance: "ACCEPTED" as const };
+    expect(
+      mergeBan(durable, undefined, next, {
+        kind: "APPLIED_RULE",
+        eventId: "E-10",
+        branch: "create",
+      }).acceptance,
+    ).toBe("PENDING");
+  });
+
+  it("B2. existing Ban + E-08 + missing baselineBan + actor status differs → preserve", () => {
+    const durable = makeBan({ id: BAN_ID, status: null });
+    const next = { ...durable, status: "OVERBOARD" as const };
+    expect(
+      mergeBan(durable, undefined, next, {
+        kind: "APPLIED_RULE",
+        eventId: "E-08",
+        branch: "valid-template-draft",
+      }).status,
+    ).toBeNull();
+  });
+
+  it("B3. existing Ban + E-20 + missing PersistenceBaseline → reject before write", () => {
+    const ban = makeBan({ id: BAN_ID, status: null });
+    const snap = {
+      ...emptySnapshot(),
+      extended: {
+        ...emptySnapshot().extended,
+        entities: { ...emptySnapshot().extended.entities, bans: { [ban.id]: ban } },
+      },
+    };
+    expect(() =>
+      sharedWriteContextForTransition({
+        currentUserId: USER_ID,
+        expectedRevision: 1,
+        result: appliedResult(snap, [{ type: "UPSERT_BAN", ban: { ...ban, status: "OVERBOARD" } }]),
+        appliedRule: { eventId: "E-20", branch: "overboard" },
+      }),
+    ).toThrow(/PersistenceBaseline/);
+  });
+
+  it("B4. existing Ban + E-30 + missing PersistenceBaseline → reject before write", () => {
+    const ban = makeBan({ id: BAN_ID, acceptance: "PENDING" });
+    const snap = {
+      ...emptySnapshot(),
+      extended: {
+        ...emptySnapshot().extended,
+        entities: { ...emptySnapshot().extended.entities, bans: { [ban.id]: ban } },
+      },
+    };
+    expect(() =>
+      sharedWriteContextForTransition({
+        currentUserId: USER_ID,
+        expectedRevision: 1,
+        result: appliedResult(snap, [
+          { type: "UPSERT_BAN", ban: { ...ban, acceptance: "ACCEPTED" } },
+        ]),
+        appliedRule: { eventId: "E-30", branch: "from-incoming" },
+      }),
+    ).toThrow(/PersistenceBaseline/);
+  });
+
+  it("B5. valid caller with genuine baseline still succeeds for E-20", async () => {
+    const kit = PersistenceTestKit.inMemory();
+    kit.establishIdentity(USER_ID, "tg-b5");
+    kit.establishIdentity(OTHER_USER, "tg-b5-other");
+    const ban = makeBan({
+      id: BAN_ID,
+      senderId: USER_ID,
+      receiverId: OTHER_USER,
+      status: null,
+    });
+    const world = {
+      ...emptySnapshot(),
+      controlState: "NOTIFICATIONS.INCOMING_BAN" as const,
+      extended: {
+        ...emptySnapshot().extended,
+        entities: { ...emptySnapshot().extended.entities, bans: { [ban.id]: ban } },
+      },
+    };
+    const seeded = await kit.installFixtureSnapshot(USER_ID, world);
+    const nextBan = { ...ban, status: "OVERBOARD" as const };
+    const next = {
+      ...seeded.snapshot,
+      extended: {
+        ...seeded.snapshot.extended,
+        entities: { ...seeded.snapshot.extended.entities, bans: { [nextBan.id]: nextBan } },
+      },
+    };
+    const saved = await kit.store.persistTransition({
+      currentUserId: USER_ID,
+      expectedRevision: seeded.revision,
+      result: appliedResult(next, [{ type: "UPSERT_BAN", ban: nextBan }]),
+      appliedRule: { eventId: "E-20", branch: "overboard" },
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
+    });
+    expect(saved.snapshot.extended.entities.bans[BAN_ID]?.status).toBe("OVERBOARD");
+  });
+
+  it("B6. missing baseline leaves shared Ban unchanged (InMemory rollback)", async () => {
+    const kit = PersistenceTestKit.inMemory();
+    kit.establishIdentity(USER_ID, "tg-b6");
+    kit.establishIdentity(OTHER_USER, "tg-b6-other");
+    const ban = makeBan({
+      id: BAN_ID,
+      senderId: USER_ID,
+      receiverId: OTHER_USER,
+      status: null,
+      acceptance: "PENDING",
+    });
+    const world = {
+      ...emptySnapshot(),
+      extended: {
+        ...emptySnapshot().extended,
+        entities: { ...emptySnapshot().extended.entities, bans: { [ban.id]: ban } },
+      },
+    };
+    const seeded = await kit.installFixtureSnapshot(USER_ID, world);
+    const nextBan = { ...ban, status: "OVERBOARD" as const, acceptance: "ACCEPTED" as const };
+    const next = {
+      ...seeded.snapshot,
+      controlState: "CREATE_BAN.WHO" as const,
+      extended: {
+        ...seeded.snapshot.extended,
+        entities: { ...seeded.snapshot.extended.entities, bans: { [nextBan.id]: nextBan } },
+      },
+    };
+    await expect(
+      kit.store.persistTransition({
+        currentUserId: USER_ID,
+        expectedRevision: seeded.revision,
+        result: appliedResult(next, [{ type: "UPSERT_BAN", ban: nextBan }]),
+        appliedRule: { eventId: "E-10", branch: "create" },
+      }),
+    ).rejects.toMatchObject({ code: "INVARIANT" });
+    const after = await kit.store.loadProductSnapshot(USER_ID);
+    expect(after.revision).toBe(seeded.revision);
+    expect(after.snapshot.extended.entities.bans[BAN_ID]?.status).toBeNull();
+    expect(after.snapshot.extended.entities.bans[BAN_ID]?.acceptance).toBe("PENDING");
+    expect(after.snapshot.controlState).toBe(seeded.snapshot.controlState);
+  });
+
+  it("fieldDiffBan(undefined, next) authorizes no fields", () => {
+    expect(fieldDiffBan(undefined, makeBan()).size).toBe(0);
+  });
+});
+
+describe("12D-1B preserve legitimate Ban flows", () => {
+  it("C1. E-20 status update succeeds", () => {
+    const durable = makeBan({ id: BAN_ID, status: null });
+    const next = { ...durable, status: "OVERBOARD" as const };
+    expect(
+      mergeBan(durable, durable, next, {
+        kind: "APPLIED_RULE",
+        eventId: "E-20",
+        branch: "overboard",
+      }).status,
+    ).toBe("OVERBOARD");
+  });
+
+  it("C2. E-23 status update succeeds", () => {
+    const durable = makeBan({ id: BAN_ID, status: null });
+    const next = { ...durable, status: "BANTASTIC" as const };
+    expect(
+      mergeBan(durable, durable, next, {
+        kind: "APPLIED_RULE",
+        eventId: "E-23",
+        branch: "second",
+      }).status,
+    ).toBe("BANTASTIC");
+  });
+
+  it("C3. E-30 creates Reply Ban and updates only original acceptance", () => {
+    const original = makeBan({
+      id: BAN_ID,
+      senderId: OTHER_USER,
+      receiverId: USER_ID,
+      acceptance: "PENDING",
+      banText: "original",
+    });
+    const reply = makeBan({
+      id: branded("reply-ban"),
+      senderId: USER_ID,
+      receiverId: OTHER_USER,
+      banText: "reply",
+    });
+    const e30 = { kind: "APPLIED_RULE" as const, eventId: "E-30" as const, branch: "from-incoming" };
+    expect(mergeBan(undefined, undefined, reply, e30)).toEqual(reply);
+    const accepted = mergeBan(
+      original,
+      original,
+      { ...original, acceptance: "ACCEPTED", banText: "hack" },
+      e30,
+    );
+    expect(accepted.acceptance).toBe("ACCEPTED");
+    expect(accepted.banText).toBe("original");
+  });
+
+  it("C4. E-45 receiver binding succeeds", () => {
+    const unbound = makeBan({ id: BAN_ID, receiverId: null });
+    const next = { ...unbound, receiverId: OTHER_USER, boundViaTelegramShareLink: true };
+    const merged = mergeBan(unbound, unbound, next, {
+      kind: "APPLIED_RULE",
+      eventId: "E-45",
+      branch: "share",
+    });
+    expect(merged.receiverId).toBe(OTHER_USER);
+    expect(merged.boundViaTelegramShareLink).toBe(true);
+  });
+
+  it("C5. Application BIND_RECEIVER succeeds", () => {
+    const unbound = makeBan({ id: BAN_ID, receiverId: null });
+    const next = { ...unbound, receiverId: OTHER_USER, banText: "ignored" };
+    const merged = mergeBan(unbound, unbound, next, { kind: "BIND_RECEIVER" });
+    expect(merged.receiverId).toBe(OTHER_USER);
+    expect(merged.banText).toBe(unbound.banText);
+  });
+
+  it("C6. duplicate create event does not mutate existing durable Ban", () => {
+    const durable = makeBan({
+      id: BAN_ID,
+      acceptance: "PENDING",
+      status: null,
+      banText: "original",
+    });
+    const next = {
+      ...durable,
+      acceptance: "ACCEPTED" as const,
+      status: "OVERBOARD" as const,
+      banText: "changed",
+    };
+    const merged = mergeBan(durable, durable, next, {
+      kind: "APPLIED_RULE",
+      eventId: "E-10",
+      branch: "create",
+    });
+    expect(merged).toEqual(durable);
+  });
+
+  it("C7. stale actor snapshot cannot regress terminal Ban status", () => {
+    const durable = makeBan({ id: BAN_ID, status: "OVERBOARD" });
+    const next = { ...durable, status: null };
+    expect(
+      mergeBan(durable, { ...durable, status: null }, next, {
+        kind: "APPLIED_RULE",
+        eventId: "E-20",
+        branch: "overboard",
+      }).status,
+    ).toBe("OVERBOARD");
+  });
+
+  it("C8. session-only write without Ban write-set allows missing baseline", () => {
+    const ctx = sharedWriteContextForTransition({
+      currentUserId: USER_ID,
+      expectedRevision: 1,
+      result: appliedResult(emptySnapshot(), [{ type: "CLEAR_OPERATION", operationId: branded("op") }]),
+    });
+    expect(ctx.writeSet.banIds).toEqual([]);
+    expect(ctx.baseline).toEqual(emptyBaseline(1));
+  });
+});
+
+describe("12D-1B transaction atomicity (InMemory)", () => {
+  it("D1. missing baseline rejects and does not advance revision", async () => {
+    const kit = PersistenceTestKit.inMemory();
+    kit.establishIdentity(USER_ID, "tg-d1");
+    kit.establishIdentity(OTHER_USER, "tg-d1o");
+    const ban = makeBan({ id: BAN_ID, senderId: USER_ID, receiverId: OTHER_USER });
+    const seeded = await kit.installFixtureSnapshot(USER_ID, {
+      ...emptySnapshot(),
+      extended: {
+        ...emptySnapshot().extended,
+        entities: { ...emptySnapshot().extended.entities, bans: { [ban.id]: ban } },
+      },
+    });
+    await expect(
+      kit.store.persistTransition({
+        currentUserId: USER_ID,
+        expectedRevision: seeded.revision,
+        result: appliedResult(
+          {
+            ...seeded.snapshot,
+            controlState: "CREATE_BAN.WHO",
+            extended: {
+              ...seeded.snapshot.extended,
+              entities: {
+                ...seeded.snapshot.extended.entities,
+                bans: { [ban.id]: { ...ban, status: "OVERBOARD" } },
+              },
+            },
+          },
+          [{ type: "UPSERT_BAN", ban: { ...ban, status: "OVERBOARD" } }],
+        ),
+        appliedRule: { eventId: "E-20", branch: "x" },
+      }),
+    ).rejects.toMatchObject({ code: "INVARIANT" });
+    expect((await kit.store.loadProductSnapshot(USER_ID)).revision).toBe(seeded.revision);
+  });
+
+  it("D2. E-10 preserve-only cannot apply status via create allowlist", () => {
+    const durable = makeBan({ id: BAN_ID, status: null });
+    const next = { ...durable, status: "BANFLICT" as const };
+    expect(
+      mergeBan(durable, durable, next, {
+        kind: "APPLIED_RULE",
+        eventId: "E-10",
+        branch: "create",
+      }).status,
+    ).toBeNull();
+  });
+
+  it("D3. nested persist without baseline cannot partially commit Ban mutation", async () => {
+    const kit = PersistenceTestKit.inMemory();
+    kit.establishIdentity(USER_ID, "tg-d3");
+    kit.establishIdentity(OTHER_USER, "tg-d3o");
+    const ban = makeBan({
+      id: BAN_ID,
+      senderId: USER_ID,
+      receiverId: OTHER_USER,
+      acceptance: "ACCEPTED",
+    });
+    const pair: CheckPair = {
+      id: branded("pair-d3"),
+      banId: BAN_ID,
+      receiverItemId: branded("ri"),
+      senderItemId: branded("si"),
+      receiverAnswer: null,
+      senderAnswer: null,
+      resultingStatus: null,
+    };
+    const world = {
+      ...emptySnapshot(),
+      controlState: "NOTIFICATIONS.CHECK.RECEIVER" as const,
+      extended: {
+        ...emptySnapshot().extended,
+        entities: {
+          ...emptySnapshot().extended.entities,
+          bans: { [ban.id]: ban },
+          checkPairs: { [pair.id]: pair },
+        },
+      },
+    };
+    await kit.installFixtureSnapshot(USER_ID, world);
+    await expect(
+      kit.store.withCheckPairLock(pair.id, BAN_ID, USER_ID, async (ctx) => {
+        const loaded = await ctx.loadProductSnapshot(USER_ID);
+        return ctx.persistTransition({
+          currentUserId: USER_ID,
+          expectedRevision: loaded.revision,
+          result: appliedResult(
+            {
+              ...loaded.snapshot,
+              extended: {
+                ...loaded.snapshot.extended,
+                entities: {
+                  ...loaded.snapshot.extended.entities,
+                  bans: { [ban.id]: { ...ban, status: "BANTASTIC" } },
+                },
+              },
+            },
+            [{ type: "UPSERT_BAN", ban: { ...ban, status: "BANTASTIC" } }],
+          ),
+          appliedRule: { eventId: "E-23", branch: "second" },
+        });
+      }),
+    ).rejects.toMatchObject({ code: "INVARIANT" });
+    const after = await kit.store.loadProductSnapshot(USER_ID);
+    expect(after.snapshot.extended.entities.bans[BAN_ID]?.status).toBeNull();
   });
 });

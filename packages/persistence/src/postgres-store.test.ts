@@ -13,6 +13,7 @@ import {
   withEntities,
 } from "../../product-model/src/kernel.fixtures.ts";
 import { asInstant, counterAllocator } from "../../product-model/src/kernel/snapshot.ts";
+import { baselineFromLoadedSnapshot } from "./hybrid-persist.ts";
 import { MemorySqlClient } from "./memory-sql.ts";
 import { PostgresProductStore } from "./postgres-store.ts";
 import { SQL } from "./sql.ts";
@@ -35,6 +36,7 @@ describe("PostgresProductStore SQL boundary", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
@@ -50,6 +52,7 @@ describe("PostgresProductStore SQL boundary", () => {
       store.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: before.revision,
+        baseline: baselineFromLoadedSnapshot(before.snapshot, before.revision),
         result,
       }),
     ).rejects.toMatchObject({ code: "TRANSACTION_FAILED" });

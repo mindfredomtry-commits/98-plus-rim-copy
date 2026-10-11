@@ -36,6 +36,15 @@ export function mergeBan(
   if (nextBan.id !== dbCurrent.id) {
     throw new PersistenceError("INVARIANT", "Ban id mismatch during merge");
   }
+  // Immutable identity is always enforced, including create-event preserve paths.
+  if (nextBan.senderId !== dbCurrent.senderId) {
+    throw new PersistenceError("INVARIANT", "Ban senderId is immutable");
+  }
+
+  // Missing actor baseline Ban: cannot authorize field diffs against durable state (P1-BASELINE-01).
+  if (baselineBan === undefined) {
+    return { ...dbCurrent };
+  }
 
   const diff = fieldDiffBan(baselineBan, nextBan);
   const allowed = allowedBanFields(authority);
@@ -46,17 +55,19 @@ export function mergeBan(
     }
   }
 
-  // E-30: durable existing Ban → acceptance only (new Reply Ban uses the create path above).
+  // E-08 / E-10 are create-only: an existing durable Ban is preserve-only (P1-AUTH-CREATE-UPDATE).
   let effectiveApply = apply;
-  if (authority.kind === "APPLIED_RULE" && authority.eventId === "E-30") {
+  if (
+    authority.kind === "APPLIED_RULE" &&
+    (authority.eventId === "E-08" || authority.eventId === "E-10")
+  ) {
+    effectiveApply = new Set();
+  } else if (authority.kind === "APPLIED_RULE" && authority.eventId === "E-30") {
+    // E-30: durable existing Ban → acceptance only (new Reply Ban uses the create path above).
     effectiveApply = new Set([...apply].filter((key) => key === "acceptance"));
   }
 
   let merged: Ban = { ...dbCurrent };
-
-  if (effectiveApply.has("senderId") && nextBan.senderId !== dbCurrent.senderId) {
-    throw new PersistenceError("INVARIANT", "Ban senderId is immutable");
-  }
 
   if (effectiveApply.has("receiverId")) {
     if (dbCurrent.receiverId === null && nextBan.receiverId !== null) {

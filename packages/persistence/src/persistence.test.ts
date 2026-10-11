@@ -48,6 +48,7 @@ import { asInstant } from "../../product-model/src/kernel/snapshot.ts";
 import type { CheckDerivedStatus } from "../../product-model/src/primitives.ts";
 import type { CheckPairId } from "../../product-model/src/ids.ts";
 import { PersistenceError } from "./errors.ts";
+import { baselineFromLoadedSnapshot } from "./hybrid-persist.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
 import type { ProductStore } from "./types.ts";
 
@@ -289,6 +290,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     expect(saved.snapshot.extended.entities.bans[BAN_ID]?.acceptance).toBe("PENDING");
@@ -338,6 +340,7 @@ describe("Stage 4 product persistence", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
@@ -362,6 +365,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     const receiverLoaded = await store.loadProductSnapshot(USER_ID);
@@ -381,6 +385,7 @@ describe("Stage 4 product persistence", () => {
       store.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: saved.revision,
+        baseline: baselineFromLoadedSnapshot(saved.snapshot, saved.revision),
         result: replay,
       }),
     ).rejects.toMatchObject({ code: "APPLIED_TRANSITION_REQUIRED" });
@@ -405,6 +410,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     expect(saved.snapshot.extended.entities.bans[BAN_ID]?.acceptance).toBe("ACCEPTED");
@@ -433,6 +439,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     expect(saved.snapshot.extended.entities.bans[REPLY_BAN_ID]).toBeDefined();
@@ -449,6 +456,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result: first,
     });
     const second = applied(saved.snapshot, event);
@@ -483,6 +491,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     expect(
@@ -509,6 +518,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     expect(memory.inspect().countBans()).toBe(1);
@@ -537,6 +547,7 @@ describe("Stage 4 product persistence", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
@@ -823,6 +834,7 @@ describe("Stage 4 product persistence", () => {
     const saved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result: cancelled,
     });
     expect(saved.snapshot.extended.entities.shareOperations[SHARE_ATTEMPT_ID]?.status).toBe(
@@ -879,6 +891,7 @@ describe("Stage 4 product persistence", () => {
       store.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: seeded.revision,
+        baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         result,
       }),
     ).rejects.toMatchObject({ code: "TRANSACTION_FAILED" });
@@ -933,12 +946,14 @@ describe("Stage 4 product persistence", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result: first,
     });
     await expect(
       store.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: seeded.revision,
+        baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         result: first,
       }),
     ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
@@ -1012,6 +1027,7 @@ describe("Stage 13A corrective — durable bootstrap delivery facts", () => {
     const persisted = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result: {
         outcome: "APPLIED",
         result: "STAY",
@@ -1208,6 +1224,7 @@ describe("Stage 13A corrective — durable bootstrap delivery facts", () => {
     const preserved = await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: reloaded.revision,
+      baseline: baselineFromLoadedSnapshot(reloaded.snapshot, reloaded.revision),
       result: {
         outcome: "APPLIED",
         result: "STAY",

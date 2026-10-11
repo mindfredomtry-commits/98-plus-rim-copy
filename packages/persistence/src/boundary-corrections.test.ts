@@ -28,6 +28,7 @@ import { asInstant } from "../../product-model/src/kernel/snapshot.ts";
 import type { BanId, NotificationItemId, OperationId } from "../../product-model/src/ids.ts";
 import { decodeNotificationItem, type NotificationItemRecord } from "./codec.ts";
 import { PersistenceError } from "./errors.ts";
+import { baselineFromLoadedSnapshot } from "./hybrid-persist.ts";
 import { InMemoryProductStore } from "./in-memory-store.ts";
 import {
   IDENTITY_MIGRATION_AUTHORITY,
@@ -102,6 +103,7 @@ describe("Defect A — snapshot to database synchronization", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
@@ -124,6 +126,7 @@ describe("Defect A — snapshot to database synchronization", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
@@ -156,6 +159,7 @@ describe("Defect A — snapshot to database synchronization", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result,
     });
     const otherLoaded = await store.loadProductSnapshot(OTHER_USER);
@@ -187,6 +191,7 @@ describe("Defect A — snapshot to database synchronization", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result: cancelled,
     });
     const loaded = await store.loadProductSnapshot(USER_ID);
@@ -211,6 +216,7 @@ describe("Defect A — snapshot to database synchronization", () => {
       store.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: seeded.revision,
+        baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         result,
       }),
     ).rejects.toMatchObject({ code: "TRANSACTION_FAILED" });
@@ -499,12 +505,14 @@ describe("Defect D — seedSnapshot is not a production mutation API", () => {
     await store.persistTransition({
       currentUserId: USER_ID,
       expectedRevision: seeded.revision,
+      baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
       result: first,
     });
     await expect(
       store.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: seeded.revision,
+        baseline: baselineFromLoadedSnapshot(seeded.snapshot, seeded.revision),
         result: first,
       }),
     ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });

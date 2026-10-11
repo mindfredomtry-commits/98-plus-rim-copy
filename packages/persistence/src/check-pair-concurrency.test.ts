@@ -26,6 +26,7 @@ import { counterAllocator } from "../../product-model/src/kernel/snapshot.ts";
 import { MemorySqlClient } from "./memory-sql.ts";
 import { PostgresProductStore } from "./postgres-store.ts";
 import { SQL } from "./sql.ts";
+import { baselineFromLoadedSnapshot } from "./hybrid-persist.ts";
 import { PersistenceTestKit } from "./test-kit.ts";
 
 const PAIR_ID = branded<CheckPair["id"]>("pair-1");
@@ -149,11 +150,13 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
       storeA.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: loadedA.revision,
+        baseline: baselineFromLoadedSnapshot(loadedA.snapshot, loadedA.revision),
         result: firstA,
       }),
       storeB.persistTransition({
         currentUserId: OTHER_USER,
         expectedRevision: loadedB.revision,
+        baseline: baselineFromLoadedSnapshot(loadedB.snapshot, loadedB.revision),
         result: firstB,
       }),
     ]);
@@ -199,6 +202,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
         await ctx.persistTransition({
           currentUserId: USER_ID,
           expectedRevision: loaded.revision,
+          baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
           result,
         });
         return event.name;
@@ -225,6 +229,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
         await ctx.persistTransition({
           currentUserId: OTHER_USER,
           expectedRevision: loaded.revision,
+          baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
           result,
         });
         return event.name;
@@ -279,6 +284,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
       await ctx.persistTransition({
         currentUserId: USER_ID,
         expectedRevision: loaded.revision,
+        baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
         result,
       });
     });
@@ -297,6 +303,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
       await ctx.persistTransition({
         currentUserId: OTHER_USER,
         expectedRevision: loaded.revision,
+        baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
         result,
       });
     });
@@ -314,6 +321,7 @@ describe("Postgres CheckPair row-level FIRST/SECOND concurrency", () => {
         store.persistTransition({
           currentUserId: USER_ID,
           expectedRevision: completed.revision,
+          baseline: baselineFromLoadedSnapshot(completed.snapshot, completed.revision),
           result: replay,
         }),
       ).rejects.toMatchObject({ code: "CHECK_PAIR_CONFLICT" });
