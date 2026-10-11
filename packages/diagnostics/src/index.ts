@@ -47,3 +47,14 @@ export {
   classifyDriverError,
   classifyPersistenceError,
 } from "./classify.ts";
+export {
+  reconstructFromCapture,
+  reconstructIncident,
+  type ReconstructionBoundary,
+  type ReconstructionVerdict,
+} from "./reconstruct.ts";
+export {
+  serializeCaptureForInvestigator,
+  startDiagnosticCapture,
+  type DiagnosticCaptureSession,
+} from "./capture.ts";

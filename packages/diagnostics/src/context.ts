@@ -119,7 +119,8 @@ export type StagedMaterializerOutcome = Readonly<{
     | "status.materializer.reused"
     | "status.materializer.remapped"
     | "status.materializer.failed"
-    | "status.materializer.started";
+    | "status.materializer.started"
+    | "status.priority.cleared";
   meta: DiagnosticSafeMeta;
 }>;
 

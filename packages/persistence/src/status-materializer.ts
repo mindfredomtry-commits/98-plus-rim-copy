@@ -220,6 +220,16 @@ export function clearProcessedStatusPriority(snapshot: ProductSnapshot): Product
   if (!item || item.kind !== "STATUS" || item.lifecycle.status !== "PROCESSED") {
     return snapshot;
   }
+  // Staged until transaction commit (same buffer as materializer create/reuse).
+  stageMaterializerOutcome({
+    eventName: "status.priority.cleared",
+    meta: {
+      phase: "staged",
+      durableItemId: statusItemId,
+      classification: "OK",
+      ...(item.kind === "STATUS" ? { banId: item.banId } : {}),
+    },
+  });
   return {
     ...snapshot,
     extended: {

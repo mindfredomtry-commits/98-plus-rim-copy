@@ -35,6 +35,7 @@ export type DiagnosticEventName =
   | "status.materializer.reused"
   | "status.materializer.remapped"
   | "status.materializer.failed"
+  | "status.priority.cleared"
   | "telegram.callback.received"
   | "telegram.callback.duplicate"
   | "telegram.callback.applied"
