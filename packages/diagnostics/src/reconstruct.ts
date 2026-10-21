@@ -193,6 +193,24 @@ export function reconstructIncident(
     break;
   }
 
+  // RIM ownership terminals outrank intermediate persistence fencing noise in the
+  // same correlation window (CAS/rollback during stale-result rejection).
+  if (
+    firstFailure &&
+    (firstFailure.eventName.startsWith("persistence.transaction.") ||
+      firstFailure.eventName === "persistence.cas.conflict")
+  ) {
+    const rimOwnership = scoped.find(
+      (r) =>
+        r.eventName === "rim.request.timeout" ||
+        r.eventName === "rim.request.stale" ||
+        r.eventName === "rim.request.failed",
+    );
+    if (rimOwnership) {
+      firstFailure = rimOwnership;
+    }
+  }
+
   // Special case: COMMIT + later request.failed → response delivery after durable success.
   const committedIdx = scoped.findIndex((r) => r.eventName === "persistence.transaction.committed");
   const requestFailedIdx = scoped.findIndex((r) => r.eventName === "request.failed");
@@ -219,6 +237,19 @@ export function reconstructIncident(
 
   // Success paths of interest (not failures): remap/create/reuse/priority clear.
   if (!firstFailure) {
+    const rimCompleted = scoped.find((r) => r.eventName === "rim.request.completed");
+    if (rimCompleted) {
+      return {
+        correlationId,
+        firstObservableBoundary: "rim.request",
+        classification: "OK",
+        evidence,
+        transactionOutcome: tx,
+        rootCauseEstablished: true,
+        limitations: [],
+        summary: "RIM AI request completed under current ownership.",
+      };
+    }
     const remapped = scoped.find(
       (r) => r.eventName === "status.materializer.remapped" && r.meta.phase === "committed",
     );

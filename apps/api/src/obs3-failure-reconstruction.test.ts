@@ -256,9 +256,9 @@ describe("OBS-3 HTTP/Product/Telegram failure reconstruction", () => {
   });
 
   /**
-   * D12 — event shapes match recover-pending-rim-ai dispatchIfCurrent emitters.
-   * Injection uses the production emit sites' payload contract (not OpenAI).
-   * Full FakeRimAi ownership orchestration remains covered by RIM suite filters.
+   * D12 — event shapes match recover-pending-rim-ai emitters (investigator contract).
+   * OBS-3.1 (`obs31-rim-ownership-reconstruction.test.ts`) executes real FakeRimAi
+   * ownership/orchestration for timeout + stale; this case keeps Layer-B shape checks.
    */
   it("D12A timeout vs D12B stale distinguishable", async () => {
     const timeoutId = randomUUID();

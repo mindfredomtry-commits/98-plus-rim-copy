@@ -78,4 +78,23 @@ describe("OBS-3 reconstructIncident (synthetic unit — not integration)", () =>
     expect(v.transactionOutcome).toBe("rolled_back");
     expect(v.limitations.some((l) => l.includes("UNKNOWN"))).toBe(true);
   });
+
+  it("prefers rim.request.stale over persistence fencing noise in the same window", () => {
+    const id = "aaaaaaaa-1111-2222-3333-444444444444";
+    const v = reconstructIncident(
+      [
+        rec(id, "rim.request.started", { requestId: "req-1" }),
+        rec(id, "persistence.transaction.rolled_back", { phase: "rolled_back" }),
+        rec(id, "rim.request.stale", {
+          classification: "STALE_AI_RESULT",
+          requestId: "req-1",
+          attemptId: "att-a",
+        }),
+      ],
+      id,
+    );
+    expect(v.classification).toBe("STALE_AI_RESULT");
+    expect(v.firstObservableBoundary).toBe("rim.request");
+    expect(v.rootCauseEstablished).toBe(true);
+  });
 });

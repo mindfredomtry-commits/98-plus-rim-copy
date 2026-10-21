@@ -120,11 +120,7 @@ export async function continuePendingRimAi(
       origin: AskRimOrigin | null;
     }>,
 ): Promise<ApplicationExecutionResult | null> {
-  emitDiagnostic({
-    eventName: "rim.request.started",
-    source: "rim",
-    meta: { actorId: tools.context.currentUserId },
-  });
+  await emitRimRequestStarted(tools);
   const initialized = await ensureInitialization(tools);
   if (initialized) {
     return initialized;
@@ -173,6 +169,7 @@ export async function recoverPendingRimAi(
       inFlightRequestIds?: readonly string[];
     }>,
 ): Promise<ApplicationExecutionResult | null> {
+  await emitRimRequestStarted(tools);
   const initialized = await ensureInitialization(tools);
   if (initialized) {
     return initialized;
@@ -196,6 +193,64 @@ export async function recoverPendingRimAi(
     },
     0,
   );
+}
+
+/**
+ * Entry diagnostic for live continuation and recovery re-entry.
+ * correlationId comes from ALS (not durable across process restart).
+ * requestId is included when a PENDING chat is already present for linkage.
+ */
+async function emitRimRequestStarted(tools: PendingRimAiTools): Promise<void> {
+  let requestId: string | undefined;
+  try {
+    const loaded = await tools.deps.store.loadProductSnapshot(tools.context.currentUserId);
+    requestId = pendingChat(loaded.snapshot)?.snapshot.requestId;
+  } catch {
+    requestId = undefined;
+  }
+  emitDiagnostic({
+    eventName: "rim.request.started",
+    source: "rim",
+    meta: {
+      actorId: tools.context.currentUserId,
+      ...(requestId === undefined ? {} : { requestId }),
+    },
+  });
+}
+
+function failureCodeOf(failure: Failure): string {
+  return String((failure as { code?: string }).code ?? "");
+}
+
+function isTimeoutFailure(failure: Failure): boolean {
+  return failureCodeOf(failure).toLowerCase().includes("timeout");
+}
+
+/**
+ * Adapter-reported timeout when Product does not dispatch E-59
+ * (ambiguous provider claim / local throw leave PENDING). Diagnostic-only.
+ */
+function emitTimeoutWithoutProductFailure(
+  tools: ReconcileTools,
+  runtime: RimProviderRuntime,
+  failure: Failure,
+): void {
+  const authority = producingAttempt(runtime);
+  if (!authority) {
+    return;
+  }
+  const failureCode = failureCodeOf(failure);
+  emitDiagnostic({
+    eventName: "rim.request.timeout",
+    source: "rim",
+    meta: {
+      classification: "AI_TIMEOUT",
+      requestId: authority.requestId,
+      attemptId: authority.attemptId,
+      actorId: tools.context.currentUserId,
+      ...(failureCode.length > 0 ? { errorCode: failureCode.slice(0, 64) } : {}),
+    },
+  });
 }
 
 async function ensureInitialization(
@@ -563,16 +618,28 @@ async function submitClaimed(
   } catch (error) {
     const observed = provenance.read();
     if (observed.kind === "conflict" || observed.kind === "accepted") {
+      if (error instanceof FakeRimAiFailure && isTimeoutFailure(error.failure)) {
+        emitTimeoutWithoutProductFailure(tools, runtime, error.failure);
+      }
       return null;
     }
     const identity = await responseIdentityAfterThrow(tools, runtime);
     if (identity !== "unknown") {
+      if (error instanceof FakeRimAiFailure && isTimeoutFailure(error.failure)) {
+        emitTimeoutWithoutProductFailure(tools, runtime, error.failure);
+      }
       return null;
     }
     if (ambiguousClaim(runtime)) {
+      if (error instanceof FakeRimAiFailure && isTimeoutFailure(error.failure)) {
+        emitTimeoutWithoutProductFailure(tools, runtime, error.failure);
+      }
       return AMBIGUOUS_PROVIDER_ATTEMPT;
     }
     if (runtime.continuityMode === "local-canonical-history") {
+      if (error instanceof FakeRimAiFailure && isTimeoutFailure(error.failure)) {
+        emitTimeoutWithoutProductFailure(tools, runtime, error.failure);
+      }
       return null;
     }
     const failure =
