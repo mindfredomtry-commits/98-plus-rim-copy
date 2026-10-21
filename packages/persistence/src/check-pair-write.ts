@@ -24,14 +24,42 @@ export function assertCheckPairWriteAllowed(
   ) {
     throw new PersistenceError("INVARIANT", "CheckPair item IDs are immutable after commit");
   }
-  // Nullification forbidden.
-  if (answered(existing.receiverAnswer) && incoming.receiverAnswer === null) {
+
+  const incomingCount =
+    Number(answered(incoming.receiverAnswer)) + Number(answered(incoming.senderAnswer));
+  const incomingIsFirst =
+    incoming.resultingStatus === null && incomingCount === 1;
+
+  // Concurrent complementary FIRST: Kernel snapshots leave the other side null
+  // (merge treats null as preserve). Detect the race before "cannot be cleared".
+  if (incomingIsFirst) {
+    const otherExisting = answered(incoming.receiverAnswer)
+      ? existing.senderAnswer
+      : existing.receiverAnswer;
+    if (otherExisting !== null) {
+      throw new PersistenceError(
+        "CHECK_PAIR_CONFLICT",
+        "FIRST confirmation cannot commit after the other participant already confirmed",
+      );
+    }
+  }
+
+  // Nullification forbidden (explicit wipe — not complementary FIRST preserve-null).
+  if (
+    !incomingIsFirst &&
+    answered(existing.receiverAnswer) &&
+    incoming.receiverAnswer === null
+  ) {
     throw new PersistenceError(
       "INVARIANT",
       "CheckPair receiver answer cannot be cleared once confirmed",
     );
   }
-  if (answered(existing.senderAnswer) && incoming.senderAnswer === null) {
+  if (
+    !incomingIsFirst &&
+    answered(existing.senderAnswer) &&
+    incoming.senderAnswer === null
+  ) {
     throw new PersistenceError(
       "INVARIANT",
       "CheckPair sender answer cannot be cleared once confirmed",
@@ -71,20 +99,6 @@ export function assertCheckPairWriteAllowed(
     throw new PersistenceError(
       "INVARIANT",
       "CheckPair resulting Status is already determined and cannot be replaced",
-    );
-  }
-  const incomingCount =
-    Number(answered(incoming.receiverAnswer)) + Number(answered(incoming.senderAnswer));
-  if (incoming.resultingStatus !== null || incomingCount !== 1) {
-    return;
-  }
-  const otherExisting = answered(incoming.receiverAnswer)
-    ? existing.senderAnswer
-    : existing.receiverAnswer;
-  if (otherExisting !== null) {
-    throw new PersistenceError(
-      "CHECK_PAIR_CONFLICT",
-      "FIRST confirmation cannot commit after the other participant already confirmed",
     );
   }
 }

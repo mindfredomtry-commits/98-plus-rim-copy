@@ -355,7 +355,7 @@ describe.skipIf(!rawDatabaseUrl)("12D-1C PostgreSQL concurrency (PG-01..PG-17)",
     expect(durable.rows[0]?.acceptance).toBe("ACCEPTED");
   }, 30_000);
 
-  it("PG-04 CheckPair answer nullification rejected under concurrent stale writes", async () => {
+  it("PG-04 CheckPair complementary FIRST after peer confirm is CHECK_PAIR_CONFLICT", async () => {
     const receiverId = await identity("pg04-receiver");
     const senderId = await identity("pg04-sender");
     const pairId = branded<CheckPairId>(`pair-pg04-${randomUUID()}`);
@@ -392,7 +392,9 @@ describe.skipIf(!rawDatabaseUrl)("12D-1C PostgreSQL concurrency (PG-01..PG-17)",
     await expect(
       store.withCheckPairLock(pairId, banId, receiverId, async (ctx) => {
         const loaded = await ctx.loadProductSnapshot(receiverId);
-        const staleClear: CheckPair = {
+        // Stale complementary FIRST (Kernel leaves the other side null = preserve).
+        // Must surface as CHECK_PAIR_CONFLICT, not misclassified clear-INVARIANT.
+        const staleFirst: CheckPair = {
           ...pair,
           receiverAnswer: null,
           senderAnswer: "FULFILLED",
@@ -401,13 +403,13 @@ describe.skipIf(!rawDatabaseUrl)("12D-1C PostgreSQL concurrency (PG-01..PG-17)",
           currentUserId: receiverId,
           expectedRevision: loaded.revision,
           result: appliedResult(
-            withEntities(loaded.snapshot, { checkPairs: { [pairId]: staleClear } }),
-            [{ type: "UPSERT_CHECK_PAIR", pair: staleClear }],
+            withEntities(loaded.snapshot, { checkPairs: { [pairId]: staleFirst } }),
+            [{ type: "UPSERT_CHECK_PAIR", pair: staleFirst }],
           ),
           baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
         });
       }),
-    ).rejects.toMatchObject({ code: "INVARIANT" });
+    ).rejects.toMatchObject({ code: "CHECK_PAIR_CONFLICT" });
     const durable = await db.sql.query<{
       receiver_answer: string | null;
       sender_answer: string | null;

@@ -4,9 +4,12 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { asTelegramUserId, PostgresIdentityStore } from "@98plus/identity";
 import {
+  baselineFromLoadedSnapshot,
   openPostgresPersistence,
   PostgresProductStore,
   SQL,
+  type AppliedProductRule,
+  type PersistTransitionInput,
   type PostgresPersistence,
 } from "@98plus/persistence";
 import { PersistenceTestKit } from "../../../persistence/src/test-kit.ts";
@@ -19,15 +22,18 @@ import {
   emptySnapshot,
   reduce,
   type AiRequestId,
+  type Ban,
   type BanId,
   type CheckPair,
   type CheckPairId,
   type ContextRequestId,
   type DomainTimerId,
   type DurationMinutes,
+  type Effect,
   type NotificationItemId,
   type OperationId,
   type ProductSnapshot,
+  type TransitionResult,
   type RimChat,
   type RimChatId,
   type ShareAttemptId,
@@ -47,12 +53,14 @@ import {
   pendingOp,
   readyContext,
   shareOp,
+  statusItem,
   validCreateDraft,
   withChat,
   withControlState,
   withEntities,
   withOperation,
 } from "../../../product-model/src/kernel.fixtures.ts";
+import { randomIdAllocator } from "../clock.ts";
 import { executeProductEvent, executeTemplateShareClaim } from "../execute.ts";
 import { authContext } from "../test-harness.ts";
 import { recoverPendingRimAi } from "./recover-pending-rim-ai.ts";
@@ -105,6 +113,72 @@ function conversation(value: string): ProviderConversationId {
 
 function response(value: string): ProviderResponseId {
   return value as ProviderResponseId;
+}
+
+/**
+ * Match Application execute.ts persistence contract: Ban/Timer/Pair writes require
+ * a pre-transition PersistenceBaseline and the applied Matrix rule for hybrid merge.
+ */
+function persistInput(
+  currentUserId: UserId,
+  expectedRevision: number,
+  baselineSnapshot: ProductSnapshot,
+  result: TransitionResult,
+  appliedRuleOverride?: AppliedProductRule,
+): PersistTransitionInput {
+  const trace = [...result.traces].reverse().find((item) => item.eventId !== "LATE_RESULT");
+  const appliedRule: AppliedProductRule | undefined =
+    appliedRuleOverride ??
+    (trace
+      ? { eventId: trace.eventId as AppliedProductRule["eventId"], branch: trace.branch }
+      : undefined);
+  return {
+    currentUserId,
+    expectedRevision,
+    result,
+    baseline: baselineFromLoadedSnapshot(baselineSnapshot, expectedRevision),
+    ...(appliedRule === undefined ? {} : { appliedRule }),
+  };
+}
+
+function appliedEffects(snapshot: ProductSnapshot, effects: readonly Effect[]): TransitionResult {
+  return {
+    outcome: "APPLIED",
+    result: "TRANSITION",
+    controlState: snapshot.controlState,
+    snapshot,
+    effects,
+    declaredEffects: [],
+    traces: [],
+    composition: "GLOBAL_THEN_LOCAL",
+    error: null,
+  };
+}
+
+function overboardEffects(ban: Ban, recvKernelId: string, sendKernelId: string): Effect[] {
+  return [
+    { type: "UPSERT_BAN", ban },
+    {
+      type: "UPSERT_NOTIFICATION_ITEM",
+      item: statusItem({
+        id: branded(recvKernelId),
+        ownerId: ban.receiverId!,
+        banId: ban.id,
+        role: "RECEIVER",
+        status: "OVERBOARD",
+      }),
+    },
+    {
+      type: "UPSERT_NOTIFICATION_ITEM",
+      item: statusItem({
+        id: branded(sendKernelId),
+        ownerId: ban.senderId,
+        banId: ban.id,
+        role: "SENDER",
+        status: "OVERBOARD",
+      }),
+    },
+  ];
 }
 
 describe("multi-process boundary keeps the frozen Product engine", () => {
@@ -398,16 +472,12 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     const second = await startRuntime("b");
     const settled = await contend(SQL.selectSessionForUpdate, [user.userId], () =>
       Promise.allSettled([
-        first.store.persistTransition({
-          currentUserId: user.userId,
-          expectedRevision: seeded.revision,
-          result: expired,
-        }),
-        second.store.persistTransition({
-          currentUserId: user.userId,
-          expectedRevision: seeded.revision,
-          result: closed,
-        }),
+        first.store.persistTransition(
+          persistInput(user.userId, seeded.revision, seeded.snapshot, expired),
+        ),
+        second.store.persistTransition(
+          persistInput(user.userId, seeded.revision, seeded.snapshot, closed),
+        ),
       ]),
     );
     expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
@@ -472,16 +542,12 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     const runtimeB = await startRuntime("b");
     const settled = await contend(SQL.selectSessionForUpdate, [sender.userId], () =>
       Promise.allSettled([
-        runtimeA.store.persistTransition({
-          currentUserId: sender.userId,
-          expectedRevision: seeded.revision,
-          result: firstResult,
-        }),
-        runtimeB.store.persistTransition({
-          currentUserId: sender.userId,
-          expectedRevision: seeded.revision,
-          result: secondResult,
-        }),
+        runtimeA.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, firstResult),
+        ),
+        runtimeB.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, secondResult),
+        ),
       ]),
     );
     expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
@@ -620,16 +686,12 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     expect(declined.outcome).toBe("APPLIED");
     const same = await contend(SQL.selectSessionForUpdate, [receiver.userId], () =>
       Promise.allSettled([
-        runtimeA.store.persistTransition({
-          currentUserId: receiver.userId,
-          expectedRevision: receiverSeed.revision,
-          result: fulfilled,
-        }),
-        runtimeB.store.persistTransition({
-          currentUserId: receiver.userId,
-          expectedRevision: receiverSeed.revision,
-          result: fulfilled,
-        }),
+        runtimeA.store.persistTransition(
+          persistInput(receiver.userId, receiverSeed.revision, receiverSeed.snapshot, fulfilled),
+        ),
+        runtimeB.store.persistTransition(
+          persistInput(receiver.userId, receiverSeed.revision, receiverSeed.snapshot, fulfilled),
+        ),
       ]),
     );
     expect(same.filter((item) => item.status === "fulfilled")).toHaveLength(1);
@@ -638,11 +700,9 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     });
     const current = await runtimeA.store.loadProductSnapshot(receiver.userId);
     await expect(
-      runtimeB.store.persistTransition({
-        currentUserId: receiver.userId,
-        expectedRevision: current.revision,
-        result: declined,
-      }),
+      runtimeB.store.persistTransition(
+        persistInput(receiver.userId, current.revision, current.snapshot, declined),
+      ),
     ).rejects.toMatchObject({ code: "INVARIANT" });
     const pair = (await runtimeB.store.loadProductSnapshot(receiver.userId)).snapshot.extended
       .entities.checkPairs[world.pairId];
@@ -692,11 +752,9 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
               allocateId: counterAllocator(41),
             });
             expect(result.outcome).toBe("APPLIED");
-            await ctx.persistTransition({
-              currentUserId,
-              expectedRevision: loaded.revision,
-              result,
-            });
+            await ctx.persistTransition(
+              persistInput(currentUserId, loaded.revision, loaded.snapshot, result),
+            );
             return event.name;
           },
         ),
@@ -723,11 +781,9 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
             allocateId: counterAllocator(42),
           });
           expect(result.outcome).toBe("APPLIED");
-          await ctx.persistTransition({
-            currentUserId: bothSender,
-            expectedRevision: loaded.revision,
-            result,
-          });
+          await ctx.persistTransition(
+            persistInput(bothSender, loaded.revision, loaded.snapshot, result),
+          );
           return event.name;
         }),
       ]),
@@ -789,22 +845,28 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
           boundary.banId,
           boundaryReceiver.userId,
           (ctx) =>
-            ctx.persistTransition({
-              currentUserId: boundaryReceiver.userId,
-              expectedRevision: boundaryReceiverSeed.revision,
-              result: receiverFirst,
-            }),
+            ctx.persistTransition(
+              persistInput(
+                boundaryReceiver.userId,
+                boundaryReceiverSeed.revision,
+                boundaryReceiverSeed.snapshot,
+                receiverFirst,
+              ),
+            ),
         ),
         runtimeB.store.withCheckPairLock(
           boundary.pairId,
           boundary.banId,
           boundarySender.userId,
           (ctx) =>
-            ctx.persistTransition({
-              currentUserId: boundarySender.userId,
-              expectedRevision: boundarySenderSeed.revision,
-              result: senderFirst,
-            }),
+            ctx.persistTransition(
+              persistInput(
+                boundarySender.userId,
+                boundarySenderSeed.revision,
+                boundarySenderSeed.snapshot,
+                senderFirst,
+              ),
+            ),
         ),
       ]),
     );
@@ -858,16 +920,12 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     const runtimeB = await startRuntime("b");
     const settled = await contend(SQL.selectSessionForUpdate, [sender.userId], () =>
       Promise.allSettled([
-        runtimeA.store.persistTransition({
-          currentUserId: sender.userId,
-          expectedRevision: seeded.revision,
-          result: first,
-        }),
-        runtimeB.store.persistTransition({
-          currentUserId: sender.userId,
-          expectedRevision: seeded.revision,
-          result: second,
-        }),
+        runtimeA.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, first),
+        ),
+        runtimeB.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, second),
+        ),
       ]),
     );
     expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
@@ -895,6 +953,318 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     expect(loadedB.snapshot.extended.entities.checkPairs).toEqual(
       loadedA.snapshot.extended.entities.checkPairs,
     );
+    await runtimeA.kill();
+    await runtimeB.kill();
+  });
+
+  it("S-C1 concurrent OVERBOARD — one Status pair; loser does not mutate", async () => {
+    const sender = await actor("sc1-sender");
+    const receiver = await actor("sc1-receiver");
+    const banId = branded<BanId>(`ban-sc1-${randomUUID()}`);
+    const ban = makeBan({
+      id: banId,
+      senderId: sender.userId,
+      receiverId: receiver.userId,
+      status: null,
+      acceptance: "PENDING",
+    });
+    const world = withEntities(withControlState(emptySnapshot(), "RIM.LOBBY"), {
+      bans: { [banId]: ban },
+    });
+    const seeded = await seed(sender.userId, world);
+    await seed(receiver.userId, world);
+    const overboard: Ban = { ...ban, status: "OVERBOARD" };
+    const first = appliedEffects(
+      withEntities(seeded.snapshot, { bans: { [banId]: overboard } }),
+      overboardEffects(overboard, `sc1-r-a-${randomUUID()}`, `sc1-s-a-${randomUUID()}`),
+    );
+    const second = appliedEffects(
+      withEntities(seeded.snapshot, { bans: { [banId]: overboard } }),
+      overboardEffects(overboard, `sc1-r-b-${randomUUID()}`, `sc1-s-b-${randomUUID()}`),
+    );
+    const runtimeA = await startRuntime("a");
+    const runtimeB = await startRuntime("b");
+    const rule: AppliedProductRule = { eventId: "E-20", branch: "overboard" };
+    const settled = await contend(SQL.selectBanForUpdate, [banId], () =>
+      Promise.allSettled([
+        runtimeA.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, first, rule),
+        ),
+        runtimeB.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, second, rule),
+        ),
+      ]),
+    );
+    expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    expect(settled.find((item) => item.status === "rejected")).toMatchObject({
+      reason: { code: "REVISION_CONFLICT" },
+    });
+    const statuses = await admin.sql.query<{ role: string; status: string; item_id: string }>(
+      `SELECT role, status, item_id FROM notification_items
+       WHERE ban_id = $1 AND kind = 'STATUS' ORDER BY role, item_id`,
+      [banId],
+    );
+    expect(statuses.rows).toHaveLength(2);
+    expect(new Set(statuses.rows.map((row) => row.role))).toEqual(new Set(["RECEIVER", "SENDER"]));
+    expect(statuses.rows.every((row) => row.status === "OVERBOARD")).toBe(true);
+    const durableBan = await admin.sql.query<{ status: string | null; acceptance: string }>(
+      "SELECT status, acceptance FROM bans WHERE ban_id = $1",
+      [banId],
+    );
+    expect(durableBan.rows[0]).toEqual({ status: "OVERBOARD", acceptance: "PENDING" });
+    const senderAfter = await runtimeA.store.loadProductSnapshot(sender.userId);
+    const receiverAfter = await runtimeB.store.loadProductSnapshot(receiver.userId);
+    expect(senderAfter.snapshot.extended.entities.bans[banId]?.status).toBe("OVERBOARD");
+    expect(receiverAfter.snapshot.extended.entities.bans[banId]?.status).toBe("OVERBOARD");
+    expect(senderAfter.revision).toBe(seeded.revision + 1);
+    await runtimeA.kill();
+    await runtimeB.kill();
+  });
+
+  it("S-C2 concurrent E-20 — terminal once; Status pair unique or idempotent", async () => {
+    const sender = await actor("sc2-sender");
+    const receiver = await actor("sc2-receiver");
+    const banId = branded<BanId>(`ban-sc2-${randomUUID()}`);
+    const ban = makeBan({
+      id: banId,
+      senderId: sender.userId,
+      receiverId: receiver.userId,
+      status: null,
+      acceptance: "PENDING",
+    });
+    const world = withEntities(withControlState(emptySnapshot(), "RIM.LOBBY"), {
+      bans: { [banId]: ban },
+    });
+    const seeded = await seed(sender.userId, world);
+    await seed(receiver.userId, world);
+    const overboard: Ban = { ...ban, status: "OVERBOARD" };
+    const constructA = appliedEffects(
+      withEntities(seeded.snapshot, { bans: { [banId]: overboard } }),
+      overboardEffects(overboard, `sc2-r-a-${randomUUID()}`, `sc2-s-a-${randomUUID()}`),
+    );
+    const constructB = appliedEffects(
+      withEntities(seeded.snapshot, { bans: { [banId]: overboard } }),
+      overboardEffects(overboard, `sc2-r-b-${randomUUID()}`, `sc2-s-b-${randomUUID()}`),
+    );
+    const runtimeA = await startRuntime("a");
+    const runtimeB = await startRuntime("b");
+    const rule: AppliedProductRule = { eventId: "E-20", branch: "overboard" };
+    const raced = await contend(SQL.selectBanForUpdate, [banId], () =>
+      Promise.allSettled([
+        runtimeA.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, constructA, rule),
+        ),
+        runtimeB.store.persistTransition(
+          persistInput(sender.userId, seeded.revision, seeded.snapshot, constructB, rule),
+        ),
+      ]),
+    );
+    expect(raced.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    const afterWin = await runtimeA.store.loadProductSnapshot(sender.userId);
+    const retry = appliedEffects(
+      withEntities(afterWin.snapshot, { bans: { [banId]: overboard } }),
+      overboardEffects(overboard, `sc2-r-retry-${randomUUID()}`, `sc2-s-retry-${randomUUID()}`),
+    );
+    await runtimeB.store.persistTransition(
+      persistInput(sender.userId, afterWin.revision, afterWin.snapshot, retry, rule),
+    );
+    const statuses = await admin.sql.query<{ role: string; status: string }>(
+      `SELECT role, status FROM notification_items WHERE ban_id = $1 AND kind = 'STATUS'`,
+      [banId],
+    );
+    expect(statuses.rows).toHaveLength(2);
+    expect(new Set(statuses.rows.map((row) => `${row.role}:${row.status}`))).toEqual(
+      new Set(["RECEIVER:OVERBOARD", "SENDER:OVERBOARD"]),
+    );
+    const durable = await admin.sql.query<{ status: string | null }>(
+      "SELECT status FROM bans WHERE ban_id = $1",
+      [banId],
+    );
+    expect(durable.rows[0]?.status).toBe("OVERBOARD");
+    await runtimeA.kill();
+    await runtimeB.kill();
+  });
+
+  it("S-C3 concurrent E-23 — one CheckPair result and one Status pair", async () => {
+    const receiver = await actor("sc3-receiver");
+    const sender = await actor("sc3-sender");
+    const world = checkWorld(receiver.userId, sender.userId);
+    const receiverSeed = await seed(receiver.userId, world.receiverWorld);
+    await seed(sender.userId, world.senderWorld);
+    const runtimeA = await startRuntime("a");
+    const runtimeB = await startRuntime("b");
+    const receiverFirst = reduce(
+      receiverSeed.snapshot,
+      eventOf("NOTIFICATIONS.CHECK_ANSWER_CONFIRMED.FIRST", {
+        checkItemId: branded<NotificationItemId>(`${world.pairId}-receiver`),
+        answer: "FULFILLED",
+        checkPairId: world.pairId,
+      }),
+      {
+        ...kernelContext(),
+        currentUserId: receiver.userId,
+        allocateId: randomIdAllocator(),
+      },
+    );
+    expect(receiverFirst.outcome).toBe("APPLIED");
+    await runtimeA.store.persistTransition(
+      persistInput(receiver.userId, receiverSeed.revision, receiverSeed.snapshot, receiverFirst),
+    );
+    const senderFresh = await runtimeB.store.loadProductSnapshot(sender.userId);
+    const secondA = reduce(
+      senderFresh.snapshot,
+      eventOf("NOTIFICATIONS.CHECK_ANSWER_CONFIRMED.SECOND", {
+        checkItemId: branded<NotificationItemId>(`${world.pairId}-sender`),
+        answer: "FULFILLED",
+        checkPairId: world.pairId,
+        resultingStatus: "BANTASTIC",
+      }),
+      {
+        ...kernelContext(),
+        currentUserId: sender.userId,
+        allocateId: randomIdAllocator(),
+      },
+    );
+    const secondB = reduce(
+      senderFresh.snapshot,
+      eventOf("NOTIFICATIONS.CHECK_ANSWER_CONFIRMED.SECOND", {
+        checkItemId: branded<NotificationItemId>(`${world.pairId}-sender`),
+        answer: "FULFILLED",
+        checkPairId: world.pairId,
+        resultingStatus: "BANTASTIC",
+      }),
+      {
+        ...kernelContext(),
+        currentUserId: sender.userId,
+        allocateId: randomIdAllocator(),
+      },
+    );
+    expect(secondA.outcome).toBe("APPLIED");
+    expect(secondB.outcome).toBe("APPLIED");
+    const raced = await contend(SQL.selectPairForUpdate, [world.pairId], () =>
+      Promise.allSettled([
+        runtimeA.store.withCheckPairLock(
+          world.pairId,
+          world.banId,
+          sender.userId,
+          (ctx) =>
+            ctx.persistTransition(
+              persistInput(sender.userId, senderFresh.revision, senderFresh.snapshot, secondA),
+            ),
+        ),
+        runtimeB.store.withCheckPairLock(
+          world.pairId,
+          world.banId,
+          sender.userId,
+          (ctx) =>
+            ctx.persistTransition(
+              persistInput(sender.userId, senderFresh.revision, senderFresh.snapshot, secondB),
+            ),
+        ),
+      ]),
+    );
+    expect(raced.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    expect(raced.find((item) => item.status === "rejected")).toMatchObject({
+      reason: { code: "REVISION_CONFLICT" },
+    });
+    const pair = (await runtimeA.store.loadProductSnapshot(sender.userId)).snapshot.extended
+      .entities.checkPairs[world.pairId];
+    expect(pair).toMatchObject({
+      receiverAnswer: "FULFILLED",
+      senderAnswer: "FULFILLED",
+      resultingStatus: "BANTASTIC",
+    });
+    const statuses = await admin.sql.query<{ role: string; status: string }>(
+      `SELECT role, status FROM notification_items WHERE ban_id = $1 AND kind = 'STATUS'`,
+      [world.banId],
+    );
+    expect(statuses.rows).toHaveLength(2);
+    expect(statuses.rows.every((row) => row.status === "BANTASTIC")).toBe(true);
+    const checks = await admin.sql.query<{
+      lifecycle_status: string;
+      lifecycle_display: string;
+      role: string;
+    }>(
+      `SELECT lifecycle_status, lifecycle_display, role FROM notification_items
+       WHERE ban_id = $1 AND kind = 'CHECK' ORDER BY role`,
+      [world.banId],
+    );
+    expect(checks.rows).toHaveLength(2);
+    expect(
+      checks.rows.every(
+        (row) => row.lifecycle_status === "PROCESSED" || row.lifecycle_display !== "ACTIVE",
+      ),
+    ).toBe(true);
+    const priority = await admin.sql.query<{ kind: string; lifecycle_display: string }>(
+      `SELECT kind, lifecycle_display FROM notification_items
+       WHERE ban_id = $1 AND kind = 'CHECK' AND lifecycle_display = 'ACTIVE'`,
+      [world.banId],
+    );
+    expect(priority.rows).toHaveLength(0);
+    await runtimeA.kill();
+    await runtimeB.kill();
+  });
+
+  it("S-C4 cross-user visibility — concurrent reads see canonical Status relationship", async () => {
+    const sender = await actor("sc4-sender");
+    const receiver = await actor("sc4-receiver");
+    const banId = branded<BanId>(`ban-sc4-${randomUUID()}`);
+    const ban = makeBan({
+      id: banId,
+      senderId: sender.userId,
+      receiverId: receiver.userId,
+      status: null,
+      acceptance: "PENDING",
+    });
+    const world = withEntities(withControlState(emptySnapshot(), "RIM.LOBBY"), {
+      bans: { [banId]: ban },
+    });
+    const seeded = await seed(sender.userId, world);
+    await seed(receiver.userId, world);
+    const overboard: Ban = { ...ban, status: "OVERBOARD" };
+    const commit = appliedEffects(
+      withEntities(seeded.snapshot, { bans: { [banId]: overboard } }),
+      overboardEffects(overboard, `sc4-r-${randomUUID()}`, `sc4-s-${randomUUID()}`),
+    );
+    const runtimeA = await startRuntime("a");
+    const runtimeB = await startRuntime("b");
+    await runtimeA.store.persistTransition(
+      persistInput(sender.userId, seeded.revision, seeded.snapshot, commit, {
+        eventId: "E-20",
+        branch: "overboard",
+      }),
+    );
+    const [senderView, receiverView] = await Promise.all([
+      runtimeA.store.loadProductSnapshot(sender.userId),
+      runtimeB.store.loadProductSnapshot(receiver.userId),
+    ]);
+    expect(senderView.snapshot.extended.entities.bans[banId]?.status).toBe("OVERBOARD");
+    expect(receiverView.snapshot.extended.entities.bans[banId]?.status).toBe("OVERBOARD");
+    const senderStatuses = Object.values(senderView.snapshot.extended.entities.notificationItems).filter(
+      (item) => item.kind === "STATUS" && item.banId === banId,
+    );
+    const receiverStatuses = Object.values(
+      receiverView.snapshot.extended.entities.notificationItems,
+    ).filter((item) => item.kind === "STATUS" && item.banId === banId);
+    expect(
+      senderStatuses.some(
+        (item) => item.kind === "STATUS" && item.role === "SENDER" && item.status === "OVERBOARD",
+      ),
+    ).toBe(true);
+    expect(
+      receiverStatuses.some(
+        (item) => item.kind === "STATUS" && item.role === "RECEIVER" && item.status === "OVERBOARD",
+      ),
+    ).toBe(true);
+    const durable = await admin.sql.query<{ role: string; owner_id: string; status: string }>(
+      `SELECT role, owner_id, status FROM notification_items
+       WHERE ban_id = $1 AND kind = 'STATUS' ORDER BY role`,
+      [banId],
+    );
+    expect(durable.rows).toEqual([
+      { role: "RECEIVER", owner_id: receiver.userId, status: "OVERBOARD" },
+      { role: "SENDER", owner_id: sender.userId, status: "OVERBOARD" },
+    ]);
     await runtimeA.kill();
     await runtimeB.kill();
   });
@@ -984,14 +1354,14 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
     const depsA = {
       store: runtimeA.store,
       clock: { nowMs: () => 2_000_000 },
-      allocateId: counterAllocator(71),
+      allocateId: randomIdAllocator(),
     };
     const depsB = {
       store: runtimeB.store,
       clock: { nowMs: () => 2_000_000 },
-      allocateId: counterAllocator(72),
+      allocateId: randomIdAllocator(),
     };
-    await contend(SQL.selectSessionForUpdate, [receiver.userId], () =>
+    const raced = await contend(SQL.selectSessionForUpdate, [receiver.userId], () =>
       Promise.allSettled([
         executeProductEvent(
           {
@@ -1016,6 +1386,14 @@ describe.skipIf(!databaseUrl)("two isolated API runtimes on one PostgreSQL datab
         ),
       ]),
     );
+    expect(raced.filter((item) => item.status === "fulfilled")).toHaveLength(2);
+    const claimResult = raced[1];
+    expect(claimResult.status).toBe("fulfilled");
+    if (claimResult.status === "fulfilled") {
+      expect(claimResult.value).toMatchObject({
+        kind: expect.stringMatching(/^(CLAIMED|ALREADY_BOUND)$/),
+      });
+    }
     const banA = await runtimeA.store.getBanById(banId);
     const banB = await runtimeB.store.getBanById(banId);
     expect(banA?.receiverId).toBe(receiver.userId);
