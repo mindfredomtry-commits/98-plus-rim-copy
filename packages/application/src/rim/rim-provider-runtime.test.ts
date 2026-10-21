@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MemorySqlClient, type ProductStore } from "@98plus/persistence";
+import { baselineFromLoadedSnapshot, MemorySqlClient, type ProductStore } from "@98plus/persistence";
 import {
   CANONICAL_EVENT_COUNT,
   CANONICAL_EVENT_DEFINITIONS,
@@ -158,6 +158,7 @@ async function apply(
     expectedRevision: loaded.revision,
     result,
     appliedRule: { eventId: definition.id, branch: trace.branch },
+    baseline: baselineFromLoadedSnapshot(loaded.snapshot, loaded.revision),
   });
 }
 

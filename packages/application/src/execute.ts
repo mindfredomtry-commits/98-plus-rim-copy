@@ -150,6 +150,63 @@ function persistenceInput(
   };
 }
 
+const DEFINED_LOCAL_NO_BRANCH_PREFIX = "Defined local event had no matching branch among ";
+
+/**
+ * Ordinary E-15 guard rejection already reported by the Kernel.
+ *
+ * `NO_BRANCH_MATCHED` is also produced for E-43 and for other defined events.
+ * Those stay `KERNEL_INVARIANT`. This matches only `NOTIFICATIONS.PRESS_OVERBOARD`
+ * when the Kernel error is the defined-local miss: every identity is a local
+ * E-15 row for the current control state, the message lists exactly those
+ * identities, and the result has no effects or traces.
+ */
+function isOverboardGuardRejection(event: CanonicalEvent, transition: TransitionResult): boolean {
+  if (event.name !== "NOTIFICATIONS.PRESS_OVERBOARD") {
+    return false;
+  }
+  if (transition.outcome !== "KERNEL_INVARIANT" || transition.composition !== "UNDEFINED") {
+    return false;
+  }
+  if (
+    transition.result !== "UNDEFINED" ||
+    transition.effects.length !== 0 ||
+    transition.traces.length !== 0
+  ) {
+    return false;
+  }
+  const error = transition.error;
+  const state = transition.controlState;
+  if (!error || error.code !== "NO_BRANCH_MATCHED" || !state || error.identities.length === 0) {
+    return false;
+  }
+  const prefix = `LOCAL:${state}:E-15:`;
+  for (const identity of error.identities) {
+    const branch = identity.startsWith(prefix) ? identity.slice(prefix.length) : "";
+    if (branch.length === 0 || branch.includes(":")) {
+      return false;
+    }
+  }
+  return error.message === `${DEFINED_LOCAL_NO_BRANCH_PREFIX}${error.identities.join(", ")}`;
+}
+
+function classifyNonApplied(
+  event: CanonicalEvent,
+  transition: TransitionResult,
+): { status: "NOT_APPLIED" | "KERNEL_INVARIANT"; error: ApplicationError | null } {
+  if (transition.outcome !== "KERNEL_INVARIANT" || isOverboardGuardRejection(event, transition)) {
+    return { status: "NOT_APPLIED", error: null };
+  }
+  return {
+    status: "KERNEL_INVARIANT",
+    error: new ApplicationError(
+      "KERNEL_INVARIANT",
+      transition.error?.message ?? "Product Kernel invariant failed",
+      transition.error,
+    ),
+  };
+}
+
 function persistenceApplicationError(error: PersistenceError): ApplicationError {
   if (error.code === "REVISION_CONFLICT" || error.code === "CHECK_PAIR_CONFLICT") {
     return new ApplicationError("REVISION_CONFLICT", error.message, error);
@@ -199,8 +256,7 @@ export async function executeProductEvent(
       allocateId: deps.allocateId,
     });
     if (transition.outcome !== "APPLIED") {
-      const status =
-        transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED";
+      const classified = classifyNonApplied(event, transition);
       emitProductNotApplied({
         actionId,
         eventId,
@@ -208,27 +264,20 @@ export async function executeProductEvent(
         actorId: currentUserId,
         pcsBefore,
         pcsAfter: loaded.snapshot.controlState,
-        status,
+        status: classified.status,
         kernelOutcome: transition.outcome,
         sessionRevisionBefore: loaded.revision,
         errorMessage: transition.error?.message,
       });
       return executionResult({
-        status,
+        status: classified.status,
         currentUserId,
         event,
         transition,
         snapshot: loaded.snapshot,
         revision: loaded.revision,
         persisted: false,
-        error:
-          transition.outcome === "KERNEL_INVARIANT"
-            ? new ApplicationError(
-                "KERNEL_INVARIANT",
-                transition.error?.message ?? "Product Kernel invariant failed",
-                transition.error,
-              )
-            : null,
+        error: classified.error,
       });
     }
     const appliedRule = appliedRuleFor(event, transition);
@@ -386,22 +435,16 @@ export async function persistAppliedOnSnapshot(
     allocateId: deps.allocateId,
   });
   if (transition.outcome !== "APPLIED") {
+    const classified = classifyNonApplied(event, transition);
     return executionResult({
-      status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+      status: classified.status,
       currentUserId,
       event,
       transition,
       snapshot: loaded.snapshot,
       revision: loaded.revision,
       persisted: false,
-      error:
-        transition.outcome === "KERNEL_INVARIANT"
-          ? new ApplicationError(
-              "KERNEL_INVARIANT",
-              transition.error?.message ?? "Product Kernel invariant failed",
-              transition.error,
-            )
-          : null,
+      error: classified.error,
     });
   }
   if (beforePersist) {
@@ -442,22 +485,16 @@ export async function commitProductEventIfAttemptCurrent(
     allocateId: deps.allocateId,
   });
   if (transition.outcome !== "APPLIED") {
+    const classified = classifyNonApplied(event, transition);
     return executionResult({
-      status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+      status: classified.status,
       currentUserId,
       event,
       transition,
       snapshot: loaded.snapshot,
       revision: loaded.revision,
       persisted: false,
-      error:
-        transition.outcome === "KERNEL_INVARIANT"
-          ? new ApplicationError(
-              "KERNEL_INVARIANT",
-              transition.error?.message ?? "Product Kernel invariant failed",
-              transition.error,
-            )
-          : null,
+      error: classified.error,
     });
   }
   try {
@@ -569,23 +606,17 @@ export async function executeShareLinkResolved(
       allocateId: deps.allocateId,
     });
     if (transition.outcome !== "APPLIED") {
+      const classified = classifyNonApplied(event, transition);
       return {
         ...executionResult({
-          status: transition.outcome === "KERNEL_INVARIANT" ? "KERNEL_INVARIANT" : "NOT_APPLIED",
+          status: classified.status,
           currentUserId,
           event,
           transition,
           snapshot: loaded.snapshot,
           revision: loaded.revision,
           persisted: false,
-          error:
-            transition.outcome === "KERNEL_INVARIANT"
-              ? new ApplicationError(
-                  "KERNEL_INVARIANT",
-                  transition.error?.message ?? "Product Kernel invariant failed",
-                  transition.error,
-                )
-              : null,
+          error: classified.error,
         }),
         bindStatus: null,
       };
@@ -754,28 +785,19 @@ export async function executeTemplateShareClaim(
       return { kind: "REJECTED", reason: "MALFORMED" };
     }
     if (claimed.status === "NOT_APPLIED") {
+      const classified = classifyNonApplied(event, claimed.transition);
       return {
         kind: "FAILED",
         execution: {
           ...executionResult({
-            status:
-              claimed.transition.outcome === "KERNEL_INVARIANT"
-                ? "KERNEL_INVARIANT"
-                : "NOT_APPLIED",
+            status: classified.status,
             currentUserId,
             event,
             transition: claimed.transition,
             snapshot: claimed.transition.snapshot,
             revision: 0,
             persisted: false,
-            error:
-              claimed.transition.outcome === "KERNEL_INVARIANT"
-                ? new ApplicationError(
-                    "KERNEL_INVARIANT",
-                    claimed.transition.error?.message ?? "Product Kernel invariant failed",
-                    claimed.transition.error,
-                  )
-                : null,
+            error: classified.error,
           }),
           bindStatus: null,
         },
