@@ -413,6 +413,40 @@ function expiredBanEligible(input: ResolveInput): boolean {
   return domainTimerDurationElapsed(input, banId);
 }
 
+/**
+ * E-15 OVERBOARD press eligibility (12D-3).
+ * Requires the acting user's active Incoming Ban to still be UNPROCESSED, no
+ * unapplied OVERBOARD pending operation, and the Ban not already terminal.
+ * Does not rely on PCS alone — active Item identity is authoritative.
+ */
+function eligibleOverboardPress(input: ResolveInput): boolean {
+  if (pendingOfKind(input.snapshot, "OVERBOARD").length > 0) {
+    return false;
+  }
+  const active = activeItem(input.snapshot);
+  if (!active || active.kind !== "INCOMING_BAN") {
+    return false;
+  }
+  if (active.lifecycle.status !== "UNPROCESSED") {
+    return false;
+  }
+  if (active.ownerId !== input.context.currentUserId) {
+    return false;
+  }
+  const ban = input.snapshot.extended.entities.bans[active.banId];
+  if (!ban) {
+    return false;
+  }
+  if (ban.receiverId !== input.context.currentUserId) {
+    return false;
+  }
+  // Terminal Ban outcomes are BanStatus values; null means not yet decided.
+  if (ban.status !== null) {
+    return false;
+  }
+  return true;
+}
+
 function askRimEntryApplicable(input: ResolveInput): boolean {
   const active = activeItem(input.snapshot);
   if (!active || active.kind !== "STATUS" || active.lifecycle.status !== "UNPROCESSED") {
@@ -644,6 +678,9 @@ function evaluateByBranch(row: MatrixContractRow, input: ResolveInput): boolean 
       );
     case "E-14:active-incoming-unprocessed":
       return active?.kind === "INCOMING_BAN" && active.lifecycle.status === "UNPROCESSED";
+    case "E-15:active-incoming-unprocessed":
+      // 12D-0 / 12D-3: Registry “active Incoming Ban” + Matrix no-pending OVERBOARD + Ban not terminal.
+      return eligibleOverboardPress(input);
     case "E-14:active-status-unprocessed":
     case "E-18:active-status-unprocessed":
     case "E-19:active-status-unprocessed":

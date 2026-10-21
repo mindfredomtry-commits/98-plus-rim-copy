@@ -722,9 +722,11 @@ export const NOTIFICATIONS_MATRIX_ROWS: readonly MatrixContractRow[] = [
     state: "NOTIFICATIONS.INCOMING_BAN",
     eventId: "E-15",
     eventName: "NOTIFICATIONS.PRESS_OVERBOARD",
-    branch: "no-pending-action",
-    guardsText: "нет pending action",
-    guards: { type: "NO_PENDING_OPERATION", kind: "OVERBOARD" },
+    branch: "active-incoming-unprocessed",
+    guardsText:
+      "active Incoming Ban unprocessed; owner=actor; нет pending OVERBOARD; Ban not terminal",
+    // Executable guard is branch-evaluated (E-15:active-incoming-unprocessed): composes
+    // E-14-style active Incoming checks with NO_PENDING_OPERATION(OVERBOARD) and Ban eligibility.
     nextStateText: "N-01*",
     nextState: "NOTIFICATIONS.INCOMING_BAN",
     effectsText: "Инициируется server action; конфликтующие действия блокируются до результата",

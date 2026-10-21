@@ -1006,6 +1006,20 @@ function prepareBranchSnapshot(
         putItem(incomingItem({ lifecycle: { status: "UNPROCESSED", display: "ACTIVE" } }), true);
       }
       break;
+    case "E-15:active-incoming-unprocessed":
+      // Eligible OVERBOARD press: active Incoming UNPROCESSED, actor owns it, Ban not terminal, no pending.
+      next = withEntities(next, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: OTHER_USER,
+            receiverId: USER_ID,
+            acceptance: "PENDING",
+            status: null,
+          }),
+        },
+      });
+      putItem(incomingItem({ lifecycle: { status: "UNPROCESSED", display: "ACTIVE" } }), true);
+      break;
     case "E-43:fifo-timer":
       putItem(timerItem());
       break;

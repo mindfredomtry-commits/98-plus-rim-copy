@@ -250,7 +250,7 @@ export const EXPECTED_AUTHORITATIVE_ROW_IDS: readonly string[] = [
   ]),
   ...localIds("NOTIFICATIONS.INCOMING_BAN", [
     ["E-14", "active-incoming-unprocessed"],
-    ["E-15", "no-pending-action"],
+    ["E-15", "active-incoming-unprocessed"],
     ["E-20", "matching-unapplied"],
     ["E-21", "matching-pending"],
     ["E-32", "local"],

@@ -1364,6 +1364,156 @@ describe("Stage 2 semantic effect audit", () => {
     expect(Object.keys(result.snapshot.runtime.pendingOperations)).toHaveLength(1);
   });
 
+  describe("12D-3 E-15 active Incoming + Ban eligibility guard", () => {
+    function expectE15Rejected(before: ProductSnapshot) {
+      const result = applied(before, defaultEvent("NOTIFICATIONS.PRESS_OVERBOARD"));
+      expect(result.outcome).not.toBe("APPLIED");
+      expect(result.effects).toEqual([]);
+      expect(result.snapshot.controlState).toBe(before.controlState);
+      expect(result.snapshot.extended.activeNotificationItemId).toBe(
+        before.extended.activeNotificationItemId,
+      );
+      expect(result.snapshot.extended.entities.bans).toEqual(before.extended.entities.bans);
+      expect(statusItems(result.snapshot)).toEqual(statusItems(before));
+      expect(Object.keys(result.snapshot.runtime.pendingOperations)).toEqual(
+        Object.keys(before.runtime.pendingOperations),
+      );
+      expect(Object.values(result.snapshot.extended.entities.domainTimers)).toEqual(
+        Object.values(before.extended.entities.domainTimers),
+      );
+      return result;
+    }
+
+    it("legitimate first OVERBOARD still starts a single pending operation", () => {
+      const snapshot = incomingOverboardWorld({ withPending: false });
+      const result = applied(snapshot, defaultEvent("NOTIFICATIONS.PRESS_OVERBOARD"));
+      expect(result.outcome).toBe("APPLIED");
+      expect(pendingOverboard(result.snapshot)?.resultApplied).toBe(false);
+      expect(Object.keys(result.snapshot.runtime.pendingOperations)).toHaveLength(1);
+    });
+
+    it("after E-20, PCS is STATUS.OVERBOARD.RECEIVER and duplicate E-15 does not apply", () => {
+      const confirmed = applied(
+        incomingOverboardWorld(),
+        defaultEvent("NOTIFICATIONS.OVERBOARD_CONFIRMED"),
+      );
+      expect(confirmed.outcome).toBe("APPLIED");
+      expect(confirmed.controlState).toBe("NOTIFICATIONS.STATUS.OVERBOARD.RECEIVER");
+      const receiver = statusItems(confirmed.snapshot).find((item) => item.role === "RECEIVER");
+      expect(confirmed.snapshot.extended.activeNotificationItemId).toBe(receiver?.id);
+      expect(confirmed.snapshot.extended.entities.notificationItems[INCOMING_ITEM_ID]?.lifecycle).toEqual({
+        status: "PROCESSED",
+      });
+
+      const duplicate = applied(
+        confirmed.snapshot,
+        defaultEvent("NOTIFICATIONS.PRESS_OVERBOARD"),
+      );
+      // E-15 is not a local on STATUS.OVERBOARD.RECEIVER → UNDEFINED / not applied.
+      expect(duplicate.outcome).not.toBe("APPLIED");
+      expect(duplicate.effects).toEqual([]);
+      expect(statusItems(duplicate.snapshot)).toHaveLength(2);
+      expect(pendingOverboard(duplicate.snapshot)?.resultApplied).toBe(true);
+    });
+
+    it("stale Incoming PCS with active Status rejects E-15 without side effects", () => {
+      const confirmed = applied(
+        incomingOverboardWorld(),
+        defaultEvent("NOTIFICATIONS.OVERBOARD_CONFIRMED"),
+      );
+      const receiver = statusItems(confirmed.snapshot).find((item) => item.role === "RECEIVER");
+      expect(receiver).toBeDefined();
+      // Sticky / stale PCS: control state left on Incoming while active Item is Status.
+      const stalePcs = withControlState(confirmed.snapshot, "NOTIFICATIONS.INCOMING_BAN");
+      expect(stalePcs.extended.activeNotificationItemId).toBe(receiver?.id);
+      const rejected = expectE15Rejected(stalePcs);
+      expect(rejected.error?.code).toBe("NO_BRANCH_MATCHED");
+    });
+
+    it("rejects processed Incoming, missing active Item, wrong kind, wrong owner, pending OVERBOARD, and terminal Ban", () => {
+      const base = incomingOverboardWorld({ withPending: false });
+      const processed = {
+        ...base,
+        extended: {
+          ...base.extended,
+          entities: {
+            ...base.extended.entities,
+            notificationItems: {
+              [INCOMING_ITEM_ID]: incomingItem({ lifecycle: { status: "PROCESSED" } }),
+            },
+          },
+        },
+      };
+      expectE15Rejected(processed);
+
+      const missingActive = {
+        ...base,
+        extended: {
+          ...base.extended,
+          activeNotificationItemId: null,
+        },
+      };
+      expectE15Rejected(missingActive);
+
+      const wrongKind = withItems(incomingOverboardWorld({ withPending: false }), [
+        statusItem({ lifecycle: { status: "UNPROCESSED", display: "ACTIVE" } }),
+      ]);
+      const wrongKindActive = {
+        ...wrongKind,
+        extended: { ...wrongKind.extended, activeNotificationItemId: STATUS_ITEM_ID },
+      };
+      expectE15Rejected(wrongKindActive);
+
+      const wrongOwnerBase = incomingOverboardWorld({ withPending: false });
+      const wrongOwner = {
+        ...wrongOwnerBase,
+        extended: {
+          ...wrongOwnerBase.extended,
+          entities: {
+            ...wrongOwnerBase.extended.entities,
+            notificationItems: {
+              [INCOMING_ITEM_ID]: incomingItem({
+                ownerId: OTHER_USER,
+                lifecycle: { status: "UNPROCESSED", display: "ACTIVE" },
+              }),
+            },
+          },
+        },
+      };
+      expectE15Rejected(wrongOwner);
+
+      expectE15Rejected(incomingOverboardWorld({ withPending: true }));
+
+      const terminalBanBase = incomingOverboardWorld({ withPending: false });
+      const terminalBan = withEntities(terminalBanBase, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: OTHER_USER,
+            receiverId: USER_ID,
+            acceptance: "PENDING",
+            status: "OVERBOARD",
+          }),
+        },
+      });
+      expectE15Rejected(terminalBan);
+    });
+
+    it("rejects E-15 when active Incoming Ban identity is not owned by the receiver", () => {
+      const base = incomingOverboardWorld({ withPending: false });
+      const foreignBan = withEntities(base, {
+        bans: {
+          [BAN_ID]: makeBan({
+            senderId: USER_ID,
+            receiverId: OTHER_USER,
+            acceptance: "PENDING",
+            status: null,
+          }),
+        },
+      });
+      expectE15Rejected(foreignBan);
+    });
+  });
+
   it("OVERBOARD leaves the original Ban unaccepted and creates two Status Items", () => {
     const snapshot = incomingOverboardWorld();
     const before = pendingOverboard(snapshot);
