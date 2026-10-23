@@ -325,7 +325,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     const senderAfterCallback = await session(app.url, USER_A_TG, { openIfNeeded: false });
     expect(bansOf(senderAfterCallback)).toHaveLength(1);
     expect(bansOf(senderAfterCallback)[0]?.id).toBe(createdId);
-    expect(senderAfterCallback.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(senderAfterCallback.controlState).toBe("CREATE_BAN.SUCCESS");
 
     const receiver = await session(app.url, USER_B_TG, {
       openIfNeeded: true,
@@ -343,7 +343,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     const sender = await app.runtime.productStore.loadProductSnapshot(
       (await userIdOf(app.runtime, USER_A_TG))!,
     );
-    expect(sender.snapshot.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
     const returned = requireDiagnostics(
       await dispatch(app.url, USER_A_TG, "CREATE_BAN.SHARE_RETURNED", {
         shareAttemptId: attemptId,
@@ -382,7 +382,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(cancelled.executionStatus).not.toBe("KERNEL_INVARIANT");
     expect(cancelled.diagnostics?.matrixResult).toBe("IGNORE_NOT_ALLOWED");
     const durable = await session(app.url, USER_A_TG, { openIfNeeded: false });
-    expect(durable.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(durable.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(bansOf(durable)[0]?.id).toBe(banId);
     const share = sharesOf(durable).find((item) => item.attemptId === attemptId);
     expect(share?.status).toBe("ACTIVE");
@@ -533,7 +533,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(first.httpStatus).toBe(400);
     expect(second.httpStatus).toBe(400);
     const durable = await session(app.url, USER_A_TG, { openIfNeeded: false });
-    expect(durable.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(durable.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(bansOf(durable)).toHaveLength(1);
   });
 
@@ -751,7 +751,7 @@ describe("Stage 11 Template Create Ban + Telegram Share vertical", () => {
     expect(second.httpStatus).toBe(200);
     expect(second.executionStatus).toBe("NOT_APPLIED");
     const durable = await session(app.url, USER_A_TG, { openIfNeeded: false });
-    expect(durable.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(durable.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(bansOf(durable)).toHaveLength(1);
     expect(bansOf(durable)[0]?.id).toBe(firstId);
     expect(sharesOf(durable).filter((s) => s.status === "ACTIVE")).toHaveLength(1);

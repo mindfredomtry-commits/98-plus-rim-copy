@@ -244,7 +244,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     expect(contactIds((await session(app.url, USER_A_TG)).diagnostics)).toEqual([]);
 
     const senderPending = (await session(app.url, USER_A_TG, { openIfNeeded: false })).diagnostics;
-    expect(senderPending.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(senderPending.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(contactIds(senderPending)).toEqual([]);
 
     const restored = await dispatch(app.url, USER_B_TG, "CONNECTION.RESTORED");
@@ -257,7 +257,7 @@ describe("Stage 13B MVP8 Contact relationship", () => {
     expect(contactIds(restored.diagnostics!)).toEqual([aId]);
     const senderAfterClaim = (await session(app.url, USER_A_TG, { openIfNeeded: false }))
       .diagnostics;
-    expect(senderAfterClaim.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(senderAfterClaim.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(senderAfterClaim.successfulBanId).toBe(bound[0]?.id);
     expect(contactIds(senderAfterClaim)).toEqual([bId]);
 

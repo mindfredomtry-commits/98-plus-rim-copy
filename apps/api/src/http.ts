@@ -41,6 +41,7 @@ import { applyElapsedDomainTimers } from "./duration-expired.ts";
 import { assertSelectableContactId } from "./select-contact.ts";
 import { CreateBanContactTransportError } from "./transport-error.ts";
 import { testUiHtmlSource, testUiModuleSource } from "./test-ui-assets.ts";
+import { recoverSharePendingOnReentry } from "./share-pending-reentry.ts";
 import { buildTelegramShareInvocation, shouldOpenTelegramShare } from "./template-share.ts";
 import {
   beginTelegramPersistentReentryRequest,
@@ -317,6 +318,7 @@ export async function handleCreateBanContactRequest(
         }
       }
 
+      const sharePendingRecovery = await recoverSharePendingOnReentry(runtime, context);
       let openExecution: Awaited<ReturnType<typeof openLobbyIfNeeded>>["execution"] = null;
       if (openIfNeeded) {
         const opened = await openLobbyIfNeeded(runtime, context);
@@ -348,7 +350,10 @@ export async function handleCreateBanContactRequest(
       };
       // Prefer APP.NORMAL_OPEN over a prior pending-entry re-dispatch so CTA /
       // controlState reflect the post-open Product Snapshot (MVP10 whitelist).
-      const primaryExecution = openExecution ?? lastExecution;
+      const primaryExecution =
+        sharePendingRecovery.status === "RECOVERED"
+          ? sharePendingRecovery.execution
+          : (openExecution ?? lastExecution);
       const secondaryExecution =
         openExecution && lastExecution && openExecution !== lastExecution
           ? lastExecution
@@ -364,12 +369,27 @@ export async function handleCreateBanContactRequest(
         externalEntry,
         startParamIntake,
       );
+      const recoveryDiagnostic =
+        sharePendingRecovery.status === "NOT_RECOVERABLE" ||
+        sharePendingRecovery.status === "NOT_PERSISTED"
+          ? { code: sharePendingRecovery.code, message: sharePendingRecovery.message }
+          : null;
       const diagnostics = bootstrapDelivery.error
         ? { ...baseDiagnostics, error: bootstrapDelivery.error }
-        : baseDiagnostics;
+        : recoveryDiagnostic
+          ? { ...baseDiagnostics, error: recoveryDiagnostic }
+          : baseDiagnostics;
       respond(200, {
         diagnostics,
         ...(externalEntry === null ? {} : { externalEntry }),
+        ...(recoveryDiagnostic === null
+          ? {}
+          : {
+              sharePendingRecovery: {
+                status: sharePendingRecovery.status,
+                code: recoveryDiagnostic.code,
+              },
+            }),
       });
       return;
     }

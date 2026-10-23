@@ -162,7 +162,10 @@
         shareMessageFailedSignal,
         visibilityChangedSignal,
       } from "/test-ui/telegram-share-signal-log.js";
-      import { createShareReturnLatch } from "/test-ui/telegram-share-return.js";
+      import {
+        completeForbidShare,
+        createShareReturnLatch,
+      } from "/test-ui/telegram-share-return.js";
 
       const productEl = document.getElementById("product-screen");
       const machineEl = document.getElementById("machine");
@@ -445,69 +448,49 @@
         try {
           const body = await sendEvent("CREATE_BAN.PRESS_FORBID");
           await maybeInvokeTelegramShare(body && body.diagnostics);
+        } catch (_error) {
+          /* call() already recorded the request error on diagnostics */
         } finally {
           sending = false;
           render();
         }
       }
 
-      async function completeShareWithoutSheet(share, code, message) {
-        const decision = shareReturnLatch.failOpen(share.attemptId);
-        if (!decision.dispatch) {
-          return;
-        }
-        await sendEvent("CREATE_BAN.SHARE_RETURNED", { shareAttemptId: share.attemptId });
-        diagnostics = {
-          ...(diagnostics || {}),
-          error: { code, message },
-        };
-        render();
-      }
-
       async function maybeInvokeTelegramShare(diag) {
         const share = diag && diag.telegramShare;
-        if (!share) {
-          return;
-        }
-        if (!share.preparedMessageId) {
-          await completeShareWithoutSheet(
-            share,
-            "TELEGRAM_SHARE_PREPARE_MISSING",
-            "preparedMessageId missing — savePreparedInlineMessage did not succeed. The Ban stays created.",
-          );
-          return;
-        }
         const webApp = telegramWebApp();
-        if (!webApp || typeof webApp.shareMessage !== "function") {
-          await completeShareWithoutSheet(
-            share,
-            "TELEGRAM_SHARE_UNAVAILABLE",
-            "Telegram.WebApp.shareMessage is unavailable in this runtime. The Ban stays created.",
-          );
-          return;
-        }
-        shareSignalLog.beginAttempt(share.attemptId);
-        shareReturnLatch.arm(share.attemptId);
-        paintShareSignals();
-        try {
-          await new Promise((resolve, reject) => {
-            try {
-              webApp.shareMessage(share.preparedMessageId, (success) => {
+        const shareAttemptId =
+          (share && share.attemptId) || (diag && diag.activeShareAttemptId) || null;
+        await completeForbidShare({
+          controlState: diag && diag.controlState ? diag.controlState : null,
+          shareAttemptId,
+          preparedMessageId: share && share.preparedMessageId ? share.preparedMessageId : null,
+          shareMessageAvailable: Boolean(webApp && typeof webApp.shareMessage === "function"),
+          latch: shareReturnLatch,
+          invokeShareMessage(preparedMessageId) {
+            shareSignalLog.beginAttempt(shareAttemptId);
+            shareReturnLatch.arm(shareAttemptId);
+            paintShareSignals();
+            webApp.shareMessage(preparedMessageId, (success) => {
+              try {
                 shareSignalLog.record(success ? "callback:true" : "callback:false");
                 paintShareSignals();
-                resolve(undefined);
-              });
-            } catch (error) {
-              reject(error);
-            }
-          });
-        } catch (_error) {
-          await completeShareWithoutSheet(
-            share,
-            "TELEGRAM_SHARE_OPEN_FAILED",
-            "Telegram.WebApp.shareMessage threw. The Ban stays created.",
-          );
-        }
+              } catch (_logError) {
+                /* diagnostic only; callback outcome does not decide Success */
+              }
+            });
+          },
+          async dispatchReturned(returnedAttemptId) {
+            await sendEvent("CREATE_BAN.SHARE_RETURNED", { shareAttemptId: returnedAttemptId });
+          },
+          onNotice(notice) {
+            diagnostics = {
+              ...(diagnostics || {}),
+              error: notice,
+            };
+            render();
+          },
+        });
       }
 
       function isInlineProbeLaunch() {

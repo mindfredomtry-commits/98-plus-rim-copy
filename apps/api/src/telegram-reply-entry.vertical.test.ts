@@ -251,7 +251,7 @@ describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
       startParam: `share_${created.token}`,
     });
     expect(sender.externalEntry).toMatchObject({ outcome: "REJECTED" });
-    expect(sender.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(sender.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
     expect(stepNames(sender.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
     expect(stepNames(sender.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_BAN_MORE");
   });
@@ -400,7 +400,7 @@ describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
   });
 
   describe("Stage 2B — OA-1 sender characterization (no Lobby reset)", () => {
-    it("SENDER on SHARE_PENDING: no WHAT/E-14/E-18; PE stays SHARE_PENDING (not Lobby)", async () => {
+    it("SENDER re-entry reaches Success, not Lobby, and does not dispatch Reply", async () => {
       const app = await start();
       const created = await createTemplateBanWithToken(app.url);
       const first = await session(app.url, USER_A_TG, {
@@ -408,7 +408,7 @@ describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
         startParam: `share_${created.token}`,
       });
       expect(first.externalEntry).toMatchObject({ outcome: "REJECTED" });
-      expect(first.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+      expect(first.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
       expect(first.diagnostics.controlState).not.toBe("RIM.LOBBY");
       expect(stepNames(first.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
       expect(stepNames(first.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_BAN_MORE");
@@ -417,7 +417,7 @@ describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
         openIfNeeded: true,
         startParam: `share_${created.token}`,
       });
-      expect(again.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+      expect(again.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
       expect(stepNames(again.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
     });
 
@@ -578,7 +578,7 @@ describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
       expect(notificationFingerprint(reopen.diagnostics)).toEqual(beforeItems);
     });
 
-    it("SENDER opening the same URL repeatedly stays SHARE_PENDING without Reply events", async () => {
+    it("SENDER opening the same URL repeatedly reaches Success without Reply events", async () => {
       const app = await start();
       const created = await createTemplateBanWithToken(app.url);
       const opens = [];
@@ -591,7 +591,7 @@ describe("PC-02 Variant A — Telegram share Reply entry orchestration", () => {
         );
       }
       for (const opened of opens) {
-        expect(opened.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+        expect(opened.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
         expect(opened.externalEntry).toMatchObject({ outcome: "REJECTED" });
         expect(stepNames(opened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_REPLY_BAN");
         expect(stepNames(opened.externalEntry)).not.toContain("NOTIFICATIONS.PRESS_BAN_MORE");
