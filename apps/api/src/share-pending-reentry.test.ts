@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemorySqlClient } from "@98plus/persistence";
 import { PersistenceTestKit } from "../../../packages/persistence/src/test-kit.ts";
 import {
@@ -427,6 +427,7 @@ describe("session re-entry HTTP", () => {
   const started: Array<Awaited<ReturnType<typeof listenCreateBanContactServer>>> = [];
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     while (started.length > 0) {
       const app = started.pop();
       if (app) {
@@ -435,7 +436,20 @@ describe("session re-entry HTTP", () => {
     }
   });
 
-  it("returns Success for a persisted pending sender and does not attach a prepare-missing error", async () => {
+  it("a new HTTP session recovers an interrupted SHARE_PENDING sender without the Mini App", async () => {
+    const telegramCalls: string[] = [];
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.includes("api.telegram.org") ||
+        url.includes("savePreparedInlineMessage") ||
+        url.includes("shareMessage")
+      ) {
+        telegramCalls.push(url);
+      }
+      return realFetch(input, init);
+    });
     const app = await listenCreateBanContactServer({
       runtime: createCreateBanContactRuntime({ telegramSharePrepare: "mock" }),
       seedTelegramUserIds: ["1001"],
@@ -452,6 +466,17 @@ describe("session re-entry HTTP", () => {
       headers,
       body: JSON.stringify({ openIfNeeded: true }),
     });
+    type ForbidBody = {
+      executionStatus: string;
+      diagnostics: {
+        controlState: string;
+        successfulBanId: string | null;
+        lastEvent: { name: string } | null;
+        bans: Array<{ id: string }>;
+        shareOperations: Array<{ attemptId: string; status: string; createdBanId: string | null }>;
+      };
+    };
+    let forbid: ForbidBody | null = null;
     for (const name of [
       "CREATE_BAN.PRESS_START",
       "CREATE_BAN.SELECT_TEMPLATE",
@@ -474,7 +499,44 @@ describe("session re-entry HTTP", () => {
         body: JSON.stringify({ name, payload }),
       });
       expect(response.status).toBe(200);
+      if (name === "CREATE_BAN.PRESS_FORBID") {
+        forbid = (await response.json()) as ForbidBody;
+      }
     }
+    expect(forbid?.executionStatus).toBe("APPLIED");
+    expect(forbid?.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(forbid?.diagnostics.lastEvent?.name).toBe("CREATE_BAN.PRESS_FORBID");
+    const banId = forbid?.diagnostics.bans[0]?.id;
+    const shareAttemptId = forbid?.diagnostics.shareOperations[0]?.attemptId;
+    expect(forbid?.diagnostics.bans).toHaveLength(1);
+    expect(forbid?.diagnostics.successfulBanId).toBe(banId);
+    expect(forbid?.diagnostics.shareOperations).toEqual([
+      expect.objectContaining({
+        attemptId: shareAttemptId,
+        status: "ACTIVE",
+        createdBanId: banId,
+      }),
+    ]);
+
+    const snapshotResponse = await fetch(`${app.url}/api/snapshot`, { headers });
+    const snapshot = (await snapshotResponse.json()) as {
+      diagnostics: {
+        controlState: string;
+        successfulBanId: string | null;
+        revision: number;
+        lastEvent: { name: string } | null;
+        bans: Array<{ id: string }>;
+        shareOperations: Array<{ attemptId: string; status: string; createdBanId: string | null }>;
+      };
+    };
+    expect(snapshot.diagnostics.controlState).toBe("CREATE_BAN.CONFIRM.TEMPLATE.SHARE_PENDING");
+    expect(snapshot.diagnostics.successfulBanId).toBe(banId);
+    expect(snapshot.diagnostics.lastEvent).toBeNull();
+    expect(snapshot.diagnostics.bans.map((ban) => ban.id)).toEqual([banId]);
+    expect(snapshot.diagnostics.shareOperations).toEqual([
+      expect.objectContaining({ attemptId: shareAttemptId, status: "ACTIVE", createdBanId: banId }),
+    ]);
+
     const reentered = await fetch(`${app.url}/api/session`, {
       method: "POST",
       headers,
@@ -483,29 +545,60 @@ describe("session re-entry HTTP", () => {
     const body = (await reentered.json()) as {
       diagnostics: {
         controlState: string;
+        successfulBanId: string | null;
+        lastEvent: { name: string } | null;
+        applicationStatus: string;
+        persisted: boolean;
+        revision: number;
         error: { code?: string } | null;
         telegramShare: unknown;
-        bans: unknown[];
-        shareOperations: unknown[];
+        bans: Array<{ id: string }>;
+        shareOperations: Array<{ attemptId: string; status: string; createdBanId: string | null }>;
       };
     };
     expect(reentered.status).toBe(200);
     expect(body.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(body.diagnostics.lastEvent?.name).toBe("CREATE_BAN.SHARE_RETURNED");
+    expect(body.diagnostics.applicationStatus).toBe("APPLIED");
+    expect(body.diagnostics.persisted).toBe(true);
+    expect(body.diagnostics.revision).toBe(snapshot.diagnostics.revision + 1);
+    expect(body.diagnostics.successfulBanId).toBe(banId);
+    expect(body.diagnostics.bans.map((ban) => ban.id)).toEqual([banId]);
+    expect(body.diagnostics.shareOperations).toEqual([
+      expect.objectContaining({ attemptId: shareAttemptId, status: "ACTIVE", createdBanId: banId }),
+    ]);
     expect(body.diagnostics.error?.code ?? null).not.toBe("TELEGRAM_SHARE_PREPARE_MISSING");
     expect(body.diagnostics.telegramShare ?? null).toBeNull();
-    expect(body.diagnostics.bans).toHaveLength(1);
-    expect(body.diagnostics.shareOperations).toHaveLength(1);
-    const senderId = await userIdOf(app.runtime, "1001");
-    const stored = await app.runtime.productStore.loadProductSnapshot(senderId!);
-    expect(stored.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(telegramCalls).toEqual([]);
+
     const again = await fetch(`${app.url}/api/session`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ openIfNeeded: false }),
+      body: JSON.stringify({ openIfNeeded: true }),
     });
-    const second = (await again.json()) as { diagnostics: { controlState: string } };
+    const second = (await again.json()) as {
+      diagnostics: {
+        controlState: string;
+        lastEvent: { name: string } | null;
+        applicationStatus: string;
+        persisted: boolean;
+        revision: number;
+        bans: Array<{ id: string }>;
+        shareOperations: Array<{ attemptId: string }>;
+      };
+    };
     expect(second.diagnostics.controlState).toBe("CREATE_BAN.SUCCESS");
-    const finalStore = await app.runtime.productStore.loadProductSnapshot(senderId!);
-    expect(finalStore.revision).toBe(stored.revision);
+    expect(second.diagnostics.lastEvent?.name ?? null).not.toBe("CREATE_BAN.SHARE_RETURNED");
+    expect(second.diagnostics.persisted).toBe(false);
+    expect(second.diagnostics.revision).toBe(body.diagnostics.revision);
+    expect(second.diagnostics.bans.map((ban) => ban.id)).toEqual([banId]);
+    expect(second.diagnostics.shareOperations.map((share) => share.attemptId)).toEqual([
+      shareAttemptId,
+    ]);
+    const senderId = await userIdOf(app.runtime, "1001");
+    const stored = await app.runtime.productStore.loadProductSnapshot(senderId!);
+    expect(stored.snapshot.controlState).toBe("CREATE_BAN.SUCCESS");
+    expect(stored.revision).toBe(body.diagnostics.revision);
+    expect(telegramCalls).toEqual([]);
   });
 });
